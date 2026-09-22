@@ -1,5 +1,12 @@
 # Power Foam: Unifying Real-Time Differentiable Ray Tracing and Rasterization
 
+> [!NOTE]
+> This repository is an experimental research fork for **Dynamic Power Foam**,
+> coupling persistent Power Foam cells with Material Point Method (MPM)
+> particles. The design and implementation milestones are documented in
+> [ROADMAP.md](ROADMAP.md). The original static implementation is maintained by
+> [theialab/powerfoam](https://github.com/theialab/powerfoam).
+
 ## Shrisudhan Govindarajan\*, Daniel Rebain\*, Dor Verbin, Kwang Moo Yi, Anish Prabhu, Andrea Tagliasacchi
 
 <div align="center">
