@@ -1467,7 +1467,9 @@ class Rasterizer:
                         if i == 0:
                             t_id, dLdt = _t_near_id, dLd_t_near
                         else:
-                            t_id, dLdt = _t_far_id, dLdt_far
+                            # the far end belongs to the surface plane when t_far_id == n_adj; its gradient already went
+                            # to the plane (dLdt_surf) and must not also reach the pre-plane boundary
+                            t_id, dLdt = _t_far_id, (dLdt_far if t_far_id != n_adj else 0.0)
 
                         if t_id == -1:  # sphere intersection
                             dt_neardc, dt_fardc, dt_neardr, dt_fardr = (
@@ -1600,8 +1602,10 @@ class Rasterizer:
         adjacency_offsets,
         ray_gt,
         return_point_err,
-        transmittance_threshold=1e-3,
+        transmittance_threshold=None,
     ):
+        if transmittance_threshold is None:   # per-tile early stop once every ray's transmittance is below this
+            transmittance_threshold = getattr(self, 'transmittance_threshold', 1e-3)
         with wp.ScopedDevice(str(self.device)):
             torch_stream = torch.cuda.current_stream()
             wp_stream = wp.stream_from_torch(torch_stream)

@@ -473,6 +473,60 @@ class PowerfoamScene(nn.Module):
                 vis_options=vis_options,
             )
 
+    def rebuild_spacing(self):
+        """k-nearest site pairs and each site's local scale (median k-NN distance), detached."""
+        from scipy.spatial import cKDTree
+        p = self.points.detach().double().cpu().numpy()
+        k = int(self.args.spacing_k)
+        d, idx = cKDTree(p).query(p, k=k+1)
+        scale = np.median(d[:, 1:], axis=1)
+        i = np.repeat(np.arange(len(p)), k)
+        j = idx[:, 1:].reshape(-1)
+        keep = i < j
+        self.spacing_pairs = torch.as_tensor(np.stack((i[keep], j[keep]), 1), device=self.device)
+        self.spacing_scale = torch.as_tensor(scale, dtype=self.points.dtype, device=self.device)
+
+    def spacing_loss(self):
+        """mean over k-NN pairs of relu(kappa Lbar - d)^2 / Lbar^2 (Lbar detached)."""
+        if getattr(self, "spacing_pairs", None) is None or len(self.spacing_scale) != len(self.points):
+            self.rebuild_spacing()
+        i, j = self.spacing_pairs[:, 0], self.spacing_pairs[:, 1]
+        lbar = 0.5 * (self.spacing_scale[i] + self.spacing_scale[j])
+        d = torch.linalg.vector_norm(self.points[i] - self.points[j], dim=-1)
+        return (torch.relu(self.args.spacing_kappa * lbar - d) / lbar).square().mean()
+
+    def rebuild_cvt(self):
+        """Monte-Carlo centroids of the bounded power cells (detached) and local spacing."""
+        from scipy.spatial import cKDTree
+        with torch.no_grad():
+            p = self.points.detach().double()
+            r = self.get_radii().detach().double()
+            n = len(p)
+            lo = (p - r[:, None]).min(0).values
+            hi = (p + r[:, None]).max(0).values
+            m = int(self.args.cvt_samples) * n
+            g = torch.Generator(device="cpu").manual_seed(0)
+            x = lo + (hi - lo) * torch.rand(m, 3, generator=g, dtype=torch.float64).to(p.device)
+            tree = cKDTree(p.cpu().numpy())
+            _, nn = tree.query(x.cpu().numpy(), k=8)
+            nn = torch.as_tensor(nn, device=p.device)
+            power = ((x[:, None, :] - p[nn]) ** 2).sum(-1) - r[nn] ** 2
+            best = power.argmin(1)
+            owner = nn[torch.arange(m, device=p.device), best]
+            inside = power[torch.arange(m, device=p.device), best] <= 0  # within owner's support sphere
+            owner, x = owner[inside], x[inside]
+            count = torch.zeros(n, dtype=torch.float64, device=p.device).index_add_(0, owner, torch.ones_like(owner, dtype=torch.float64))
+            total = torch.zeros(n, 3, dtype=torch.float64, device=p.device).index_add_(0, owner, x)
+            centroid = torch.where(count[:, None] > 0, total / count.clamp(min=1)[:, None], p)
+            d, _ = tree.query(p.cpu().numpy(), k=int(self.args.spacing_k) + 1)
+            self.cvt_centroid = centroid.to(self.points.dtype)
+            self.cvt_scale = torch.as_tensor(np.median(d[:, 1:], axis=1), dtype=self.points.dtype, device=self.device)
+
+    def cvt_loss(self):
+        if getattr(self, "cvt_centroid", None) is None or len(self.cvt_centroid) != len(self.points):
+            self.rebuild_cvt()
+        return (((self.points - self.cvt_centroid) / self.cvt_scale[:, None]) ** 2).sum(-1).mean()
+
     def interpenetration(self):
         return InterpenetrationFunction.apply(
             self.points,
@@ -635,8 +689,10 @@ class PowerfoamScene(nn.Module):
             point_error_q = torch.quantile(self.point_error_ema, 0.99, dim=0)
             prob = self.point_error_ema[valid_indices].clamp(max=point_error_q)
 
+            # Object-only scenes (mostly empty space) can keep fewer valid cells than
+            # new samples; draw with replacement then (duplicate_count handles repeats).
             resample_valid_indices = torch.multinomial(
-                prob, num_samples, replacement=False
+                prob, num_samples, replacement=num_samples > valid_indices.shape[0]
             )
 
             duplicate_count = torch.ones_like(valid_indices)
@@ -693,6 +749,15 @@ class PowerfoamScene(nn.Module):
             direction = direction - (direction * normals).sum(dim=-1, keepdim=True)
             direction = direction / direction.norm(dim=-1, keepdim=True)
             perturbation = 0.05 * cell_radius[..., None] * direction
+            if getattr(self.args, "spacing_weight", 0.0) > 0:
+                # place duplicates a local-scale fraction away (no near-coincident sites)
+                from scipy.spatial import cKDTree
+                p_np = self.points.detach().double().cpu().numpy()
+                k = int(self.args.spacing_k)
+                dist, _ = cKDTree(p_np).query(p_np, k=k + 1)
+                local = torch.as_tensor(np.median(dist[:, 1:], axis=1), dtype=self.points.dtype, device=self.device)
+                step = torch.maximum(0.05 * cell_radius, self.args.spacing_kappa * local)
+                perturbation = step[..., None] * direction
 
             self.points[new_duplicate_mask] += perturbation[new_duplicate_mask]
 

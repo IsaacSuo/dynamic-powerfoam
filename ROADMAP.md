@@ -1,8 +1,23 @@
-# Dynamic Power Foam: MPM-Coupled Research Roadmap
+# Historical roadmap: MPM-Coupled Dynamic Power Foam
+
+> **Current research route:** [RESEARCH_ROUTE.md](RESEARCH_ROUTE.md) is the
+> authoritative plan as of 2026-09-25. It defines the research hypotheses,
+> competing representations, full experiment sequence, decision branches and
+> eventual MPM extension. The one-particle/one-cell proposal below is historical.
+
+> **Reading correction (2026-09-25):** This roadmap is an earlier proposal, not
+> a validated dynamic Power Foam design. Our affine, anisotropic and spacetime
+> probes test custom geometry with simplified appearance; they do not reproduce
+> the complete local detail-site, displacement, Spherical Voronoi and training
+> pipeline. Persistent cell/material identity is our extra hypothesis.
+> Read [the paper/code analysis](POWERFOAM_READING_NOTES.md) before using these
+> results to select a direction. Existing prototypes are retained in
+> [ANISOTROPIC_FOAM.md](ANISOTROPIC_FOAM.md) and
+> [SPACETIME_FOAM.md](SPACETIME_FOAM.md); MPM coupling remains unimplemented.
 
 ## 1. Research objective
 
-This project investigates a dynamic extension of Power Foam in which one bounded
+The original proposal investigates a dynamic extension of Power Foam in which one bounded
 power cell corresponds to one persistent Material Point Method (MPM) particle:
 
 \[
@@ -541,4 +556,3 @@ Topology and performance:
   Euler Equations*, and subsequent prescribed-volume Laguerre work.
 - Lévy, *Partial Optimal Transport for a Constant-Volume Lagrangian Mesh with
   Free Boundaries*, 2021: <https://arxiv.org/abs/2106.03936>
-

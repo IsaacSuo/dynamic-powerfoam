@@ -285,6 +285,12 @@ def train(args):
                         + w_contrib * contrib_loss
                         + w_interpenetration * interpenetration_loss
                     )
+                    if args.spacing_weight > 0:
+                        loss = loss + args.spacing_weight * model.spacing_loss()
+                    if args.cvt_weight > 0:
+                        if i % args.cvt_every == 0:
+                            model.cvt_centroid = None
+                        loss = loss + args.cvt_weight * model.cvt_loss()
 
                     torch.cuda.nvtx.range_pop()  # Losses
                     torch.cuda.nvtx.range_push("Backward")
@@ -358,6 +364,8 @@ def train(args):
                 if i < int(0.95 * args.iterations) and i % 100 == 99:
                     with viewer_lock:
                         num_resampled = model.resample(current_target)
+                        if args.spacing_weight > 0:
+                            model.spacing_pairs = None
                         model.sort_points()
                         model.rebuild_adjacency()
                         iters_since_triangulation = 0

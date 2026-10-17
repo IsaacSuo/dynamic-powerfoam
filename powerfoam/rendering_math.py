@@ -3,17 +3,21 @@ import warp as wp
 
 @wp.func
 def ray_sphere_intersect(eye: wp.vec3f, dir: wp.vec3f, c: wp.vec3f, r: float):
-    # Sphere equation: ||x - c||^2 = r^2
+    # Sphere equation: ||x - c||^2 = r^2. The discriminant is formed from the ray-to-centre perpendicular distance,
+    # (r^2 - |oc_perp|^2) / |dir|^2, not as b^2 - 4 a c: with cells of radius ~1e-3 at distance ~1 the latter cancels
+    # to a few significant digits in float32 (chord length and its gradient off by percents for grazing rays)
     oc = eye - c
-    qb = 2.0 * wp.dot(oc, dir)
-    qc = wp.dot(oc, oc) - r * r
-    discriminant = qb * qb - 4.0 * qc
+    qa = wp.dot(dir, dir)
+    b = wp.dot(oc, dir) / qa
+    perp = oc - b * dir
+    h = (r * r - wp.dot(perp, perp)) / qa
 
-    if discriminant < 0:
+    if h < 0:
         return False, 0.0, 0.0
 
-    t_far = (-qb + wp.sqrt(discriminant)) / 2.0
-    t_near = (-qb - wp.sqrt(discriminant)) / 2.0
+    sq = wp.sqrt(h)
+    t_far = -b + sq
+    t_near = -b - sq
 
     if t_near < 0.0 and t_far < 0.0:
         return False, 0.0, 0.0
@@ -25,36 +29,38 @@ def ray_sphere_intersect(eye: wp.vec3f, dir: wp.vec3f, c: wp.vec3f, r: float):
 
 @wp.func
 def ray_sphere_intersect_bwd(eye: wp.vec3f, dir: wp.vec3f, c: wp.vec3f, r: float):
-    # Sphere equation: ||x - c||^2 = r^2
+    # t = -b +- sqrt(h), b = oc.dir / qa, h = (r^2 - |perp|^2) / qa (see ray_sphere_intersect):
+    # dt/dc = dir / qa +- perp / (qa sqrt(h)), dt/dr = +- r / (qa sqrt(h))
     oc = eye - c
     qa = wp.dot(dir, dir)
-    qb = 2.0 * wp.dot(oc, dir)
-    qc = wp.dot(oc, oc) - r * r
-    discriminant = qb * qb - 4.0 * qa * qc
+    b = wp.dot(oc, dir) / qa
+    perp = oc - b * dir
+    h = (r * r - wp.dot(perp, perp)) / qa
 
     dt_neardc = wp.vec3f(0.0)
     dt_fardc = wp.vec3f(0.0)
     dt_neardr = 0.0
     dt_fardr = 0.0
 
-    if discriminant < 0:
+    if h < 0:
         return dt_neardc, dt_fardc, dt_neardr, dt_fardr
 
-    t_far = (-qb + wp.sqrt(discriminant)) / (2.0 * qa)
-    t_near = (-qb - wp.sqrt(discriminant)) / (2.0 * qa)
+    sq = wp.sqrt(h)
+    t_far = -b + sq
+    t_near = -b - sq
 
     if t_near < 0.0 and t_far < 0.0:
         return dt_neardc, dt_fardc, dt_neardr, dt_fardr
     elif t_near < 0.0:
         # only t_far is valid
-        dt_fardc = dir / qa + (2.0 * qa * oc - qb * dir) / (qa * wp.sqrt(discriminant))
-        dt_fardr = 2.0 * r / wp.sqrt(discriminant)
+        dt_fardc = dir / qa + perp / (qa * sq)
+        dt_fardr = r / (qa * sq)
     else:
         # both t_near and t_far are valid
-        dt_neardc = dir / qa - (2.0 * qa * oc - qb * dir) / (qa * wp.sqrt(discriminant))
-        dt_neardr = -2.0 * r / wp.sqrt(discriminant)
-        dt_fardc = dir / qa + (2.0 * qa * oc - qb * dir) / (qa * wp.sqrt(discriminant))
-        dt_fardr = 2.0 * r / wp.sqrt(discriminant)
+        dt_neardc = dir / qa - perp / (qa * sq)
+        dt_neardr = -r / (qa * sq)
+        dt_fardc = dir / qa + perp / (qa * sq)
+        dt_fardr = r / (qa * sq)
 
     return dt_neardc, dt_fardc, dt_neardr, dt_fardr
 
@@ -141,9 +147,12 @@ def ray_plane_intersect_bwd(
 ):
     # Plane equation: n . x = n . p + h
     dp = wp.dot(n, dir)
-    dtdp = n / (dp + 1e-6)
-    dtdh = 1.0 / (dp + 1e-6)
-    dtdn = (p - eye) / (dp + 1e-6) - (wp.dot(p - eye, n) + h) * dir / (dp * dp + 1e-6)
+    # exact derivatives of the forward t = ((p - eye).n + h) / dp (the former +1e-6 in the denominators pulled
+    # negative dp towards zero and distorted dp^2 for grazing rays); non-finite values are zeroed by the caller
+    inv = 1.0 / dp
+    dtdp = n * inv
+    dtdh = inv
+    dtdn = (p - eye) * inv - (wp.dot(p - eye, n) + h) * dir * inv * inv
     return dtdp, dtdn, dtdh
 
 

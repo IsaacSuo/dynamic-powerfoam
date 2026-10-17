@@ -10,3 +10,7 @@ __pycache__
 /data
 /output*
 /logs
+# local-only: third-party references, old bundles, assistant state
+/references
+/dist
+/.claude

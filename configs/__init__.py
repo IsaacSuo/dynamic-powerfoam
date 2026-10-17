@@ -103,6 +103,20 @@ class Params:
     render_objective: str = "volume"
     sv_dof: int
     num_texel_sites: int
+    # Mechanics-aware spacing (0 = off): adjacent sites (k nearest) closer than
+    # spacing_kappa x their mean local scale (median distance to the spacing_k nearest
+    # sites, held fixed between neighbour rebuilds) are pushed apart; duplicated cells are
+    # placed spacing_kappa x local scale away instead of 0.05 x radius.
+    spacing_weight: float = 0.0
+    spacing_kappa: float = 0.5
+    spacing_k: int = 12
+    # Centroidal Voronoi (Lloyd) regularisation, 0 = off: every cvt_every iterations the
+    # centroid of each bounded power cell is estimated by Monte Carlo (cvt_samples per cell,
+    # power-distance owner inside the owner's support sphere); the loss pulls sites towards
+    # their (detached) centroids, |p - c|^2 / L^2 with L the local k-NN median spacing.
+    cvt_weight: float = 0.0
+    cvt_every: int = 200
+    cvt_samples: int = 32
 
     # Optimizer parameters
     points_lr_init: float

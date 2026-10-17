@@ -155,7 +155,7 @@ def plane_intersection_bwd(
         site = shared_sites[i]
         dist_sq = wp.length_sq(_intersection_pt - site) / (radius * radius)
         weight = wp.exp(-temp * dist_sq)
-        if weight / weight_sum < 1e-3:
+        if weight / _weight_sum < 1e-3:   # height pass: its own weight sum (weight_sum belongs to the colour lookup)
             continue
         dweightdsite = (2.0 * temp * weight * (_intersection_pt - site)) / (
             radius * radius
