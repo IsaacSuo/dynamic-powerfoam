@@ -88,12 +88,14 @@ def skew(w):
 
 
 def main():
+    global CAMS
     a = argparse.ArgumentParser(description=__doc__)
     a.add_argument('stage', choices=('velocity', 'material', 'scan', 'render', 'gradcheck', 'gradcheck2', 'hessian', 'sweep', 'debris', 'framediag', 'bottom', 'carve', 'timeshift', 'frameview', 'features', 'jitter', 'energy', 'featbatch', 'cfieldcheck', 'gradall', 'rendercheck', 'rendercheck2', 'rendercheck3', 'rendercheck4', 'rasterref', 'finesweep', 'lossdecomp', 'sag', 'flightfit', 'kprofile', 'simcheck', 'dampcheck'))
     a.add_argument('--obj', default='burger')
     a.add_argument('--run', default=None, help='static foam run (default output/springgaus_<obj>_v2)')
     a.add_argument('--dem', type=Path, default=None, help='default output/springgaus_dem/<obj>')
     a.add_argument('--eval-cam', type=int, default=0)
+    a.add_argument('--train-cams', default='', help="comma-separated camera indices used for training (default: all but --eval-cam)")
     a.add_argument('--downsample', type=int, default=2)
     a.add_argument('--train-frames', type=int, default=14, help='material: frames 1..N train, the rest are future')
     a.add_argument('--ogden-learn', type=int, default=0, help='learn the Ogden exponent (extra theta column, log(alpha / ogden_alpha))')
@@ -208,6 +210,9 @@ def main():
     a.add_argument('--per-body', action='store_true')
     a.add_argument('--smooth-weight', type=float, default=1e-2)
     a.add_argument('--init-from', type=Path, help="material report.json whose 'best' parameters start the fit")
+    a.add_argument('--render-all-frames', type=int, default=0, help='render: save every frame as a png')
+    a.add_argument('--dyn-suffix', default='', help="dynamic data directory <obj>_dynamic<suffix>, e.g. '_ext' "
+                   "(springgaus_extend.py: frames after the sequence, for future-frame evaluation)")
     a.add_argument('--registration', default='initial_state_upright_nospin.json',
                    help='register_calib/<file>: pose (+ v0, w0, rotation centre, camera time offsets from springgaus_initial_state)')
     a.add_argument('--contact', default='hard', choices=('hard', 'smooth', 'coulomb', 'hertz'),
@@ -254,8 +259,10 @@ def main():
     args.run = args.run or f'output/springgaus_{args.obj}_v2'
     args.dem = args.dem or Path(f'output/springgaus_dem/{args.obj}')
     args.out.mkdir(parents=True, exist_ok=True)
-    dyn = OUT/f'{args.obj}_dynamic'
+    dyn = OUT/f'{args.obj}_dynamic{args.dyn_suffix}'
     meta = json.loads((dyn/'cameras.json').read_text())
+    if 'camera_names' in meta:          # other datasets (vid2sim_to_springgaus.py): the views listed in cameras.json
+        CAMS = tuple(meta['camera_names'])
     reg = json.loads((dyn/'register_calib'/args.registration).read_text())
     A, b, k = foam_to_dynamic(OUT/args.obj, dyn/'register_calib'/args.registration)
     offsets = [reg.get('time_offsets_frames', {}).get(c, 0.) for c in CAMS]
@@ -279,6 +286,10 @@ def main():
             m = Image.open(dyn/'masks'/name/f'{f:02d}.png').convert('L').resize((W, H), Image.BILINEAR)
             masks[f, c] = torch.tensor(np.asarray(m, np.float32)/255, device='cuda')
     train_cams = [c for c in range(len(CAMS)) if c != args.eval_cam]
+    if args.train_cams:                 # e.g. '0' (monocular) or '0,3,7': indices into the camera list
+        train_cams = [int(c_) for c_ in args.train_cams.split(',')]
+        assert args.eval_cam not in train_cams and all(0 <= c_ < len(CAMS) for c_ in train_cams), (train_cams, args.eval_cam)
+    print('cameras %s, training %s, held out %s' % (list(CAMS), [CAMS[c_] for c_ in train_cams], CAMS[args.eval_cam]), flush=True)
     dev, f32 = 'cuda', torch.float32
     Ainv_t = torch.tensor(Ainv, dtype=f32, device=dev); b_t = torch.tensor(b, dtype=f32, device=dev)
     R0_t = torch.tensor(R0, dtype=f32, device=dev)
@@ -813,7 +824,7 @@ def main():
                     d.text((8, 260*k_+244), CAMS[c]+(' (held-out view)' if c == args.eval_cam else ' (train view)'), fill=(255, 255, 0))
                 frames_img.append(img)
             frames_img[0].save(args.out/'compare.gif', save_all=True, append_images=frames_img[1:], duration=250, loop=0)
-            for f in (0, 7, 8, 10, 14, 19):
+            for f in (range(len(frames_img)) if args.render_all_frames else sorted(set((0, 7, 8, 10, 14, 19)+tuple(range(20, len(frames_img), 5))+(len(frames_img)-1,)))):
                 frames_img[f].save(args.out/f'compare_frame{f:02d}.png')
         print('saved', args.out/'compare.gif', flush=True)
         return
