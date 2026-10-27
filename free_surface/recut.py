@@ -79,6 +79,10 @@ class Recut:
             r = self.repair(p, r, hid); nrep += int(hid.sum())
             G, S = self.geometry(p, r)
         res = Vt-G.V.detach()
+        q = G.V.detach()/Vt                                                        # V / target at the start: extremes, 1 / 99 %,
+        off = (q < .5) | (q > 2)                                                   # the material share outside [0.5, 2]
+        self.stats['start_ratio'] = (float(q.min()), float(q.max()), float(torch.quantile(q, .01)), float(torch.quantile(q, .99)),
+                                     float(Vt[off].sum()/Vt.sum()), torch.nonzero(off).flatten())
         it = 0
         while True:
             err = float((res/Vt).abs().max())
@@ -94,10 +98,15 @@ class Recut:
             while True:
                 wt = w+st*dw
                 if bool((wt > 0).all()):
-                    Gt, St = self.geometry(p, torch.sqrt(wt), reuse=True)
-                    rt = Vt-Gt.V.detach()
-                    if not bool(St['hidden'].any()) and bool((Gt.V > 0).all()) and float(rt.norm()) <= (1-st/2)*nr:
-                        break
+                    try:
+                        Gt, St = self.geometry(p, torch.sqrt(wt), reuse=True)
+                    except RuntimeError:                                       # a trial weight so large its cell overflows the
+                        Gt = None                                              # storage: a failed trial (10-27: tiny cells near
+                        self.stats['overflow'] = self.stats.get('overflow', 0)+1   # twins asked for w x 18 at full step)
+                    if Gt is not None:
+                        rt = Vt-Gt.V.detach()
+                        if not bool(St['hidden'].any()) and bool((Gt.V > 0).all()) and float(rt.norm()) <= (1-st/2)*nr:
+                            break
                 st *= .5
                 if st*float((dw/w).abs().max()) <= torch.finfo(w.dtype).eps:   # no step that still moves a weight lowers
                     self.stats['floor'] = self.stats.get('floor', 0)+1        # the residual: the volumes are at their own
