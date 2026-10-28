@@ -472,11 +472,11 @@ class ULModel:
         return yg, e0, stats
 
     def step(self, st, dt, grav=None, ref=1., tol=1e-9, maxit=5000, analytic=True, vol_tol=1e-5, ground=None, ground_r=None,
-             f_update='forward'):
+             f_update='forward', radii_start='predict'):
         """one backward-Euler step from st = dict(x, v, F, r[, GS, r_prev]); returns the new state and a report
         (energies at the start on this step's operators, at the end, the solve's stats, the volume fit's). analytic: the
         written-out gradient and products (state / hvp), else autograd on elastic(). The volume fit starts from the
-        weights extrapolated in time (2 w^n - w^n-1, where positive) and stops at vol_tol (relative; each step fits
+        weights given by radii_start (below) and stops at vol_tol (relative; each step fits
         V0 det F afresh, so its error does not add up; 10-27 8k: 1 Newton iteration, 9e-6, against 3 from w^n to 1e-9).
         ground = (n, c, E*): the plane n.x = c (n unit, the body on its + side), Hertz on the ball (centre x, this step's
         radius r) of every cell with an exposed cap at the step's start: energy 8/15 E* R^1/2 delta^5/2, delta = R - (n.x
@@ -485,10 +485,14 @@ class ULModel:
         f_update: 'forward' F^n+1 = (I + A) F^n, A = Gc(x^n+1 - x^n) on the step start's cut (the solve's own F);
         'midpoint' (10-28 test of the F histories' drift): also B = Gc on the step end's cut (the radii fitted to the
         forward F first), F^n+1 = (I - B/2)^-1 (I + A/2) F^n (exact for exact A = f - I, B = I - f^-1; symmetric in the
-        two ends), then the radii fitted again"""
+        two ends), then the radii fitted again. radii_start: 'predict' the weights from this step's motion and targets to
+        first order on the step start's cut (Recut.predict; 10-28 8k bending: start error 8e-4 against 3e-2 from the
+        time extrapolation, 1 Newton iteration instead of 2, 2 cuts per step instead of 3), 'extrapolate' them in time
+        (2 w^n - w^n-1, where positive)"""
         x, v, F, r = st['x'], st['v'], st['F'], st['r']
         tm = {}; t0 = clock()
-        geo = self.geometry(x, r, st.get('GS'))
+        GS = st['GS'] if 'GS' in st else self.recut.geometry(x, r)
+        geo = self.geometry(x, r, GS)
         ops = self.operators(x, F, geo, self.pair_refs(x, F, r, geo) if self.f_mode == 'total' else None)
         tm['operators'] = clock()-t0; t0 = clock()
         gv = torch.zeros(3, dtype=f64, device=self.dev) if grav is None else torch.as_tensor(grav, dtype=f64, device=self.dev)
@@ -549,11 +553,15 @@ class ULModel:
         e_end, F1 = self.elastic(y, ops, terms=True)
         tm['solve'] = clock()-t0; t0 = clock()
         Vt = self.V0*torch.linalg.det(F1)
-        w_ = r*r
-        if 'r_prev' in st:
-            w2 = 2*w_-st['r_prev']**2
-            w_ = torch.where(w2 > 0, w2, w_)
-        r1, G1, S1, it, nrep = self.recut.solve_radii(y, torch.sqrt(w_), Vt, tol=vol_tol)
+        if radii_start == 'predict':
+            r_ = self.recut.predict(GS[0], y-x, Vt)
+        else:
+            w_ = r*r
+            if 'r_prev' in st:
+                w2 = 2*w_-st['r_prev']**2
+                w_ = torch.where(w2 > 0, w2, w_)
+            r_ = torch.sqrt(w_)
+        r1, G1, S1, it, nrep = self.recut.solve_radii(y, r_, Vt, tol=vol_tol)
         if f_update == 'midpoint' and self.f_mode != 'total':
             ops1 = self.operators(y, F1, self.geometry(y, r1, (G1, S1)))
             A_, B_ = self.kin(y-x, ops), self.kin(y-x, ops1)

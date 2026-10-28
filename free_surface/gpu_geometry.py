@@ -189,8 +189,8 @@ class Geometry:
         inside = line & (f2 < rho2)
         half = torch.sqrt(torch.where(inside, rho2-f2, torch.ones_like(f2)))
         with torch.no_grad():                                  # which half-plane bounds each segment end
-            ad = torch.einsum('pkd,pld->plk', a, dirn)
-            rhs = beta[:, None, :]-torch.einsum('pkd,pld->plk', a, foot)
+            ad = (a[:, None]*dirn[:, :, None]).sum(-1)                         # [p, l, k] (broadcast: einsum went through
+            rhs = beta[:, None, :]-(a[:, None]*foot[:, :, None]).sum(-1)       # cuBLAS GEMMs, 10-28)
             other = valid[:, None, :] & ~torch.eye(K, dtype=torch.bool, device=dev)[None]
             bound = rhs/torch.where(ad != 0, ad, torch.ones_like(ad))
             upv, upk = torch.where(other & (ad > 0), bound, torch.full_like(bound, float('inf'))).min(-1)
@@ -255,7 +255,7 @@ class Geometry:
             cand = torch.cat((fibonacci(npole, dt, dev)[None].expand(self.n, -1, -1), nd[:, None], -nd[:, None]), 1)
             mm = csr[:, None]*axr+snr[:, None]*er(.5*(pa+pb))
             smp = torch.cat((ma, mm)); ss = torch.cat((sr, sr))
-            dots = torch.einsum('sci,si->sc', cand[ss], smp)
+            dots = (cand[ss]*smp[:, None, :]).sum(-1)
             score = torch.full((self.n, cand.shape[1]), float('inf'), dtype=dt, device=dev).scatter_reduce(0, ss[:, None].expand(-1, cand.shape[1]), dots, reduce='amin', include_self=True)
             score[:, npole:][(self.patch_n.norm(dim=1) == 0)] = -float('inf')        # no mean normal to offer
             best = score.argmax(1)

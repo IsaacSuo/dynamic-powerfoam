@@ -14,11 +14,60 @@ from free_surface.alpha_complex import AlphaComplex
 from free_surface.gpu_geometry import Geometry
 
 
+class GraphedCG:
+    """Recut.cg's iterations, check of them per replay of one CUDA graph, on fixed buffers: the pairs padded to a capacity
+    with c = 0 (they add nothing), the graph captured again only when the pairs outgrow it. The same operations in the
+    same order as the plain loop (the stop is read at the same iterations)"""
+
+    def __init__(self, n, check, dev):
+        self.n, self.check, self.dev, self.cap, self.graph = n, check, dev, 0, None
+
+    def _body(self):
+        for _ in range(self.check):
+            Hq = self.d*self.q-torch.zeros_like(self.q).index_add(0, self.i, self.c*self.q[self.j]).index_add(0, self.j, self.c*self.q[self.i])
+            al = self.rz/(self.q@Hq)
+            self.x.add_(al*self.q); self.rr.sub_(al*Hq)
+            z = self.rr/self.d; rz1 = self.rr@z
+            self.q.mul_(rz1/self.rz).add_(z); self.rz.copy_(rz1)
+
+    def _capture(self, m):
+        self.cap = int(1.25*m)+64
+        f64, n, dev = torch.float64, self.n, self.dev
+        self.i = torch.zeros(self.cap, dtype=torch.long, device=dev); self.j = torch.zeros_like(self.i)
+        self.c = torch.zeros(self.cap, dtype=f64, device=dev)
+        self.d, self.q = torch.ones(n, dtype=f64, device=dev), torch.ones(n, dtype=f64, device=dev)
+        self.x, self.rr = torch.zeros(n, dtype=f64, device=dev), torch.zeros(n, dtype=f64, device=dev)
+        self.rz = torch.ones((), dtype=f64, device=dev)
+        s_ = torch.cuda.Stream(device=dev); s_.wait_stream(torch.cuda.current_stream(dev))
+        with torch.cuda.stream(s_):
+            self._body()
+        torch.cuda.current_stream(dev).wait_stream(s_)
+        self.graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(self.graph):
+            self._body()
+
+    def __call__(self, J, b, scale, rtol, maxit):
+        i, j, c, d = J
+        m = len(i)
+        if self.graph is None or m > self.cap:
+            self._capture(m)
+        self.i[:m] = i; self.i[m:] = 0; self.j[:m] = j; self.j[m:] = 0; self.c[:m] = c; self.c[m:] = 0
+        self.d.copy_(d); self.x.zero_(); self.rr.copy_(b); z = b/d; self.q.copy_(z); self.rz.copy_(b@z)
+        lim = rtol*(b/scale).abs().max()
+        k = 0
+        while k < maxit:
+            self.graph.replay(); k += self.check
+            if bool((self.rr/scale).abs().max() <= lim):
+                break
+        return self.x.clone(), k
+
+
 class Recut:
     def __init__(self, n, device='cuda', margin=.05):
         self.n, self.dev, self.margin = n, device, margin
         self.A = AlphaComplex(n, device)
         self.stats = dict(geometry=0, cg=0, overlaps=0)
+        self.gcg = None
 
     def geometry(self, p, r, reuse=False):
         """reuse: the overlap candidates of the last call at these sites while they still cover (AlphaComplex)"""
@@ -41,11 +90,43 @@ class Recut:
         d = torch.where(d > 0, d, d.max())                                         # (hidden: repaired before any solve)
         return i, j, c, d
 
+    def dvol(self, G, dp):
+        """the volumes' change when the sites of G (cut at p, r) move by dp at fixed weights, to first order. A volume
+        moves only by its boundary's normal velocity. The wall (i, j), n from i to j, L = |p_j - p_i|, lies on the
+        power-equal plane |y - p_i|^2 - w_i = |y - p_j|^2 - w_j; its point y moves along n by ((y - p_i).dp_i - (y -
+        p_j).dp_j) / L, linear in y, so dV_i = A / L ((c - p_i).dp_i - (c - p_j).dp_j) with c the wall's centroid, and
+        dV_j = -dV_i. The cap moves with its site: dV_i = a_i.dp_i, a_i = -sum_walls A n its area vector (closure). A
+        common translation keeps every volume (sum_walls A n + a = 0)"""
+        keep = G.wall_A > 0
+        i, j = G.i[keep], G.j[keep]
+        A, c, p = G.wall_A.detach()[keep], G.wall_c.detach()[keep], G.p.detach()
+        d = p[j]-p[i]; L = d.norm(dim=1)
+        dw = (A/L)*(((c-p[i])*dp[i]).sum(1)-((c-p[j])*dp[j]).sum(1))
+        a = torch.zeros_like(p).index_add(0, i, -(A/L)[:, None]*d).index_add(0, j, (A/L)[:, None]*d)
+        return (a*dp).sum(1).index_add(0, i, dw).index_add(0, j, -dw)
+
+    def predict(self, G, dp, Vt, rtol=1e-3):
+        """radii for the sites of G moved by dp and the volumes Vt, to first order from G: J dw = Vt - V - dvol(G, dp)
+        with the weights' Jacobian at G (10-28: the volume fit's start from the step's own motion instead of from the
+        weights extrapolated in time)"""
+        r = G.r.detach()
+        dw = self.cg(self.jacobian(G, r), Vt-G.V.detach()-self.dvol(G, dp), Vt, rtol=rtol)
+        w = r*r+dw
+        return torch.sqrt(torch.where(w > 0, w, r*r))
+
     def cg(self, J, b, scale, rtol=1e-12, maxit=2000, check=10):
         """CG preconditioned by the diagonal; the scalars stay on the GPU, the residual is read every check iterations;
         it stops when every cell's residual relative to its scale (the target volume) is rtol times the start's
-        largest (10-24: an overall norm left the tiny cells' corrections loose, 6e-9 against the tol 1e-9)"""
+        largest (10-24: an overall norm left the tiny cells' corrections loose, 6e-9 against the tol 1e-9). On CUDA the
+        check iterations between two reads are one replay of GraphedCG (10-28: 0.45 ms per iteration plain on the 8k
+        foam, nearly all kernel launches)"""
         i, j, c, d = J
+        if b.is_cuda:
+            if self.gcg is None or self.gcg.check != check:
+                self.gcg = GraphedCG(self.n, check, b.device)
+            x, k = self.gcg(J, b, scale, rtol, maxit)
+            self.stats['cg'] += k
+            return x
         def H(x):
             return d*x-torch.zeros_like(x).index_add(0, i, c*x[j]).index_add(0, j, c*x[i])
         x = torch.zeros_like(b); rr = b.clone(); z = rr/d; q = z.clone(); rz = rr@z; lim = rtol*(b/scale).abs().max()
