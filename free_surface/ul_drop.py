@@ -32,6 +32,9 @@ def main():
                     help="current: the volume fit's radii; rest: the rest radii (10-27 test of the contact / volume-fit feedback)")
     a_.add_argument('--squeeze', type=float, default=0., help='> 0: no ground, no gravity; the foam starts at rest in place with the '
                     'velocity v_y = -a (y - y_c) (a smooth compression; 10-28 test against the drop\'s contact)')
+    a_.add_argument('--f-mode', default='total', help="ul_model f_mode: 'increment' or 'total' (UPDATED_LAGRANGE.md section 20)")
+    a_.add_argument('--new-ref', default='rest', help="f_mode 'total': a newly met pair's reference, 'contact' or 'rest'")
+    a_.add_argument('--fit-w', default='rest', help="f_mode 'total': the fits' pairs and weights, 'wall' (current cut), 'rest' (rest neighbours and weights) or 'lens'")
     a_.add_argument('--tag', default='ul_drop')
     args = a_.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -43,7 +46,7 @@ def main():
     else:
         dlt, J0, cnt = cell_moments_grid(X, r, V, args.grid); np.savez(cf, dlt=dlt, J0=J0, cnt=cnt)
     E, nu = args.E/1000, args.nu
-    mdl = ULModel(X, r, V, dlt, J0, E, nu)
+    mdl = ULModel(X, r, V, dlt, J0, E, nu, f_mode=args.f_mode, new_ref=args.new_ref, fit_w=args.fit_w)
     up = torch.tensor([0., 1., 0.], dtype=f64, device=dev)
     I = torch.eye(3, dtype=f64, device=dev).expand(n, 3, 3).contiguous()
     low = float((mdl.X0[:, 1]-mdl.r0).min())
