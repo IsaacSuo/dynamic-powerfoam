@@ -149,14 +149,31 @@ class Recut:
             w[i_] = max(float(w[i_]), need*(1+1e-9)+1e-12*float(w.max()))
         return torch.sqrt(w)
 
-    def solve_radii(self, p, r, Vt, tol=1e-9, maxit=30):
-        """radii from r with V = Vt at sites p; returns r, its geometry and structure, Newton iterations, repairs"""
-        G, S = self.geometry(p, r)
+    def solve_radii(self, p, r, Vt, tol=1e-9, maxit=200, r_base=None):
+        """radii from r with V = Vt at sites p; returns r, its geometry and structure, Newton iterations, repairs.
+        r_base: radii r is a step from (the last step's for a predicted start): a start whose cut overflows the storage
+        is moved halfway back to r_base in w until it does not (as a refused trial of the Newton step; 10-28 lion, a
+        predicted weight x 30). The repair (each hidden or empty site's weight raised until it owns its position) is a
+        relaxation of the difference constraints w_j - w_i <= |p_i - p_j|^2, done in rounds until none is violated; a
+        chain of n sites needs at most n rounds (10-28 lion: 2 hidden sites spread to 307 over 21 rounds, and the old
+        cap of 20 left two empty cells silently, the line search then had no step). maxit 30 -> 200 (10-28 lion, deep
+        compression: 30 iterations ended at 3.9e-4); the caller checks the error"""
+        while True:
+            try:
+                G, S = self.geometry(p, r)
+                break
+            except RuntimeError:
+                if r_base is None or float(((r*r-r_base*r_base)/(r_base*r_base)).abs().max()) <= 4*torch.finfo(r.dtype).eps:
+                    raise                                                      # (the base itself overflows: no start left)
+                self.stats['overflow'] = self.stats.get('overflow', 0)+1
+                r = torch.sqrt(.5*(r*r+r_base*r_base))
         nrep = 0
-        for _ in range(20):
+        for rd in range(self.n+1):
             hid = S['hidden'] | (G.V.detach() <= 0)
             if not bool(hid.any()):
                 break
+            if rd == self.n:
+                raise RuntimeError('solve_radii: %d sites still hidden or empty after %d repair rounds' % (int(hid.sum()), rd))
             r = self.repair(p, r, hid); nrep += int(hid.sum())
             G, S = self.geometry(p, r)
         res = Vt-G.V.detach()

@@ -67,26 +67,33 @@ def mm(A, B):
 
 class GraphedProduct:
     """a product d -> f(aux, d) replayed from a CUDA graph while aux (the Newton iterate) stays the same: captured at the
-    third call for one aux (a capture costs ~ 20 ms on the 8k foam, a replay 0.95 ms against 1.76 ms plain, 10-28)"""
-    pool = None
+    third call for one aux (a capture costs ~ 20 ms on the 8k foam, a replay 0.95 ms against 1.76 ms plain, 10-28). Each
+    graph has its own memory pool, freed with it (10-28 lion: a pool handle shared by the graphs of successive steps,
+    reused after they were all freed, tripped PyTorch 2.9's allocator assert use_count > 0). When to capture: a capture
+    pays off after ~25 products (20 ms / 0.8 ms saved per product); the number an iterate will take is predicted by the
+    last iterate's (kept across steps): at least 25, capture at the third call, else only after 25 calls (10-28 lion,
+    deep compression: ~500 Newton iterates of ~4 products each, a capture per iterate cost more than the products)"""
+    breakeven, last = 25, None
 
     def __init__(self, f, after=2):
         self.f, self.after, self.key, self.calls, self.graph = f, after, None, 0, None
 
     def __call__(self, aux, d):
         if aux is not self.key:
+            if self.key is not None:
+                GraphedProduct.last = self.calls
             self.key, self.calls, self.graph = aux, 0, None
         self.calls += 1
-        if self.graph is None and self.calls > self.after:
-            if GraphedProduct.pool is None:
-                GraphedProduct.pool = torch.cuda.graph_pool_handle()
+        last = GraphedProduct.last
+        after = self.after if last is None or last >= self.breakeven else self.breakeven
+        if self.graph is None and self.calls > after:
             self.d = d.clone()
             s_ = torch.cuda.Stream(); s_.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(s_):
                 self.f(aux, self.d)
             torch.cuda.current_stream().wait_stream(s_)
             self.graph = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(self.graph, pool=GraphedProduct.pool):
+            with torch.cuda.graph(self.graph):
                 self.out = self.f(aux, self.d)
         if self.graph is None:
             return self.f(aux, d)
@@ -118,8 +125,10 @@ def cell_moments_grid(X, r, V, spacing, dev='cuda'):
 
 class ULModel:
     def __init__(self, X0, r0, V0, dlt0, J0, E, nu, rho=1., dev='cuda', jump=True, stab=True, shift='displacement', smooth='centroid',
-                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest'):
+                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0.):
         t = lambda a: torch.as_tensor(np.asarray(a), dtype=f64, device=dev)
+        self.tet_w, self.tet_qmin = tet_w, tet_qmin
+        self.wall_w, self.cell_w, self.cellhg_w, self.cellhg_k = wall_w, cell_w, cellhg_w, cellhg_k
         self.dev, self.n = dev, len(X0)
         self.X0, self.r0, self.V0, self.dlt0, self.J0 = t(X0), t(r0), t(V0), t(dlt0), t(J0)
         self.mu = E/(2*(1+nu)); self.lam = E*nu/((1+nu)*(1-2*nu))
@@ -128,6 +137,10 @@ class ULModel:
         self.recut = Recut(self.n, dev)
         self.I3 = torch.eye(3, dtype=f64, device=dev)
         self.f_mode, self.new_ref, self.fit_w = f_mode, new_ref, fit_w
+        self.fit_cap, self.carry_cap, self.f_substeps = fit_cap, carry_cap, f_substeps
+        self.agg = agg                                                                 # (10-29: cells below agg x the median volume take their
+                                                                                       # neighbours' fit, see operators)
+        self.deg_cells = torch.zeros(0, dtype=torch.long, device=dev); self.deg_q = torch.zeros(0, 3, dtype=f64, device=dev)
         if f_mode == 'total':                                                          # UPDATED_LAGRANGE.md section 20
             geo0 = self.geometry(self.X0, self.r0)
             self.carry0 = self.cut_centroids(self.X0, geo0)                            # the material centroid offsets
@@ -135,6 +148,410 @@ class ULModel:
             self.mem_a, self.mem_b = torch.minimum(i0, j0), torch.maximum(i0, j0)      # the pair memory, D oriented a -> b
             self.mem_D = self.X0[self.mem_b]-self.X0[self.mem_a]
             self.rest_walls, self.rest_fit = (i0, j0, geo0['A']), None
+            self.null_site, self.null_cen = torch.zeros(self.n, 3, 3, dtype=f64, device=dev), torch.zeros(self.n, 3, 3, dtype=f64, device=dev)
+            if fit_w == 'rest':
+                self._degenerate(i0, j0)
+        if tet_w > 0:
+            self._material_tets(geo0['i'], geo0['j'])
+        if wall_w > 0:
+            self._material_walls(geo0)
+        if cellhg_w > 0:
+            self.hg_i, self.hg_j, self.hg_A = geo0['i'], geo0['j'], geo0['A']
+        self.grad = 'fit'
+        if grad == 'corrected':
+            if mass == 'consistent':
+                raise NotImplementedError("grad 'corrected' with mass 'consistent'")
+            self._corrected_operator()
+        elif grad in ('gg_a', 'gg_b', 'gg_c'):
+            if mass == 'consistent':
+                raise NotImplementedError("grad 'gg_*' with mass 'consistent'")
+            self._gg_operator(grad[-1])
+        elif grad != 'fit':
+            raise ValueError('grad: fit, corrected, gg_a, gg_b or gg_c')
+        self.grad = grad
+        self.mass = mass
+        if mass == 'consistent':
+            self._consistent_mass(rho)
+        elif mass != 'diag':
+            raise ValueError('mass: diag or consistent')
+            self.hg_den = 2*torch.zeros(self.n, dtype=f64, device=self.dev).index_add_(0, self.hg_i, self.hg_A).index_add_(0, self.hg_j, self.hg_A)
+
+    def _material_tets(self, i0, j0):
+        """the tetrahedra between the sites (10-29, the UL lion's sites crushed beyond F: the site tetrahedra below 5 cell
+        sizes held 0.53 of their volume where V0 det F said 0.83, 18 % inverted; the jump term is linear and per pair):
+        the rest regular triangulation (the rest cut's dual; lower hull of (X, |X|^2 - r^2)), the tetrahedra whose six
+        edges are rest walls. Their energy (tet_energy) is the Bregman remainder of psi's volumetric part U(J) = -mu ln J
+        + lam / 2 ln^2 J at the tetrahedron's own J_t (exact from its four sites) about the mean det F of its four cells:
+        zero with its force for affine motion (nothing re-counted), >= 0 (U convex for J < e^(1 + mu / lam)), rotation
+        free (the full-F remainder is negative for a tetrahedron rotated against its cells under compression: initial
+        stress), infinite when the tetrahedron inverts"""
+        from scipy.spatial import ConvexHull
+        X = self.X0.cpu().numpy(); r = self.r0.cpu().numpy(); n = self.n
+        gg = X-X.mean(0)
+        hull = ConvexHull(np.c_[gg, (gg**2).sum(1)-r**2], qhull_options='Qt Qbb Qc Q12')
+        T = hull.simplices[hull.equations[:, 3] < 0]
+        rest = set((torch.minimum(i0, j0)*n+torch.maximum(i0, j0)).tolist())
+        E6 = np.stack([T[:, [0, 0, 0, 1, 1, 2]], T[:, [1, 2, 3, 2, 3, 3]]], 2)
+        k6 = np.minimum(E6[:, :, 0], E6[:, :, 1]).astype(np.int64)*n+np.maximum(E6[:, :, 0], E6[:, :, 1])
+        T = T[np.array([all(int(q) in rest for q in row) for row in k6])]
+        Dm = np.stack([X[T[:, 1]]-X[T[:, 0]], X[T[:, 2]]-X[T[:, 0]], X[T[:, 3]]-X[T[:, 0]]], 2)
+        neg = np.linalg.det(Dm) < 0
+        T[neg] = T[neg][:, [0, 2, 1, 3]]                                                   # positive orientation
+        Dm = np.stack([X[T[:, 1]]-X[T[:, 0]], X[T[:, 2]]-X[T[:, 0]], X[T[:, 3]]-X[T[:, 0]]], 2)
+        # slivers left out (10-29 lion: 15 % of these tetrahedra have under 0.05 of a regular tetrahedron's volume on
+        # their longest edge; 1 % of a cell size of random site noise inverted 51 of all, 0 of those with quality >= 0.1)
+        Lmax = np.max([np.linalg.norm(X[T[:, a]]-X[T[:, b]], axis=1) for a, b in ((0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3))], 0)
+        good = np.linalg.det(Dm)/6/(Lmax**3/(6*2**.5)) >= self.tet_qmin
+        T, Dm = T[good], Dm[good]
+        self.tets = torch.as_tensor(T, dtype=torch.long, device=self.dev)
+        self.tet_Dmi = torch.as_tensor(np.linalg.inv(Dm), dtype=f64, device=self.dev)
+        self.tet_V = torch.as_tensor(np.linalg.det(Dm)/6, dtype=f64, device=self.dev)
+
+    def _material_walls(self, geo0):
+        """the rest walls as the energy's integration domains (10-29, edge-based smoothing ES-FEM / Breitzman & Dayal 2018
+        bond-level F): each cell's rest volume shared among its walls by A0 l0 (sum of the walls' volumes = the body's),
+        wall_energy integrates psi there"""
+        i0, j0, A0 = geo0['i'], geo0['j'], geo0['A']
+        D = self.X0[j0]-self.X0[i0]; l0 = D.norm(dim=1)
+        q = A0*l0
+        tot = torch.zeros(self.n, dtype=f64, device=self.dev).index_add_(0, i0, q).index_add_(0, j0, q)
+        self.wall_i, self.wall_j, self.wall_D = i0, j0, D
+        self.wall_V = self.V0[i0]*q/tot[i0]+self.V0[j0]*q/tot[j0]
+
+    def wall_energy(self, y, ops):
+        """wall_w sum_walls V_w psi(F_w), F_w = Fb + (d - Fb D) (x) D / |D|^2 (exact along the pair: F_w D = d; across it the
+        mean of the two cells' F), neo-Hookean; inf where some det F_w <= 0. Returns the energy and min det F_w"""
+        if not ops['total']:
+            raise RuntimeError('wall_energy: f_mode total only')
+        F = self.def_grad(y, ops)
+        i, j, D = self.wall_i, self.wall_j, self.wall_D
+        Fb = .5*(F[i]+F[j])
+        dl = (y[j]-y[i])-(Fb*D[:, None, :]).sum(-1)
+        Fw = Fb+dl[:, :, None]*(D/(D*D).sum(1, keepdim=True))[:, None, :]
+        J = torch.linalg.det(Fw)
+        if bool((J <= 0).any()):
+            return y.sum()*0+math.inf, float(J.min())
+        lnJ = torch.log(J)
+        psi = .5*self.mu*((Fw*Fw).sum((1, 2))-3)-self.mu*lnJ+.5*self.lam*lnJ**2
+        return self.wall_w*(self.wall_V*psi).sum(), float(J.min())
+
+    def _consistent_mass(self, rho):
+        """the kinetic energy of the model's own displacement field (10-29): in cell s the field is u_c,s + Gc_s (X - c_s),
+        u_c = v + G0 carry (the site fit carried to the centroid), Gc the centroid fit, both linear in the site increments v
+        with scalar weights and constant in f_mode 'total' (rest operators); its exact kinetic energy per cell is
+        1/2 rho [V_s |u_c,s'|^2 + Gc_s' : (Gc_s' J0_s)], J0_s = int (X - c)(X - c)^T dV, so KE = 1/2 sum_k v_k'^T Mc v_k'
+        (k the component) with the n x n matrix Mc = rho (P^T diag(V) P + sum_kl Q_k^T diag(J0_kl) Q_l), u_c = P v,
+        (Gc)_ik = (Q_k v_i). Exact total mass and rigid motions; the lumped masses Mc 1 = rho P^T V carry gravity and the
+        centre of mass. 10-29 part: the compression test's deepest modes 3-5x the continuum's under the site masses, 0.35-0.75x
+        under Mc (a light site turning a heavy neighbour cell's F carried no kinetic energy). The degenerate cells' free
+        columns stay massless"""
+        if self.f_mode != 'total' or self.shift != 'displacement':
+            raise RuntimeError("mass 'consistent': f_mode 'total' and shift 'displacement' only")
+        n = self.n
+        I = self.I3.expand(n, 3, 3).contiguous()
+        geo = self.geometry(self.X0, self.r0)
+        ops = self.operators(self.X0, I, geo, self.pair_refs(self.X0, I, self.r0, geo))
+        S, O = ops['KS'], ops['KO']
+        w = (ops['R']*ops['carry'][S]).sum(1)
+        P = torch.zeros(n, n, dtype=f64, device=self.dev)
+        P.index_put_((S, O), w, accumulate=True); P.index_put_((S, S), -w, accumulate=True)
+        P = P+torch.eye(n, dtype=f64, device=self.dev)
+        Q = []
+        for k in range(3):
+            B = torch.zeros(n, n, dtype=f64, device=self.dev)
+            B.index_put_((S, O), ops['RC'][:, k], accumulate=True); B.index_put_((S, S), -ops['RC'][:, k], accumulate=True)
+            Q.append(B@P)
+        M = P.T@(self.V0[:, None]*P)
+        for k in range(3):
+            for l in range(3):
+                M = M+Q[k].T@(self.J0[:, k, l][:, None]*Q[l])
+        self.Mc = rho*.5*(M+M.T)
+        self.m = self.Mc.sum(1); self.mdiag = torch.diagonal(self.Mc).clone()
+
+    def _corrected_operator(self):
+        """the fit's F with the integration constraint (10-29): the two-step fit (rest neighbours, carried to the centroid)
+        is a linear map G_s = sum_a u_a (x) W_sa; its discrete divergence of a constant b_a = sum_s V_s W_sa is O(1) at the
+        interior sites (one step: sum_s V_s M_s^-1 A_as n_as, zero only for equal isotropic V_s M_s^-1), so a uniform stress
+        pushes them (part patch test: deviation 0.24-0.93 |H| h, energy 8-24 % below affine). The smallest change delta
+        (sum_s V_s |delta_s|^2, on the same stencils) keeping every cell exact for affine fields (sum_a delta_sa = 0,
+        sum_a delta_sa X_a = 0) and making b_a = 0 at the sites without an exposed cap: per component, delta_s = -Pi_s lambda
+        on the cell's stencil, Pi_s the projection off the affine patterns [1, X] there, N lambda = b on those sites,
+        N = sum_s V_s E_s^T Pi_s E_s. Surface sites unconstrained (they carry the boundary terms). The result is used as a
+        one-step operator (ops 'onestep'), for the energy and the forces alike (variational; cf. VCI, Chen, Hillman, Rueter
+        2013, which corrects the test functions only)"""
+        if self.f_mode != 'total' or self.shift != 'displacement':
+            raise RuntimeError("grad 'corrected': f_mode 'total' and shift 'displacement' only")
+        n = self.n
+        I = self.I3.expand(n, 3, 3).contiguous()
+        geo = self.geometry(self.X0, self.r0)
+        ops = self.operators(self.X0, I, geo, self.pair_refs(self.X0, I, self.r0, geo))
+        S, O = ops['KS'], ops['KO']
+        w = (ops['R']*ops['carry'][S]).sum(1)
+        P = torch.zeros(n, n, dtype=f64, device=self.dev)
+        P.index_put_((S, O), w, accumulate=True); P.index_put_((S, S), -w, accumulate=True)
+        P = P+torch.eye(n, dtype=f64, device=self.dev)
+        W = torch.zeros(3, n, n, dtype=f64, device=self.dev)
+        for k in range(3):
+            B = torch.zeros(n, n, dtype=f64, device=self.dev)
+            B.index_put_((S, O), ops['RC'][:, k], accumulate=True); B.index_put_((S, S), -ops['RC'][:, k], accumulate=True)
+            W[k] = B@P
+        del P, B
+        mask = W.abs().sum(0) > 1e-12*float(W.abs().max())
+        cap = geo['capA'] > 0; inner = torch.nonzero(~cap).flatten()
+        b = torch.einsum('s,ksa->ka', self.V0, W)                                          # (3, n) the divergence of a constant
+        N = torch.zeros(n, n, dtype=f64, device=self.dev); Pis, idxs = [], []
+        for c in range(n):
+            idx = torch.nonzero(mask[c]).flatten()
+            Bm = torch.cat([torch.ones(len(idx), 1, dtype=f64, device=self.dev), self.X0[idx]-self.X0[c]], 1)
+            Pi = torch.eye(len(idx), dtype=f64, device=self.dev)-Bm@torch.linalg.solve(Bm.T@Bm, Bm.T)
+            N[idx[:, None], idx[None, :]] += self.V0[c]*Pi
+            Pis.append(Pi); idxs.append(idx)
+        lam = torch.zeros(3, n, dtype=f64, device=self.dev)
+        lam[:, inner] = torch.linalg.solve(N[inner][:, inner], b[:, inner].T).T
+        W2 = W.clone(); dn = torch.zeros(n, dtype=f64, device=self.dev); wn = torch.zeros(n, dtype=f64, device=self.dev)
+        for c in range(n):
+            idx = idxs[c]; d = -(Pis[c]@lam[:, idx].T).T                                  # (3, k)
+            W2[:, c, idx] += d
+            dn[c] = d.norm(); wn[c] = W[:, c, idx].norm()
+        b2 = torch.einsum('s,ksa->ka', self.V0, W2)
+        ex0 = W2.sum(2).abs().max(); ex1 = (torch.einsum('ksa,al->ksl', W2, self.X0)-torch.eye(3, dtype=f64, device=self.dev)[:, None, :]).abs().max()
+        rel = (dn/wn).cpu().numpy()
+        self.cor_stats = dict(b_before=float((b[:, inner].norm(dim=0)/self.V0[inner]**(2/3)).median()),
+                              b_after=float((b2[:, inner].norm(dim=0)/self.V0[inner]**(2/3)).max()), exact_const=float(ex0), exact_lin=float(ex1),
+                              rel_median=float(np.median(rel)), rel_p90=float(np.percentile(rel, 90)), rel_max=float(rel.max()),
+                              rel_total=float(dn.norm()/wn.norm()))
+        cs, ca = torch.nonzero(mask & ~torch.eye(n, dtype=torch.bool, device=self.dev), as_tuple=True)
+        self.cor_ops = (cs, ca, W2[:, cs, ca].T.contiguous())
+
+    def _capped_fits(self, i, j, w, lev, x, cc, M, Mc, wc, e, delta):
+        """the current-cut fits with a cap on their conditioning (10-29): a cell whose walls leave a direction nearly
+        unseen (a tiny cell down to 4 walls: cond(M) 81, its increment's fit det(I + G) -0.11 where the forward step's
+        exact inverse is 1.01) takes that direction from the fit over its 1- and 2-ring (uniform weights): G = S M (M^2 +
+        eps^2)^-1 + G2 eps^2 (M^2 + eps^2)^-1. Exact for affine fields (S = H M, G2 = H); per eigen-direction the 2-ring
+        share eps^2 / (lambda^2 + eps^2). eps^2 = (lambda_max / fit_cap)^2 s, s = clamp((cond - c0) / (fit_cap - c0), 0, 1)^2,
+        c0 = fit_cap / 2: cells with cond(M) <= c0 keep the plain fit exactly and need no 2-ring rows (rest part: cond
+        median 2.6, 99 % 14.3), eps continuous in the geometry. The same for the centroid fit (levers between the current
+        cut's centroids). With the centroid carry (shift 'displacement') the site fit enters F only through the carried
+        displacement u_c = v + G0 delta, so its eps is set by what matters there instead (10-29, cell 1674 at the loop's
+        step 12: site fit cond 8.7, centroid fit 2.4, but |delta| 0.69 h, det(I + Gc) -0.05): the sensitivity kappa =
+        |c| of the carried displacement's weights c_o = w_o lev_o^T A delta, A = M (M^2 + eps^2)^-1, kappa^2 = delta^T A W A
+        delta, W = sum w^2 lev lev^T; eps = 0 where kappa(0) <= carry_cap, else the smallest eps with kappa = carry_cap
+        (bisection; rest part: kappa median 0.135, 99 % 0.81). Returns the pair lists and rows: the walls' (both ends),
+        then the 2-ring pairs of the cells under either cap"""
+        import scipy.sparse as sp_
+        n = self.n; c0 = self.fit_cap/2
+        def eps2_of(Mw):
+            ev = torch.linalg.eigvalsh(Mw)
+            lmax = torch.maximum(ev[:, -1], 1e-3*ev[:, -1].median())                 # (a cell without walls: the 2-ring fit)
+            cond = lmax/ev[:, 0].clamp(min=1e-300)
+            ramp = ((cond-c0)/(self.fit_cap-c0)).clamp(0., 1.)**2
+            return ((lmax/self.fit_cap)**2*ramp)[:, None, None]
+        if Mc is not None and self.carry_cap is not None:                             # the site fit capped by the carry's sensitivity
+            W = torch.zeros(n, 3, 3, dtype=f64, device=self.dev); q = (w**2)[:, None, None]*lev[:, :, None]*lev[:, None, :]
+            W.index_add_(0, i, q); W.index_add_(0, j, q)
+            def kap(e2):
+                A_ = M@torch.linalg.inv(M@M+e2[:, None, None]*self.I3)
+                Ad = torch.einsum('nab,nb->na', A_, delta)
+                return torch.sqrt(torch.einsum('na,nab,nb->n', Ad, W, Ad))
+            evm = torch.linalg.eigvalsh(M); lmax = torch.maximum(evm[:, -1], 1e-3*evm[:, -1].median())
+            degen = evm[:, 0] < 1e-10*lmax                                               # rank-deficient: always capped
+            need = degen | (kap(torch.where(degen, lmax**2, torch.zeros_like(lmax))) > self.carry_cap)
+            lo = torch.full((n,), -12., dtype=f64, device=self.dev); hi = torch.zeros(n, dtype=f64, device=self.dev)   # log10(eps / lambda_max)
+            for _ in range(40):
+                mid = .5*(lo+hi); big = kap((lmax*10**mid)**2) > self.carry_cap
+                lo = torch.where(big, mid, lo); hi = torch.where(big, hi, mid)
+            e2s = torch.where(need, (lmax*10**hi)**2, torch.zeros_like(lmax))[:, None, None]
+        else:
+            e2s = eps2_of(M)
+        e2c = eps2_of(Mc) if Mc is not None else torch.zeros_like(e2s)
+        act = ((e2s[:, 0, 0] > 0) | (e2c[:, 0, 0] > 0)).cpu().numpy()
+        ii, jj = i.cpu().numpy(), j.cpu().numpy()
+        Ad = sp_.coo_matrix((np.ones(2*len(ii)), (np.r_[ii, jj], np.r_[jj, ii])), shape=(n, n)).tocsr()
+        A2 = ((Ad+Ad@Ad) > 0).tocoo(); m_ = (A2.row != A2.col) & act[A2.row]
+        a2 = torch.as_tensor(A2.row[m_], device=self.dev); b2 = torch.as_tensor(A2.col[m_], device=self.dev)
+        def cap(Mw, eps2, levw, ww, pts):
+            N = torch.linalg.inv(Mw@Mw+eps2*self.I3)                                    # (M^2 + eps^2)^-1
+            A_ = Mw@N; B_ = eps2*N                                                     # data and 2-ring shares
+            rw = torch.cat([torch.einsum('fab,fb->fa', A_[i], ww[:, None]*levw), torch.einsum('fab,fb->fa', A_[j], -ww[:, None]*levw)])
+            if len(a2) == 0:
+                return rw
+            l2 = pts[b2]-pts[a2]
+            M2 = torch.zeros(n, 3, 3, dtype=f64, device=self.dev).index_add_(0, a2, l2[:, :, None]*l2[:, None, :])
+            M2i = torch.linalg.pinv(M2)                                                # (cells without 2-ring rows: unused)
+            return torch.cat([rw, torch.einsum('fab,fbc,fc->fa', B_[a2], M2i[a2], l2)])
+        KS, KO = torch.cat([i, j, a2]), torch.cat([j, i, b2])
+        R_ = cap(M, e2s, lev, w, x)
+        RC_ = cap(Mc, e2c, e, wc, cc) if Mc is not None else None
+        self.cap_stats = dict(cells=int(act.sum()), site=int((e2s[:, 0, 0] > 0).sum()), centroid=int((e2c[:, 0, 0] > 0).sum()), pairs2=len(a2))
+        return KS, KO, R_, RC_
+
+    def update_F(self, x, y, F, r, GS=None):
+        """f_mode 'increment', F at the step end in f_substeps increments along the straight path x -> y, each fitted on a
+        cut at its own start (the step start's radii r; the first on GS): for affine motion the increments telescope to the
+        exact one; a fit's error enters per substep, so a step's large non-affine increment is not multiplied in at once
+        (10-29: the loop along the part impact's path inverted cells at the run's dt, not at dt / 4). The step's solve keeps
+        its single-increment F (the difference is second order in the step)"""
+        if len(self.deg_cells):
+            raise NotImplementedError('update_F: degenerate cells')
+        K = self.f_substeps; Fk = F; geo_p = None
+        for k in range(K):
+            xa = x+(k/K)*(y-x); xb = x+((k+1)/K)*(y-x)
+            try:                                                                       # a substep's cut with the step start's radii
+                geo_k = self.geometry(xa, r, GS if k == 0 else None)                    # can leave a cell without walls: then the
+                ops_k = self.operators(xa, Fk, geo_k, None)                            # last substep's walls, at this substep's
+            except RuntimeError:                                                       # positions
+                if geo_p is None:
+                    raise
+                self.recut.stats['substep_fallback'] = self.recut.stats.get('substep_fallback', 0)+1
+                geo_k = geo_p; ops_k = self.operators(xa, Fk, geo_k, None)
+            Fk = (self.I3+self.kin(xb-xa, ops_k))@Fk; geo_p = geo_k
+        return Fk
+
+    def _gg_operator(self, kind):
+        """the cells' gradient by the divergence theorem on the rest cut (10-29): V_s G_s = sum_walls A u_w (x) n + cap,
+        u_w the displacement at the wall's centroid, shared by the two cells: linear along the sites' line to the wall's
+        plane, the centroid's offset from that line carried by the mean of the two cells' site-level fits G0 (rest
+        neighbours, A / l weights); the cap (exposed sphere) integral u_s (x) a_s + Gcap M_s, a_s = -sum_walls A n,
+        M_s = V_s I - sum_walls A (c_w - X_s) (x) n (zero for interior cells: no fit and no inverse there). Gcap:
+        'a' the cell's own G0; 'b' the area-weighted mean of the G0 of the cell and its wall neighbours; 'c' G0's tangential
+        columns (mean cap normal m = a_s / |a_s|) with the normal column from the linear free-surface closure
+        (eps_nt = 0, eps_nn = -lam / (lam + 2 mu) tr_t eps). Exact for affine fields with 'a' and 'b'; 'c' only for those
+        with a traction-free cap. Total Lagrangian (F = I + G(x - X0)); stored as a one-step tensor operator
+        dG_s = sum_a T_sa (u_a - u_s)"""
+        if self.f_mode != 'total':
+            raise RuntimeError("grad 'gg_*': f_mode 'total' only")
+        n, dv_ = self.n, self.dev
+        geo = self.geometry(self.X0, self.r0)
+        i, j, A, c = geo['i'], geo['j'], geo['A'], geo['c']
+        D = self.X0[j]-self.X0[i]; L = D.norm(dim=1); nn = D/L[:, None]
+        Vg = geo['V']
+        t = ((c-self.X0[i])*nn).sum(1)/L
+        tau = c-(self.X0[i]+t[:, None]*D)
+        w = A/L
+        M0 = torch.zeros(n, 3, 3, dtype=f64, device=dv_); dd = w[:, None, None]*D[:, :, None]*D[:, None, :]
+        M0.index_add_(0, i, dd); M0.index_add_(0, j, dd)
+        M0i = torch.linalg.pinv(M0)
+        a = torch.zeros(n, 3, dtype=f64, device=dv_).index_add_(0, i, -A[:, None]*nn).index_add_(0, j, A[:, None]*nn)
+        Mc = Vg[:, None, None]*self.I3-(torch.zeros(n, 3, 3, dtype=f64, device=dv_)
+                                          .index_add_(0, i, A[:, None, None]*(c-self.X0[i])[:, :, None]*nn[:, None, :])
+                                          .index_add_(0, j, -A[:, None, None]*(c-self.X0[j])[:, :, None]*nn[:, None, :]))
+        cap = geo['capA'] > 0
+        Mc[~cap] = 0.; a[~cap] = 0.
+        m_ = a/a.norm(dim=1, keepdim=True).clamp(min=1e-300); Pt = self.I3-m_[:, :, None]*m_[:, None, :]
+        kap = self.lam/(self.lam+2*self.mu)
+        wA = torch.zeros(n, dtype=f64, device=dv_).index_add_(0, i, A).index_add_(0, j, A)
+        def G0f(u):
+            du = u[j]-u[i]
+            return (torch.zeros(n, 3, 3, dtype=f64, device=dv_)
+                    .index_add_(0, i, w[:, None, None]*du[:, :, None]*torch.einsum('fab,fb->fa', M0i[i], D)[:, None, :])
+                    .index_add_(0, j, w[:, None, None]*du[:, :, None]*torch.einsum('fab,fb->fa', M0i[j], D)[:, None, :]))
+        def apply(u):
+            G0 = G0f(u)
+            uw = (1-t)[:, None]*u[i]+t[:, None]*u[j]+.5*torch.einsum('fab,fb->fa', G0[i]+G0[j], tau)
+            S = (torch.zeros(n, 3, 3, dtype=f64, device=dv_).index_add_(0, i, A[:, None, None]*uw[:, :, None]*nn[:, None, :])
+                 .index_add_(0, j, -A[:, None, None]*uw[:, :, None]*nn[:, None, :]))
+            if kind == 'a':
+                Gc_ = G0
+            elif kind == 'b':
+                Gc_ = (wA[:, None, None]*G0).index_add(0, i, A[:, None, None]*G0[j]).index_add_(0, j, A[:, None, None]*G0[i])/(2*wA)[:, None, None]
+            else:
+                Ht = G0@Pt
+                cc = -torch.einsum('nab,nb->na', Pt@G0.transpose(1, 2), m_)-kap*torch.einsum('naa->n', Ht)[:, None]*m_
+                Gc_ = Ht+cc[:, :, None]*m_[:, None, :]
+            return (S+u[:, :, None]*a[:, None, :]+Gc_@Mc)/Vg[:, None, None]
+        Lm = torch.zeros(n, 3, 3, n, 3, dtype=f64, device=dv_); e = torch.zeros(n, 3, dtype=f64, device=dv_)
+        for s_ in range(n):
+            for k in range(3):
+                e[s_, k] = 1.; Lm[:, :, :, s_, k] = apply(e); e[s_, k] = 0.
+        blk = Lm.abs().sum((1, 2, 4)) > 1e-12*float(Lm.abs().max())
+        blk.fill_diagonal_(False)
+        cs, ca = torch.nonzero(blk, as_tuple=True)
+        T = Lm[cs, :, :, ca, :]                                                            # (P, 3, 3, 3): dG_s[i, j] / du_a[c]
+        Xa = self.X0+torch.randn(3, dtype=f64, device=dv_)
+        Ht_ = torch.randn(3, 3, dtype=f64, device=dv_)
+        self.gg_stats = dict(kind=kind, pairs=len(cs), V_geo_vs_V0=float(((Vg-self.V0)/self.V0).abs().max()),
+                             interior_M_max=float((Vg[:, None, None]*self.I3-(torch.zeros(n, 3, 3, dtype=f64, device=dv_)
+                                          .index_add_(0, i, A[:, None, None]*(c-self.X0[i])[:, :, None]*nn[:, None, :])
+                                          .index_add_(0, j, -A[:, None, None]*(c-self.X0[j])[:, :, None]*nn[:, None, :])))[~cap].abs().max()/Vg[~cap].min()),
+                             translation=float(Lm.sum(3).abs().max()), affine=float((apply(Xa@Ht_.T)-Ht_).abs().max()))
+        self.gg_ops = (cs, ca, T)
+        self.gg_off = self.I3-apply(self.X0) if kind == 'c' else None                # the closure is affine in the positions: F = G(x) + (I - G(X0))
+        del Lm
+
+    def kinetic(self, v):
+        """the kinetic energy of the site velocities v (n, 3)"""
+        if self.mass == 'consistent':
+            return float(.5*(v*(self.Mc@v)).sum())
+        return float(.5*(self.m[:, None]*v**2).sum())
+
+    def cellhg_energy(self, y, ops):
+        """the cells' psi with the cell-scale fluctuation's own quadratic (geometric) term dropped (10-29; geometric
+        hourglassing: Bieber, Auricchio, Reali, Bischoff, IJNME 2023, modified Green-Lagrange strain; Reese et al.: no
+        geometric stiffness for the hourglass part): Fb_s = (sum_o A_so F_o + (sum_o A_so) F_s) / (2 sum_o A_so) over the
+        rest neighbours (exact for affine fields; cellhg_k passes, eigenvalues of the pass in [0, 1], so the kept geometric
+        part m (2 - m) is in [0, 1]), Hh = F - Fb, C' = F^T F - Hh^T Hh, neo-Hookean in C' (J' = det C'^1/2).
+        Objective (Hh turns with a rigid rotation); at rest and for affine fields identical to the cells' psi"""
+        if not ops['total']:
+            raise RuntimeError('cellhg_energy: f_mode total only')
+        F = self.def_grad(y, ops)
+        i, j, A = self.hg_i, self.hg_j, self.hg_A
+        w = (self.hg_den/2)[:, None, None]
+        Fb = F
+        for _ in range(self.cellhg_k):
+            S = torch.zeros_like(F).index_add(0, i, A[:, None, None]*Fb[j]).index_add(0, j, A[:, None, None]*Fb[i])
+            Fb = (S+w*Fb)/(2*w)
+        Hh = F-Fb
+        C = F.transpose(1, 2)@F-Hh.transpose(1, 2)@Hh
+        dC = torch.linalg.det(C)
+        if bool((dC <= 0).any()):
+            return y.sum()*0+math.inf, float(dC.min())
+        lnJ = .5*torch.log(dC)
+        psi = .5*self.mu*(C.diagonal(dim1=1, dim2=2).sum(1)-3)-self.mu*lnJ+.5*self.lam*lnJ**2
+        return self.cellhg_w*(self.V0*psi).sum(), float(dC.min())
+
+    def tet_energy(self, y, ops):
+        """tet_w sum V_t [U(J_t) - U(Jb) - U'(Jb)(J_t - Jb)], U(J) = -mu ln J + lam / 2 ln^2 J, J_t = det(Ds Dm^-1) from the
+        tetrahedron's sites, Jb the mean det F of its four cells; inf where a tetrahedron has J_t <= 0. Returns the energy
+        and min J_t"""
+        if not ops['total']:
+            raise RuntimeError('tet_energy: f_mode total only')
+        J = torch.linalg.det(self.def_grad(y, ops))
+        xs, T = y[:self.n], self.tets
+        Ds = torch.stack([xs[T[:, 1]]-xs[T[:, 0]], xs[T[:, 2]]-xs[T[:, 0]], xs[T[:, 3]]-xs[T[:, 0]]], 2)
+        Jt = torch.linalg.det(Ds@self.tet_Dmi)
+        Jb = J[T].mean(1)
+        if bool((Jt <= 0).any()) or bool((Jb <= 0).any()):
+            return y.sum()*0+math.inf, float(Jt.min())
+        U = lambda J_: -self.mu*torch.log(J_)+.5*self.lam*torch.log(J_)**2
+        dU = (-self.mu+self.lam*torch.log(Jb))/Jb
+        return self.tet_w*(self.tet_V*(U(Jt)-U(Jb)-dU*(Jt-Jb))).sum(), float(Jt.min())
+
+    def _degenerate(self, i0, j0):
+        """cells whose rest walls span fewer than three directions (fewer than 3 walls; 10-28 lion: one cell with 2, its F
+        off I by 14 at rest): the fits fix F only on the levers' span (pseudo-inverses, null projectors null_site /
+        null_cen); the carried centroid offset is projected onto the site levers' span (u = x + G delta then moves with
+        the material point X + P delta, exact under affine motion, for the cell and its neighbours' centroid levers); F's
+        columns along the centroid levers' null directions q become unknowns of the step, F = fit + sum b q^T (rows after
+        the sites in the solve's vector, no mass), set by the energy's minimum: dPi/db = P q = 0, traction free along q
+        (UPDATED_LAGRANGE.md section 5, static condensation of the unseen direction only; the cell's energy stays)"""
+        n = self.n
+        nw = torch.bincount(torch.cat([i0, j0]), minlength=n)
+        cells = torch.nonzero(nw < 3).flatten().tolist()
+        nbrs = {k: torch.cat([j0[i0 == k], i0[j0 == k]]) for k in cells}
+        def null(L):
+            if len(L) == 0:
+                return torch.eye(3, dtype=f64, device=self.dev)
+            return torch.linalg.svd(L, full_matrices=True)[2][len(L):].T          # (3, 3 - rank), the walls' directions independent
+        for k in cells:
+            Q = null(self.X0[nbrs[k]]-self.X0[k]); P = Q@Q.T
+            self.null_site[k] = P; self.carry0[k] = self.carry0[k]-P@self.carry0[k]
+        rc, rq = [], []
+        for k in cells:
+            Q = null(self.X0[nbrs[k]]-self.X0[k]+self.carry0[nbrs[k]]-self.carry0[k])
+            self.null_cen[k] = Q@Q.T
+            rc += [k]*Q.shape[1]; rq.append(Q.T)
+        if cells:
+            self.deg_cells = torch.tensor(rc, dtype=torch.long, device=self.dev); self.deg_q = torch.cat(rq)
 
     # ---- geometry and the step's operators
     def geometry(self, x, r, GS=None):
@@ -214,18 +631,20 @@ class ULModel:
         lev = D if total else d
         h = ((c-x[i])*nrm).sum(1); hj = L-h; w = A/L if self.site_w == 'A/l' else A
         n = self.n
-        M = torch.zeros(n, 3, 3, dtype=f64, device=self.dev)
-        dd = w[:, None, None]*lev[:, :, None]*lev[:, None, :]
-        M.index_add_(0, i, dd); M.index_add_(0, j, dd)
-        Mi = torch.linalg.inv(M)
+        cur = not (total and self.fit_w in ('rest', 'lens'))                           # the fits on the current cut (else unused:
+        if cur:                                                                        # 10-28 lion, a cell that lost its walls
+            M = torch.zeros(n, 3, 3, dtype=f64, device=self.dev)                       # made them singular)
+            dd = w[:, None, None]*lev[:, :, None]*lev[:, None, :]
+            M.index_add_(0, i, dd); M.index_add_(0, j, dd)
+            Mi = torch.linalg.pinv(M) if self.fit_cap is not None or self.shift == 'none' else torch.linalg.inv(M)   # (capped / shift 'none': a cell may be rank-deficient)
         delta = self.cut_centroids(x, geo) if self.centroid == 'cut' else torch.einsum('nab,nb->na', F, self.dlt0)
         detF = torch.linalg.det(F)
         Jm = detF[:, None, None]*F@self.J0@F.transpose(1, 2)
         ends = []
         cc = x+delta
         for s_, o_, dv, nn, hh in ((i, j, lev, nrm, h), (j, i, -lev, -nrm, hj)):
-            row = torch.einsum('fa,fab->fb', w[:, None]*dv, Mi[s_])              # w d^T M_s^-1
-            cen = (row*delta[s_]).sum(1)                                          # w d^T M_s^-1 delta_s
+            row = torch.einsum('fa,fab->fb', w[:, None]*dv, Mi[s_]) if cur else None   # w d^T M_s^-1
+            cen = (row*delta[s_]).sum(1) if cur else None                         # w d^T M_s^-1 delta_s
             if self.smooth == 'centroid':                                         # where the wall's plane cuts c_s -> c_o
                 t = ((c-cc[s_])*nn).sum(1)/((cc[o_]-cc[s_])*nn).sum(1)
             else:                                                                 # ... cuts x_s -> x_o
@@ -234,16 +653,20 @@ class ULModel:
             ends.append((s_, o_, row, cen, smo))
         Kj = (A/(3*L))
         crow = None
-        if self.shift == 'displacement':
+        if self.shift == 'displacement' and cur:
             e = D+self.carry0[j]-self.carry0[i] if total else cc[j]-cc[i]               # material / current centroid levers
             wc = A/e.norm(dim=1)
             Mc = torch.zeros(n, 3, 3, dtype=f64, device=self.dev)
             ee = wc[:, None, None]*e[:, :, None]*e[:, None, :]
             Mc.index_add_(0, i, ee); Mc.index_add_(0, j, ee)
-            Mci = torch.linalg.inv(Mc)
+            Mci = torch.linalg.pinv(Mc) if self.fit_cap is not None else torch.linalg.inv(Mc)
             crow = [torch.einsum('fa,fab->fb', wc[:, None]*e, Mci[i]), torch.einsum('fa,fab->fb', -wc[:, None]*e, Mci[j])]
         cat = lambda k: torch.cat([e_[k] for e_ in ends])                          # both ends of every wall in one list
-        KS, KO, R_, RC_ = cat(0), cat(1), cat(2), torch.cat(crow) if crow is not None else None
+        KS, KO = cat(0), cat(1)
+        R_, RC_ = (cat(2), torch.cat(crow) if crow is not None else None) if cur else (None, None)
+        if cur and self.fit_cap is not None:
+            KS, KO, R_, RC_ = self._capped_fits(i, j, w, lev, x, cc, M, Mc if self.shift == 'displacement' else None, wc if self.shift == 'displacement' else None,
+                                                e if self.shift == 'displacement' else None, delta)
         if total and self.fit_w == 'rest':                                             # the fits on the rest neighbours with the
             if self.rest_fit is None:                                                  # rest weights: a constant linear map
                 i0, j0, A0 = self.rest_walls                                           # (section 20, 10-28)
@@ -253,7 +676,8 @@ class ULModel:
                 for M_, L_, w_ in ((M0, D0, w0), (Mc0, E0, wc0)):
                     q = w_[:, None, None]*L_[:, :, None]*L_[:, None, :]
                     M_.index_add_(0, i0, q); M_.index_add_(0, j0, q)
-                M0i, Mc0i = torch.linalg.inv(M0), torch.linalg.inv(Mc0)
+                pinv = lambda M_, P_: (lambda s_: torch.linalg.inv(M_+s_*P_)-P_/s_)(M_.diagonal(dim1=1, dim2=2).sum(1)[:, None, None]/3+(M_.abs().sum((1, 2)) == 0)[:, None, None])
+                M0i, Mc0i = pinv(M0, self.null_site), pinv(Mc0, self.null_cen)    # inverses (pseudo- for degenerate cells)
                 self.rest_fit = (torch.cat([i0, j0]), torch.cat([j0, i0]),
                                  torch.cat([torch.einsum('fa,fab->fb', w0[:, None]*D0, M0i[i0]), torch.einsum('fa,fab->fb', -w0[:, None]*D0, M0i[j0])]),
                                  torch.cat([torch.einsum('fa,fab->fb', wc0[:, None]*E0, Mc0i[i0]), torch.einsum('fa,fab->fb', -wc0[:, None]*E0, Mc0i[j0])]))
@@ -270,23 +694,50 @@ class ULModel:
             KS, KO = torch.cat([a, b]), torch.cat([b, a])
             R_ = torch.cat([torch.einsum('fa,fab->fb', wl[:, None]*Dl, Mli[a]), torch.einsum('fa,fab->fb', -wl[:, None]*Dl, Mli[b])])
             RC_ = torch.cat([torch.einsum('fa,fab->fb', wl[:, None]*El, Mcli[a]), torch.einsum('fa,fab->fb', -wl[:, None]*El, Mcli[b])])
-        return dict(i=i, j=j, ends=ends, Jm=Jm, Kj=Kj, x0=torch.zeros_like(x) if total else x.clone(),
+        ops_ = dict(i=i, j=j, ends=ends, Jm=Jm, Kj=Kj, x0=torch.zeros(self.n+len(self.deg_cells), 3, dtype=f64, device=self.dev) if total else x.clone(),
                     F0=self.I3.expand(self.n, 3, 3).contiguous() if total else F.clone(), total=total, L=L, nrm=nrm, A=A,
                     delta=delta, carry=self.carry0 if total else delta, crow=crow,
-                    S=cat(0), O=cat(1), R=R_, CEN=cat(3), SM=cat(4), RC=RC_, KS=KS, KO=KO,
+                    S=cat(0), O=cat(1), R=R_, CEN=cat(3) if cur else None, SM=cat(4), RC=RC_, KS=KS, KO=KO,
                     b=D if total else self.X0[j]-self.X0[i])
+        if total and self.grad == 'corrected':                                        # (the integration-constraint fit, 10-29)
+            ops_.update(KS=self.cor_ops[0], KO=self.cor_ops[1], R=self.cor_ops[2], onestep=True)
+        if self.shift == 'none':                                                       # (10-29: the site-level fit alone, no centroid step)
+            ops_['onestep'] = True
+        if self.agg > 0:                                                               # (10-29: aggregation of the tiny cells' fit, the small-cell
+            tiny = self.V0 < self.agg*self.V0.median()                                 # problem, cf. cell merging / aggregated FEM: a cell below
+            m1 = tiny[i] & ~tiny[j]; m2 = tiny[j] & ~tiny[i]                           # agg x the median volume takes the V0-weighted mean of its
+            as_, ao_ = torch.cat([i[m1], j[m2]]), torch.cat([j[m1], i[m2]])            # non-tiny wall neighbours' increment on this cut)
+            den = torch.zeros(n, dtype=f64, device=self.dev).index_add_(0, as_, self.V0[ao_])
+            ops_['agg'] = (as_, ao_, self.V0[ao_]/den[as_], tiny & (den > 0))
+        if total and self.grad.startswith('gg_'):                                     # (the divergence-theorem gradient, 10-29)
+            ops_.update(KS=self.gg_ops[0], KO=self.gg_ops[1], T=self.gg_ops[2], onestepT=True)
+            if self.gg_off is not None:
+                ops_['F_off'] = self.gg_off
+        return ops_
 
     # ---- the energy
     def def_grad(self, x, ops):
+        """x: the sites, then the degenerate cells' free columns (deg_cells, deg_q) when there are any"""
         dx = x-ops['x0']
+        cols, dx = dx[self.n:], dx[:self.n]
         S, O = ops['KS'], ops['KO']
-        G = torch.zeros(self.n, 3, 3, dtype=f64, device=self.dev).index_add(0, S, (dx[O]-dx[S])[:, :, None]*ops['R'][:, None, :])
-        if self.shift == 'displacement':
+        if ops.get('onestepT'):
+            G = torch.zeros(self.n, 3, 3, dtype=f64, device=self.dev).index_add(0, S, torch.einsum('pijc,pc->pij', ops['T'], dx[O]-dx[S]))
+        else:
+            G = torch.zeros(self.n, 3, 3, dtype=f64, device=self.dev).index_add(0, S, (dx[O]-dx[S])[:, :, None]*ops['R'][:, None, :])
+        if ops.get('onestep') or ops.get('onestepT'):
+            Gc = G
+        elif self.shift == 'displacement':
             u = dx+torch.einsum('nab,nb->na', G, ops['carry'])
             Gc = torch.zeros_like(G).index_add(0, S, (u[O]-u[S])[:, :, None]*ops['RC'][:, None, :])
         else:
             Gc = G.index_add(0, S, ops['CEN'][:, None, None]*(G[O]-G[S]))
-        return Gc@ops['F0'] if ops['total'] else (self.I3+Gc)@ops['F0']
+        if 'agg' in ops:
+            Gc = self._agg(Gc, ops)
+        if len(cols):
+            Gc = Gc.index_add(0, self.deg_cells, cols[:, :, None]*self.deg_q[:, None, :])
+        Fx = Gc@ops['F0'] if ops['total'] else (self.I3+Gc)@ops['F0']
+        return Fx+ops['F_off'] if 'F_off' in ops else Fx
 
     def elastic(self, x, ops, terms=False):
         F = self.def_grad(x, ops)
@@ -294,7 +745,7 @@ class ULModel:
         C = F.transpose(1, 2)@F
         lnJ = torch.log(J.clamp(min=1e-300))
         psi = .5*self.mu*(C.diagonal(dim1=1, dim2=2).sum(1)-3)-self.mu*lnJ+.5*self.lam*lnJ**2
-        e = dict(cells=(self.V0*psi).sum())
+        e = dict(cells=self.cell_w*(self.V0*psi).sum())
         if bool((J <= 0).any()):
             e['cells'] = e['cells']*0+math.inf
         if self.stab:
@@ -309,25 +760,72 @@ class ULModel:
             dlt = (x[j]-x[i])-.5*torch.einsum('fab,fb->fa', F[i]+F[j], ops['b'])
             nc = (x[j]-x[i])/(x[j]-x[i]).norm(dim=1, keepdim=True)
             e['jump'] = .5*(ops['Kj']*(self.mu*(dlt*dlt).sum(1)+(self.lam+self.mu)*(dlt*nc).sum(1)**2)).sum()
+        if self.tet_w > 0:
+            e['tet'], _ = self.tet_energy(x, ops)
+        if self.wall_w > 0:
+            e['wall'], _ = self.wall_energy(x, ops)
+        if self.cellhg_w > 0:
+            e['cellhg'], _ = self.cellhg_energy(x, ops)
         return (e, F) if terms else sum(e.values())
+
+    def wall_jump(self, y, ops):
+        """the jump term's energy per wall at y (as elastic() takes it) and the walls' keys min(i, j) n + max(i, j)"""
+        F = self.def_grad(y, ops)
+        i, j = ops['i'], ops['j']
+        a = y[j]-y[i]
+        dl = a-.5*mv(F[i]+F[j], ops['b']); nc = a/a.norm(dim=1, keepdim=True)
+        e = .5*ops['Kj']*(self.mu*(dl*dl).sum(1)+(self.lam+self.mu)*(dl*nc).sum(1)**2)
+        return torch.minimum(i, j)*self.n+torch.maximum(i, j), e
 
     # ---- the energy, its gradient and Hessian-vector products written out (the solve's path; elastic() is the autograd
     # reference they are checked against). F is linear in x: dF = Gc(dx) F0, so every product is the chain
     # dx -> dGc -> dF -> each term's second derivative -> back through the adjoint of the chain
     def kin(self, v, ops):
-        """Gc(v) for an increment v of the sites (F = (I + Gc) F0)"""
+        """Gc(v) for an increment v of the sites (F = (I + Gc) F0), then of the degenerate cells' free columns if any"""
         S, O = ops['KS'], ops['KO']
-        G = torch.zeros(self.n, 3, 3, dtype=f64, device=self.dev).index_add_(0, S, (v[O]-v[S])[:, :, None]*ops['R'][:, None, :])
-        if self.shift == 'displacement':
+        cols, v = v[self.n:], v[:self.n]
+        if ops.get('onestepT'):
+            G = torch.zeros(self.n, 3, 3, dtype=f64, device=self.dev).index_add_(0, S, torch.einsum('pijc,pc->pij', ops['T'], v[O]-v[S]))
+        else:
+            G = torch.zeros(self.n, 3, 3, dtype=f64, device=self.dev).index_add_(0, S, (v[O]-v[S])[:, :, None]*ops['R'][:, None, :])
+        if ops.get('onestep') or ops.get('onestepT'):
+            Gc = G
+        elif self.shift == 'displacement':
             u = v+mv(G, ops['carry'])
-            return torch.zeros_like(G).index_add_(0, S, (u[O]-u[S])[:, :, None]*ops['RC'][:, None, :])
-        return G.index_add(0, S, ops['CEN'][:, None, None]*(G[O]-G[S]))
+            Gc = torch.zeros_like(G).index_add_(0, S, (u[O]-u[S])[:, :, None]*ops['RC'][:, None, :])
+        else:
+            Gc = G.index_add(0, S, ops['CEN'][:, None, None]*(G[O]-G[S]))
+        if 'agg' in ops:
+            Gc = self._agg(Gc, ops)
+        if len(cols):
+            Gc = Gc.index_add_(0, self.deg_cells, cols[:, :, None]*self.deg_q[:, None, :])
+        return Gc
+
+    def _agg(self, G, ops):
+        """the tiny cells' G replaced by their non-tiny neighbours' V0-weighted mean (linear; _agg_T its adjoint)"""
+        as_, ao_, aw, used = ops['agg']
+        G2 = G.clone(); G2[used] = 0.
+        return G2.index_add(0, as_, aw[:, None, None]*G[ao_])
+
+    def _agg_T(self, Gb, ops):
+        as_, ao_, aw, used = ops['agg']
+        G2 = Gb.clone(); G2[used] = 0.
+        return G2.index_add(0, ao_, aw[:, None, None]*Gb[as_])
 
     def kin_T(self, Gb, ops):
-        """the adjoint of kin: the sites' gradient from dU/dGc"""
+        """the adjoint of kin: the sites' gradient from dU/dGc (then the degenerate cells' free columns' if any)"""
         S, O = ops['KS'], ops['KO']
+        if 'agg' in ops:
+            Gb = self._agg_T(Gb, ops)
+        Gb0 = Gb
         z = torch.zeros(self.n, 3, dtype=f64, device=self.dev)
-        if self.shift == 'displacement':
+        if ops.get('onestepT'):
+            q = torch.einsum('pijc,pij->pc', ops['T'], Gb[S])
+            ub = z.index_add(0, O, q).index_add_(0, S, -q)
+            return torch.cat([ub, mv(Gb0[self.deg_cells], self.deg_q)]) if len(self.deg_cells) and ops['total'] else ub
+        if ops.get('onestep'):
+            ub = z.clone()
+        elif self.shift == 'displacement':
             q = mv(Gb[S], ops['RC'])
             ub = z.index_add(0, O, q).index_add_(0, S, -q)
             Gb = ub[:, :, None]*ops['carry'][:, None, :]
@@ -336,7 +834,8 @@ class ULModel:
             ub = z.clone()
             Gb = Gb.index_add(0, O, W).index_add_(0, S, -W)
         q = mv(Gb[S], ops['R'])
-        return ub.index_add_(0, O, q).index_add_(0, S, -q)
+        ub = ub.index_add_(0, O, q).index_add_(0, S, -q)
+        return torch.cat([ub, mv(Gb0[self.deg_cells], self.deg_q)]) if len(self.deg_cells) and ops['total'] else ub
 
     def _stab_pull(self, dE, ops):
         """dU/dE per cell from the strains' smoothed derivatives dE [s, k, a, b] (and the energy's density Q)"""
@@ -355,20 +854,22 @@ class ULModel:
         """everything the gradient and the products at y need; None where some J <= 0"""
         Gc = self.kin(y-ops['x0'], ops)
         F = Gc if ops['total'] else mm(self.I3+Gc, ops['F0'])
+        if 'F_off' in ops:                                                             # (gg_c: the closure acts on I + G(x - X0))
+            F = F+ops['F_off']
         J = torch.linalg.det(F)
         if bool((J <= 0).any()):
             return None
         FiT = torch.linalg.inv(F).transpose(1, 2); lnJ = torch.log(J)
         C = mm(F.transpose(1, 2), F)
-        e = dict(cells=float((self.V0*(.5*self.mu*(C.diagonal(dim1=1, dim2=2).sum(1)-3)-self.mu*lnJ+.5*self.lam*lnJ**2)).sum()))
-        P = self.V0[:, None, None]*(self.mu*(F-FiT)+self.lam*lnJ[:, None, None]*FiT)
+        e = dict(cells=self.cell_w*float((self.V0*(.5*self.mu*(C.diagonal(dim1=1, dim2=2).sum(1)-3)-self.mu*lnJ+.5*self.lam*lnJ**2)).sum()))
+        P = self.cell_w*self.V0[:, None, None]*(self.mu*(F-FiT)+self.lam*lnJ[:, None, None]*FiT)
         st = dict(F=F, FiT=FiT, lnJ=lnJ)
         if self.stab:
             dE = self._stab_push(.5*(C-self.I3), ops)
             Eb, Q = self._stab_pull(dE, ops)
             e['stab'] = .5*float((dE*Q).sum())
             P = P+mm(F, Eb); st['Eb'] = Eb
-        yg = torch.zeros(self.n, 3, dtype=f64, device=self.dev)
+        yg = torch.zeros_like(y)
         if self.jump:
             i, j, b, Kj = ops['i'], ops['j'], ops['b'], ops['Kj'][:, None]
             a = y[j]-y[i]; la = a.norm(dim=1, keepdim=True); nc = a/la
@@ -381,6 +882,19 @@ class ULModel:
             P = P.index_add(0, i, PF).index_add_(0, j, PF)
             yg.index_add_(0, j, ga).index_add_(0, i, -ga)
             st.update(nc=nc, la=la, dl=dl, sn=sn, gn=gn, tn=tn)
+        if self.tet_w > 0 or self.wall_w > 0 or self.cellhg_w > 0:                                           # (autograd: their products by one
+            with torch.enable_grad():                                                   # backward through the retained gradient
+                yt = y.detach().requires_grad_(True)                                    # graph)
+                Ea = 0.
+                for nm, fn in (('tet', self.tet_energy), ('wall', self.wall_energy), ('cellhg', self.cellhg_energy)):
+                    if getattr(self, nm+'_w') > 0:
+                        E_, j_ = fn(yt, ops)
+                        if not math.isfinite(float(E_)):
+                            return None
+                        e[nm] = float(E_); st[nm+'_minJ'] = j_; Ea = Ea+E_
+                gt, = torch.autograd.grad(Ea, yt, create_graph=True)
+            st['ag'] = (gt, yt)
+            yg = yg+gt.detach()
         st['e'] = e
         st['grad'] = self.kin_T(P if ops['total'] else mm(P, ops['F0'].transpose(1, 2)), ops)+yg
         return st
@@ -393,12 +907,12 @@ class ULModel:
             dF = mm(dF, ops['F0'])
         tr = (FiT*dF).sum((1, 2))                                                  # tr(F^-1 dF)
         A_ = mm(mm(FiT, dF.transpose(1, 2)), FiT)
-        dP = self.V0[:, None, None]*(self.mu*dF+(self.mu-self.lam*lnJ)[:, None, None]*A_+self.lam*tr[:, None, None]*FiT)
+        dP = self.cell_w*self.V0[:, None, None]*(self.mu*dF+(self.mu-self.lam*lnJ)[:, None, None]*A_+self.lam*tr[:, None, None]*FiT)
         if self.stab:
             dEl = mm(F.transpose(1, 2), dF); dEl = .5*(dEl+dEl.transpose(1, 2))
             dEb, _ = self._stab_pull(self._stab_push(dEl, ops), ops)
             dP = dP+mm(dF, st['Eb'])+mm(F, dEb)
-        dy = torch.zeros(self.n, 3, dtype=f64, device=self.dev)
+        dy = torch.zeros_like(d)
         if self.jump:
             i, j, b, Kj = ops['i'], ops['j'], ops['b'], ops['Kj'][:, None]
             nc, la, dl, sn, gn, tn = st['nc'], st['la'], st['dl'], st['sn'], st['gn'], st['tn']
@@ -413,6 +927,8 @@ class ULModel:
             dPF = -.5*dgd[:, :, None]*b[:, None, :]
             dP = dP.index_add(0, i, dPF).index_add_(0, j, dPF)
             dy.index_add_(0, j, dga).index_add_(0, i, -dga)
+        if 'ag' in st:
+            dy = dy+torch.autograd.grad(st['ag'][0], st['ag'][1], d, retain_graph=True)[0]
         return self.kin_T(dP if ops['total'] else mm(dP, ops['F0'].transpose(1, 2)), ops)+dy
 
     # ---- the step's solve: trust-region Newton-CG (Steihaug-Toint, as skin_solve.SkinSolver), the region in the norm of
@@ -472,7 +988,7 @@ class ULModel:
         return yg, e0, stats
 
     def step(self, st, dt, grav=None, ref=1., tol=1e-9, maxit=5000, analytic=True, vol_tol=1e-5, ground=None, ground_r=None,
-             f_update='forward', radii_start='predict'):
+             f_update='forward', radii_start='predict', account=False):
         """one backward-Euler step from st = dict(x, v, F, r[, GS, r_prev]); returns the new state and a report
         (energies at the start on this step's operators, at the end, the solve's stats, the volume fit's). analytic: the
         written-out gradient and products (state / hvp), else autograd on elastic(). The volume fit starts from the
@@ -488,15 +1004,30 @@ class ULModel:
         two ends), then the radii fitted again. radii_start: 'predict' the weights from this step's motion and targets to
         first order on the step start's cut (Recut.predict; 10-28 8k bending: start error 8e-4 against 3e-2 from the
         time extrapolation, 1 Newton iteration instead of 2, 2 cuts per step instead of 3), 'extrapolate' them in time
-        (2 w^n - w^n-1, where positive)"""
+        (2 w^n - w^n-1, where positive). account (10-28): rep['acct'], the step's energy account. Within the step (fixed
+        potential W = elastic + ground): Delta(K + W + gravity) = -D_K - B + (Y - X).g, D_K = 1/2 sum m |v^n+1 - v^n|^2
+        (backward Euler's kinetic dissipation), B = W(X) - W(Y) - grad W(Y).(X - Y) (Bregman; >= 0 for convex W), g the
+        solve's final gradient of Pi (its residual's work); X, Y the step's start and end (sites, then free columns). For
+        the jumps between steps: the jump term per wall and the ground energy per ball at the start and the end"""
         x, v, F, r = st['x'], st['v'], st['F'], st['r']
+        nr = len(self.deg_cells)                                                       # the degenerate cells' free columns:
+        cols = st['cols'] if 'cols' in st else self.deg_q.clone()                       # rows after the sites, no mass (F = I
+        ext = lambda a, b_: torch.cat([a, b_]) if nr else a                            # at rest: b = q)
         tm = {}; t0 = clock()
         GS = st['GS'] if 'GS' in st else self.recut.geometry(x, r)
         geo = self.geometry(x, r, GS)
         ops = self.operators(x, F, geo, self.pair_refs(x, F, r, geo) if self.f_mode == 'total' else None)
         tm['operators'] = clock()-t0; t0 = clock()
         gv = torch.zeros(3, dtype=f64, device=self.dev) if grav is None else torch.as_tensor(grav, dtype=f64, device=self.dev)
-        mdt = self.m[:, None]/(2*dt*dt); xp = x+dt*v
+        mdt = ext(self.m[:, None]/(2*dt*dt), torch.zeros(nr, 1, dtype=f64, device=self.dev)); xp = ext(x+dt*v, cols)
+        mg = ext(self.m[:, None], torch.zeros(nr, 1, dtype=f64, device=self.dev))
+        cons = self.mass == 'consistent'
+        def inert(dy):
+            """the inertia term's energy and gradient (or product) for dy = y - xp (or a direction)"""
+            if cons:
+                a_ = self.Mc@dy[:self.n]/(dt*dt)
+                return .5*(dy[:self.n]*a_).sum(), ext(a_, torch.zeros(nr, 3, dtype=f64, device=self.dev))
+            return (mdt*dy**2).sum(), 2*mdt*dy
         if ground is not None:
             gn = torch.as_tensor(ground[0], dtype=f64, device=self.dev); gc = float(ground[1])
             rc_ = r if ground_r is None else ground_r
@@ -509,19 +1040,25 @@ class ULModel:
             return (float((8/15*cR*dl**2.5).sum()), torch.zeros_like(y).index_add_(0, cb, -(4/3*cR*dl**1.5)[:, None]*gn),
                     2*cR*dl.sqrt())
         def Pi(y):
-            e = (mdt*(y-xp)**2).sum()-(self.m[:, None]*gv*y).sum()+self.elastic(y, ops)
+            e = inert(y-xp)[0]-(mg*gv*y).sum()+self.elastic(y, ops)
             if ground is not None:
                 e = e+(8/15*cR*(Rb-(y[cb]@gn-gc)).clamp(min=0.)**2.5).sum()
             return e
         w = geo['A']/(x[geo['j']]-x[geo['i']]).norm(dim=1)
         k = torch.zeros(self.n, dtype=f64, device=self.dev).index_add_(0, geo['i'], w).index_add_(0, geo['j'], w)
-        dg = self.m/dt**2+(self.lam+2*self.mu)*k
-        y0 = xp+dt*dt*gv
+        dg = ext((self.mdiag if cons else self.m)/dt**2+(self.lam+2*self.mu)*k, (self.lam+2*self.mu)*self.V0[self.deg_cells])
+        y0 = ext(x+dt*v+dt*dt*gv, cols)
         if ground is not None:
             dg = dg.index_add(0, cb, contact(y0)[2])
         if not math.isfinite(float(Pi(y0))):
-            y0 = x
-        e_start, _ = self.elastic(x, ops, terms=True)
+            y0 = ext(x, cols)
+        e_start, _ = self.elastic(ext(x, cols), ops, terms=True)
+        if account:
+            X0e = ext(x, cols)
+            acct = dict(wall_start=self.wall_jump(X0e, ops), U0={k_: float(v_) for k_, v_ in e_start.items()},
+                        K0=self.kinetic(v), P0=-float((mg*gv*X0e).sum()))
+            if ground is not None:
+                acct['ball_start'] = (cb, 8/15*cR*(Rb-(x[cb]@gn-gc)).clamp(min=0.)**2.5)
         # the energy's rounding: tr C ~ 3 per cell carries the cells' sum's absolute error, eps (mu + lam) sum V0; the
         # inertia's |y - xp|^2 and the other terms are sums of non-negative parts at most comparable
         noise = 64*torch.finfo(f64).eps*float((self.mu+self.lam)*self.V0.sum())
@@ -531,14 +1068,15 @@ class ULModel:
                 if a_ is None:
                     return math.inf, None, None
                 ec, gc_, a_['kc'] = contact(y)
-                return (float((mdt*(y-xp)**2).sum()-(self.m[:, None]*gv*y).sum())+sum(a_['e'].values())+ec,
-                        2*mdt*(y-xp)-self.m[:, None]*gv+a_['grad']+gc_, a_)
+                ei, gi = inert(y-xp)
+                return (float(ei-(mg*gv*y).sum())+sum(a_['e'].values())+ec,
+                        gi-mg*gv+a_['grad']+gc_, a_)
             def hvp_(a_, d):
-                h_ = 2*mdt*d+self.hvp(a_, d, ops)
+                h_ = inert(d)[1]+self.hvp(a_, d, ops)
                 if ground is not None:
                     h_ = h_.index_add(0, cb, (a_['kc']*(d[cb]@gn))[:, None]*gn)
                 return h_
-            hvp = GraphedProduct(hvp_) if self.dev == 'cuda' else hvp_
+            hvp = GraphedProduct(hvp_) if self.dev == 'cuda' and self.tet_w <= 0 and self.wall_w <= 0 and self.cellhg_w <= 0 else hvp_   # (autograd in the product)
         else:
             def eg(y):
                 y = y.detach().requires_grad_(True)
@@ -551,6 +1089,25 @@ class ULModel:
                 return torch.autograd.grad(a_[0], a_[1], d, retain_graph=True)[0]
         y, pi, stats = self.tr_newton(eg, hvp, y0, dg, ref, noise, tol, maxit)
         e_end, F1 = self.elastic(y, ops, terms=True)
+        if self.f_mode != 'total' and self.f_substeps > 1:
+            F1 = self.update_F(x, y[:self.n], F, r, GS)
+        tet_min = self.tet_energy(y, ops)[1] if self.tet_w > 0 else None
+        wall_min = self.wall_energy(y, ops)[1] if self.wall_w > 0 else None
+        if account:
+            Y = y; gf = eg(Y)[1]
+            if gf is None or not analytic:
+                raise RuntimeError('account: the end has no finite energy (or the autograd path)')
+            gW = gf-inert(Y-xp)[1]+mg*gv
+            acct.update(wall_end=self.wall_jump(Y, ops), U1={k_: float(v_) for k_, v_ in e_end.items()},
+                        K1=self.kinetic((Y[:self.n]-x)/dt), P1=-float((mg*gv*Y).sum()),
+                        DK=self.kinetic((Y[:self.n]-x)/dt-v), res=float((gf*(Y-X0e)).sum()))
+            G0 = float(acct['ball_start'][1].sum()) if ground is not None else 0.
+            G1 = 0.
+            if ground is not None:
+                acct['ball_end'] = (cb, 8/15*cR*(Rb-(Y[cb]@gn-gc)).clamp(min=0.)**2.5); G1 = float(acct['ball_end'][1].sum())
+            acct['B'] = sum(acct['U0'].values())+G0-sum(acct['U1'].values())-G1-float((gW*(X0e-Y)).sum())
+            acct['H0'] = acct['K0']+sum(acct['U0'].values())+G0+acct['P0']; acct['H1'] = acct['K1']+sum(acct['U1'].values())+G1+acct['P1']
+        y, cols = y[:self.n], y[self.n:]
         tm['solve'] = clock()-t0; t0 = clock()
         Vt = self.V0*torch.linalg.det(F1)
         if radii_start == 'predict':
@@ -561,7 +1118,7 @@ class ULModel:
                 w2 = 2*w_-st['r_prev']**2
                 w_ = torch.where(w2 > 0, w2, w_)
             r_ = torch.sqrt(w_)
-        r1, G1, S1, it, nrep = self.recut.solve_radii(y, r_, Vt, tol=vol_tol)
+        r1, G1, S1, it, nrep = self.recut.solve_radii(y, r_, Vt, tol=vol_tol, r_base=r)
         if f_update == 'midpoint' and self.f_mode != 'total':
             ops1 = self.operators(y, F1, self.geometry(y, r1, (G1, S1)))
             A_, B_ = self.kin(y-x, ops), self.kin(y-x, ops1)
@@ -570,6 +1127,9 @@ class ULModel:
             r1, G1, S1, it2, nrep2 = self.recut.solve_radii(y, r1, Vt, tol=vol_tol); it += it2; nrep += nrep2
         tm['radii'] = clock()-t0
         verr = float(((G1.V.detach()-Vt)/Vt).abs().max())
+        if verr > vol_tol:                                                             # (10-28: a failed fit went on silently)
+            raise RuntimeError('the volume fit stopped at %.1e of the target (tol %.0e; iterations %d, repairs %d, recut stats %s)' % (
+                verr, vol_tol, it, nrep, {k_: v_ for k_, v_ in self.recut.stats.items() if k_ in ('floor', 'overflow')}))
         rep = dict(e_start={k_: float(v_) for k_, v_ in e_start.items()}, e_end={k_: float(v_) for k_, v_ in e_end.items()},
                    solve=stats, radii_it=it, repairs=nrep, vol_err=verr, walls=(geo['i'], geo['j'], geo['A']),
                    minJ=float((Vt/self.V0).min()), time=tm, radii_start=self.recut.stats.get('start_ratio'))
@@ -577,4 +1137,12 @@ class ULModel:
             dl = (Rb-(y[cb]@gn-gc)).clamp(min=0.)
             rep['ground'] = dict(force=float((4/3*cR*dl**1.5).sum()), touching=int((dl > 0).sum()), overlap=float((dl/Rb).max()),
                                  energy=float((8/15*cR*dl**2.5).sum()), balls=len(cb))
-        return dict(x=y, v=(y-x)/dt, F=F1.detach(), r=r1, GS=(G1, S1), r_prev=r), rep
+        if tet_min is not None:
+            rep['tet_minJ'] = tet_min
+        if wall_min is not None:
+            rep['wall_minJ'] = wall_min
+        if nr:
+            rep['cols'] = cols.norm(dim=1)                                             # the free columns' lengths (stretch along q)
+        if account:
+            rep['acct'] = acct
+        return dict(x=y, v=(y-x)/dt, F=F1.detach(), r=r1, GS=(G1, S1), r_prev=r, cols=cols), rep

@@ -7,7 +7,12 @@ data_loader, powerfoam) is the run's worktree's. Positions: the drop's shift (re
 object stays where the foam sits. Writes a grid per radius rule (rows: views; columns: the rest foam, then the
 records) on white, and the rest check (the update at rest against the untouched foam). --solved 1: also the radii
 solved for every cell's volume V0 det F_B (recut.Recut), against the scaled ones (PowerSim's: no volume holds).
-  python free_surface/render_drop.py --npz output/round01_pruned_exact/skin_drop_check_beta0.001_render.npz"""
+  python free_surface/render_drop.py --npz output/round01_pruned_exact/skin_drop_check_beta0.001_render.npz
+10-28: --run another Power Foam run (the lion's: thin-surface output/vid2sim_lion_round_clean), --frames the
+<tag>_frames directory ul_drop.py writes (per record the sites, F and the updated-Lagrangian model's own radii, used as
+they are: 'model' radii), --gif every frame per view as an animated GIF besides the grid.
+  python free_surface/render_drop.py --run <thin-surface>/output/vid2sim_lion_round_clean --frames output/lion_round_clean_exact/ul_lion_acct_frames \
+      --cells <local-steps>/output/lion_round_clean_exact/dem_exact_single/cells.npz --times 0 .25 .28 .3 .33 .36 .4 .45 .5 --gif 1"""
 import argparse
 import sys
 from pathlib import Path
@@ -214,11 +219,14 @@ def main():
     a.add_argument('--field', default='affine', choices=['affine', 'blend'], help='affine: each cell follows its own body; blend: the old pipeline\'s blend of the K nearest bodies')
     a.add_argument('--blend', type=float, nargs=2, default=[8, 1.], help='K and width (x the median spacing); the burger runs used 24 2')
     a.add_argument('--renderer', default='powerfoam', choices=['powerfoam', 'lagrange'], help='lagrange: cells carried by their F (lagrange_render.py)')
+    a.add_argument('--run', default=RUN, help='the Power Foam run (config.yaml, model.pt) the foam was cut from')
+    a.add_argument('--frames', type=Path, default=None, help="ul_drop.py's <tag>_frames directory instead of --npz (the model's own radii)")
+    a.add_argument('--gif', type=int, default=0, help='also every frame per view as an animated GIF')
     args = a.parse_args()
     if not args.uniform:
-        out = args.out or args.npz.parent/('render_'+args.npz.stem)
+        out = args.out or (args.frames.parent/('render_'+args.frames.name) if args.frames is not None else args.npz.parent/('render_'+args.npz.stem))
         out.mkdir(parents=True, exist_ok=True)
-    model, data = load(RUN)
+    model, data = load(args.run)
     src = torch.as_tensor(np.load(args.cells)['source_index'], device=model.device)
     with torch.no_grad():
         for name in NAMES:
@@ -266,8 +274,16 @@ def main():
         im.save(out/('uniform_grid%s.png' % ('_lagrange' if draw is not None else '')))
         print('wrote %s' % (out/('uniform_grid%s.png' % ('_lagrange' if draw is not None else ''))), flush=True)
         return
-    z = np.load(args.npz)
-    t, X, F = z['rec'][:, 0], torch.as_tensor(z['X'], dtype=torch.float64, device='cuda'), torch.as_tensor(z['F'], dtype=torch.float64, device='cuda')
+    if args.frames is not None:
+        fz = [np.load(p_) for p_ in sorted(args.frames.glob('f*.npz'))]
+        t = np.array([float(z_['t']) for z_ in fz])
+        X = torch.as_tensor(np.stack([z_['x'] for z_ in fz]), dtype=torch.float64, device='cuda')
+        F = torch.as_tensor(np.stack([z_['F'] for z_ in fz]), dtype=torch.float64, device='cuda')
+        Rm = torch.as_tensor(np.stack([z_['r'] for z_ in fz]), dtype=torch.float64, device='cuda')
+        print('%d frames, t %.4f..%.4f s' % (len(t), t[0], t[-1]), flush=True)
+    else:
+        z = np.load(args.npz)
+        t, X, F = z['rec'][:, 0], torch.as_tensor(z['X'], dtype=torch.float64, device='cuda'), torch.as_tensor(z['F'], dtype=torch.float64, device='cuda')
     shift = X[0]-up.p0.double()
     print('cells %d; the drop\'s shift %s (spread %.1e)' % (len(src), shift.mean(0).cpu().numpy().round(5).tolist(), float((shift-shift.mean(0)).abs().max())), flush=True)
     cams = [data.cameras[v] for v in args.views]
@@ -278,7 +294,7 @@ def main():
         max(float((r1[0]-r2[0]).abs().max()) for r1, r2 in zip(rest, again)), max(float((r1[1]-r2[1]).abs().max()) for r1, r2 in zip(rest, again))), flush=True)
     Xf = X-shift.mean(0)
     ks = [int(np.argmin(np.abs(t-tt))) for tt in args.times]
-    radii = dict(scaled=None)
+    radii = dict(scaled=None) if args.frames is None else dict(model=Rm)
     if args.solved:
         rs, err = solved_radii(Xf, F, torch.as_tensor(np.load(args.cells)['radii'], dtype=torch.float64, device='cuda'), out/'solved_radii.npz')
         radii['solved'] = rs
@@ -317,6 +333,23 @@ def main():
             d.text(((j+1)*Wd+4, 4), 't %.3f s (%s radii)' % (tk, name), fill=(0, 0, 0))
         im.save(out/('drop_grid_%s.png' % name))
         print('wrote %s (%d views x %d times, %dx%d each)' % (out/('drop_grid_%s.png' % name), len(cams), len(cols), Wd, H), flush=True)
+        if args.gif:                                                               # every frame, one GIF per view
+            seq = [[] for _ in cams]
+            for k in range(len(t)):
+                xk, Fk = bl(Xf[k], F[k]) if bl is not None else (Xf[k], F[k])
+                if draw is not None:
+                    imgs = [draw(xk, Fk, c) for c in cams]
+                else:
+                    up.apply(xk.to(up.p0.dtype), Fk, None if rr is None else rr[k], plane=pl)
+                    imgs = [render(model, c) for c in cams]
+                for v in range(len(cams)):
+                    im = Image.fromarray((on_white(*imgs[v])*255).astype(np.uint8))
+                    ImageDraw.Draw(im).text((4, 4), 't %.4f s' % t[k], fill=(0, 0, 0))
+                    seq[v].append(im)
+            for v, vi in enumerate(args.views):
+                g_ = out/('drop_%s_view%d.gif' % (name, vi))
+                seq[v][0].save(g_, save_all=True, append_images=seq[v][1:], duration=1000//24, loop=0)
+                print('wrote %s (%d frames)' % (g_, len(seq[v])), flush=True)
 
 
 if __name__ == '__main__':

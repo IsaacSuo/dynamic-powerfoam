@@ -3,7 +3,14 @@ foam at rest with its lowest ball point --height above y = 0, gravity -y, fricti
 cells with an exposed cap (radius this step's), backward Euler dt 1/1200, tol 1e-3 of |m g|, 0.5 s, no viscosity.
 Records every 1/240 s in mpm_compare.py's columns (t, com_y, com_vy, K, elastic, contact/weight) and more: the total
 energy's change (kinetic + elastic + ground + gravity), walls born / died and the elastic energy's jump at the recuts
-since the last record, the solve's and the volume fit's work.
+since the last record, the solve's and the volume fit's work. --up / --ground / --v0 (10-28, the lion as hertz_drop.py's
+lion runs): the up axis, the foam left in place above the plane at --ground on it, a starting velocity.
+10-28 (the lion runs lost to a timeout and to missing frames): every record's state (sites, F, radii, free columns) goes
+to <tag>_frames/fNNNN.npz and the records to <tag>.npz as they come; the energy account per record (ULModel.step
+account): within the steps backward Euler's kinetic dissipation, the Bregman remainder and the residual's work; at the
+recuts the elastic energy's jump split into the cells (0 for the rest fits), the stabilisation, the jump term of the
+walls kept / born / gone, and the ground energy's into the balls kept (their radii refitted) / joining / leaving the
+contact set; the account's closure against H. A solve that stops above --tol stops the run (the states saved).
   PYTHONPATH=<main repo>:<worktree> python free_surface/ul_drop.py --foam <dir with dem_exact_single> --out <dir>"""
 import argparse
 import time
@@ -25,6 +32,7 @@ def main():
     a_.add_argument('--dt', type=float, default=1/1200)
     a_.add_argument('--T', type=float, default=.5)
     a_.add_argument('--tol', type=float, default=1e-3)
+    a_.add_argument('--maxit', type=int, default=5000, help="the step solve's product budget (a solve above --tol at it stops the run)")
     a_.add_argument('--E', type=float, default=23008.38)
     a_.add_argument('--nu', type=float, default=.3008)
     a_.add_argument('--grid', type=float, default=.002, help="the cells' centroids and second moments: sample spacing (m)")
@@ -35,6 +43,18 @@ def main():
     a_.add_argument('--f-mode', default='total', help="ul_model f_mode: 'increment' or 'total' (UPDATED_LAGRANGE.md section 20)")
     a_.add_argument('--new-ref', default='rest', help="f_mode 'total': a newly met pair's reference, 'contact' or 'rest'")
     a_.add_argument('--fit-w', default='rest', help="f_mode 'total': the fits' pairs and weights, 'wall' (current cut), 'rest' (rest neighbours and weights) or 'lens'")
+    a_.add_argument('--up', type=int, default=1, help='the up axis (0, 1, 2); gravity along -up')
+    a_.add_argument('--ground', type=float, default=None, help='the plane at this up coordinate, the foam left in place (else the '
+                    'plane at 0 and the foam moved to its lowest ball point --height above it)')
+    a_.add_argument('--v0', type=float, nargs=3, default=(0., 0., 0.), help='the starting velocity (m/s)')
+    a_.add_argument('--tet', type=float, default=0., help='> 0: the site tetrahedra\'s volumetric Bregman term with this weight (ul_model tet_w, 10-29)')
+    a_.add_argument('--mass', default='diag', help="ul_model mass: 'diag' (the sites' own cells) or 'consistent' (the kinetic energy of the model's field, 10-29)")
+    a_.add_argument('--shift', default='displacement', help="ul_model shift: 'displacement' (two-step fit, carried to the centroid) or 'none' (site-level fit)")
+    a_.add_argument('--agg', type=float, default=0., help='> 0: cells below this x the median volume take their neighbours\' fit (ul_model agg, 10-29)')
+    a_.add_argument('--grad', default='fit', help="ul_model grad: 'fit' or 'corrected' (the fit with the integration constraint, 10-29)")
+    a_.add_argument('--fit-cap', type=float, default=None, help="ul_model fit_cap (the current-cut fits' conditioning cap, 10-29)")
+    a_.add_argument('--carry-cap', type=float, default=None, help='ul_model carry_cap (the carried displacement\'s sensitivity cap, 10-29)')
+    a_.add_argument('--f-substeps', type=int, default=1, help="ul_model f_substeps (f_mode 'increment': F updated in this many substeps, 10-29)")
     a_.add_argument('--tag', default='ul_drop')
     args = a_.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -46,36 +66,78 @@ def main():
     else:
         dlt, J0, cnt = cell_moments_grid(X, r, V, args.grid); np.savez(cf, dlt=dlt, J0=J0, cnt=cnt)
     E, nu = args.E/1000, args.nu
-    mdl = ULModel(X, r, V, dlt, J0, E, nu, f_mode=args.f_mode, new_ref=args.new_ref, fit_w=args.fit_w)
-    up = torch.tensor([0., 1., 0.], dtype=f64, device=dev)
+    mdl = ULModel(X, r, V, dlt, J0, E, nu, f_mode=args.f_mode, new_ref=args.new_ref, fit_w=args.fit_w, tet_w=args.tet, mass=args.mass, grad=args.grad,
+                  fit_cap=args.fit_cap, carry_cap=args.carry_cap, f_substeps=args.f_substeps, shift=args.shift, agg=args.agg)
+    if args.tet > 0:
+        print('site tetrahedra: %d, their volume / the body %.3f, weight %g' % (len(mdl.tets), float(mdl.tet_V.sum()/mdl.V0.sum()), args.tet), flush=True)
+    k_ = args.up; e_up = tuple(float(a == k_) for a in range(3))
+    up = torch.tensor(e_up, dtype=f64, device=dev)
     I = torch.eye(3, dtype=f64, device=dev).expand(n, 3, 3).contiguous()
-    low = float((mdl.X0[:, 1]-mdl.r0).min())
-    st = dict(x=mdl.X0+(args.height-low)*up, v=torch.zeros(n, 3, dtype=f64, device=dev), F=I.clone(), r=mdl.r0.clone())
-    ground = ((0., 1., 0.), 0., E/(1-nu**2))
+    low = float((mdl.X0[:, k_]-mdl.r0).min())
+    gc = 0. if args.ground is None else args.ground
+    x0 = mdl.X0+(args.height-low)*up if args.ground is None else mdl.X0.clone()
+    st = dict(x=x0, v=torch.tensor(args.v0, dtype=f64, device=dev).expand(n, 3).clone(), F=I.clone(), r=mdl.r0.clone())
+    ground = (e_up, gc, E/(1-nu**2))
     M = float(mdl.m.sum()); gacc = 9.8; ref = gacc*M
+    if args.grad == 'corrected':
+        print('corrected operator: %s' % {k: round(v, 6) if isinstance(v, float) else v for k, v in mdl.cor_stats.items()}, flush=True)
+    if args.mass == 'consistent':
+        print('consistent mass: total %.6e (sum V %.6e), lumped masses min / median V %.3f, Mc eigenvalue min / median V %.2e' % (
+            M, float(mdl.V0.sum()), float(mdl.m.min()/mdl.V0.median()), float(torch.linalg.eigvalsh(mdl.Mc)[0]/mdl.V0.median())), flush=True)
     if args.squeeze > 0:
-        yc = float((mdl.m*st['x'][:, 1]).sum())/M
-        st['v'][:, 1] = -args.squeeze*(st['x'][:, 1]-yc); ground = None; gacc = 0.
-    hgt = lambda x: x[:, 1]-float((x[:, 1]-mdl.r0).min())                            # a site's height above the lowest rest-radius ball point
+        yc = float((mdl.m*st['x'][:, k_]).sum())/M
+        st['v'] = torch.zeros_like(st['v']); st['v'][:, k_] = -args.squeeze*(st['x'][:, k_]-yc); ground = None; gacc = 0.
+    hgt = lambda x: x[:, k_]-float((x[:, k_]-mdl.r0).min())                          # a site's height above the lowest rest-radius ball point
     dt = args.dt; nst = int(round(args.T/dt)); every = max(1, round(1/(240*dt)))
-    print('jack: %d cells, height %.3f m; E %.1f, nu %.4f, E* %.3f (per unit density); dt 1/%.0f, tol %.0e of the weight, %d steps' % (
-        n, args.height, args.E, nu, E/(1-nu**2), 1/dt, args.tol, nst), flush=True)
+    print('%s: %d cells, lowest ball point %.4f m above the plane, v0 %s m/s, up axis %d; E %.1f, nu %.4f, E* %.3f (per unit density); dt 1/%.0f, '
+          'tol %.0e of the weight, %d steps' % (args.foam.name, n, float((st['x'][:, k_]-mdl.r0).min())-gc, list(args.v0), k_, args.E, nu, E/(1-nu**2),
+                                                1/dt, args.tol, nst), flush=True)
     cols = ['t', 'com_y', 'com_vy', 'K', 'elastic', 'contact/weight', 'touching', 'overlap/R', 'min J', 'H change', 'born', 'died', 'recut jump',
             'products', 'Newton', 'radii it', 'step s', 'V/target lo', 'V/target hi', 'vol err', 'V/target p1', 'V/target p99', 'off share',
             'off height']
+    cols += ['diss K', 'Bregman', 'res work', 'jump cells', 'jump stab', 'jump kept', 'jump born', 'jump gone', 'ground kept', 'ground in',
+             'ground out', 'closure']
     rec = []
-    com = lambda x: float((mdl.m*x[:, 1]).sum())/M
-    H0 = gacc*float((mdl.m*st['x'][:, 1]).sum()); U_prev = None; keys_prev = None; acc = dict(born=0, died=0, jump=0.)
+    fdir = args.out/(args.tag+'_frames'); fdir.mkdir(exist_ok=True)
+    def frame(k, t, st_):
+        np.savez(fdir/('f%04d.npz' % k), t=t, x=st_['x'].cpu().numpy(), r=st_['r'].cpu().numpy(), F=st_['F'].cpu().numpy().astype(np.float32),
+                 cols=st_['cols'].cpu().numpy() if 'cols' in st_ else np.zeros((0, 3)))
+    frame(0, 0., dict(st, cols=mdl.deg_q))
+    def split(k_new, e_new, k_old, e_old):
+        """a per-item energy's change between two lists keyed by k: the kept items' change, the new ones', minus the gone ones'"""
+        o = torch.argsort(k_old); ko = k_old[o]
+        pos = torch.searchsorted(ko, k_new).clamp(max=max(len(ko)-1, 0))
+        found = (ko[pos] == k_new) if len(ko) else torch.zeros_like(k_new, dtype=torch.bool)
+        return (float((e_new[found]-e_old[o][pos[found]]).sum()), float(e_new[~found].sum()), -float(e_old[~torch.isin(k_old, k_new)].sum()))
+    ekeys = ('dK', 'B', 'res', 'cells', 'stab', 'kept', 'born', 'gone', 'gkept', 'gin', 'gout', 'closure')
+    eacc = dict.fromkeys(ekeys, 0.); prev = None
+    com = lambda x: float((mdl.m*x[:, k_]).sum())/M
+    H0 = gacc*float((mdl.m*st['x'][:, k_]).sum())+mdl.kinetic(st['v']); v_init = st['v'].clone(); U_prev = None; keys_prev = None; acc = dict(born=0, died=0, jump=0.)
     t0 = time.time()
+    hist = []
+    def fail(s, msg):
+        print('step %d (t %.4f s): %s; stopping' % (s, s*dt, msg), flush=True)
+        dump = dict(steps=np.array([s-len(hist)+1+k_ for k_ in range(len(hist))]))
+        for k_, h_ in enumerate(hist):
+            for key in ('x', 'v', 'F', 'r', 'r_prev', 'cols'):
+                if key in h_:
+                    dump['s%d_%s' % (k_, key)] = h_[key].detach().cpu().numpy()
+        np.savez(args.out/(args.tag+'_fail.npz'), **dump)
+        print('the states entering steps %s saved to %s' % (dump['steps'].tolist(), args.out/(args.tag+'_fail.npz')), flush=True)
+    H_prev = H0
     for s in range(1, nst+1):
         ts = time.time()
+        hist = (hist+[st])[-2:]                                                        # the states entering the last two steps
         try:
-            st, rep = mdl.step(st, dt, grav=(0., -gacc, 0.), ref=ref, tol=args.tol, ground=ground,
-                               ground_r=mdl.r0 if args.contact_radius == 'rest' else None)
+            st, rep = mdl.step(st, dt, grav=tuple(-gacc*a for a in e_up), ref=ref, tol=args.tol, maxit=args.maxit, ground=ground,
+                               ground_r=mdl.r0 if args.contact_radius == 'rest' else None, account=True)
             if ground is None:
                 rep['ground'] = dict(force=0., touching=0, overlap=0., energy=0.)
         except RuntimeError as e_:
-            print('step %d (t %.4f s): %s; stopping' % (s, s*dt, e_), flush=True)
+            fail(s, str(e_))
+            break
+        if rep['solve']['residual'] > args.tol:
+            fail(s, 'the solve stopped at %.1e of the weight (%s)' % (rep['solve']['residual'], rep['solve']))
             break
         q_ = rep['radii_start']; acc['qlo'] = min(acc.get('qlo', 1.), q_[0]); acc['qhi'] = max(acc.get('qhi', 1.), q_[1])
         acc['p1'] = min(acc.get('p1', 1.), q_[2]); acc['p99'] = max(acc.get('p99', 1.), q_[3]); acc['off'] = max(acc.get('off', 0.), q_[4])
@@ -90,26 +152,49 @@ def main():
         if U_prev is not None:
             acc['jump'] += U0-U_prev
         U_prev = U1
-        K = float(.5*(mdl.m[:, None]*st['v']**2).sum())
-        H = K+U1+rep['ground']['energy']+gacc*float((mdl.m*st['x'][:, 1]).sum())
+        K = mdl.kinetic(st['v'])
+        H = K+U1+rep['ground']['energy']+gacc*float((mdl.m*st['x'][:, k_]).sum())
         if s == 1 and args.squeeze > 0:
-            H0 = float(.5*(mdl.m*(args.squeeze*(mdl.X0[:, 1]-float((mdl.m*mdl.X0[:, 1]).sum())/M))**2).sum())
+            H0 = mdl.kinetic(v_init); H_prev = H0
+        a_ = rep['acct']; eacc['dK'] -= a_['DK']; eacc['B'] -= a_['B']; eacc['res'] += a_['res']
+        across = a_['H0']-a_['K0']-a_['P0']                                            # U0 + G0 at the step's start
+        if prev is not None:
+            across -= prev['H1']-prev['K1']-prev['P1']
+            eacc['cells'] += a_['U0']['cells']-prev['U1']['cells']; eacc['stab'] += a_['U0'].get('stab', 0.)-prev['U1'].get('stab', 0.)
+            kp, bn, gn_ = split(*a_['wall_start'], *prev['wall_end']); eacc['kept'] += kp; eacc['born'] += bn; eacc['gone'] += gn_
+            if 'ball_start' in a_:
+                kp, bn, gn_ = split(*a_['ball_start'], *prev['ball_end']); eacc['gkept'] += kp; eacc['gin'] += bn; eacc['gout'] += gn_
+        else:
+            eacc['cells'] += a_['U0']['cells']; eacc['stab'] += a_['U0'].get('stab', 0.); eacc['kept'] += a_['U0'].get('jump', 0.)
+            if 'ball_start' in a_:
+                eacc['gin'] += float(a_['ball_start'][1].sum())
+        eacc['closure'] += (H-H_prev)-(a_['H1']-a_['H0']+across)
+        H_prev = H; prev = {k__: v__ for k__, v__ in a_.items() if k__ in ('H1', 'K1', 'P1', 'U1', 'wall_end', 'ball_end')}
         if s % every == 0 or s == nst:
-            rec.append((s*dt, com(st['x']), float((mdl.m*st['v'][:, 1]).sum())/M, K, U1, rep['ground']['force']/ref, rep['ground']['touching'],
+            rec.append((s*dt, com(st['x']), float((mdl.m*st['v'][:, k_]).sum())/M, K, U1, rep['ground']['force']/ref, rep['ground']['touching'],
                         rep['ground']['overlap'], rep['minJ'], (H-H0)/M, acc['born'], acc['died'], acc['jump']/M, rep['solve']['products'],
                         rep['solve']['outer'], rep['radii_it'], time.time()-ts, acc['qlo'], acc['qhi'], acc['verr'], acc['p1'], acc['p99'], acc['off'],
-                        acc.get('offh', np.nan)))
+                        acc.get('offh', np.nan))+tuple(eacc[k__]/M for k__ in ekeys))
             acc = dict(born=0, died=0, jump=0.)
             q = rec[-1]
-            print('t %.4f s (%.0f s): com y %.5f m, vy %+.4f m/s; ground / weight %.3f on %d balls, overlap max %.3f R; min J %.3f; '
+            print('t %.4f s (%.0f s): com up %.5f m, v up %+.4f m/s; ground / weight %.3f on %d balls, overlap max %.3f R; min J %.3f; '
                   'H change %+.4f J/kg; walls +%d -%d, recut jump %+.1e J/kg; products %d, Newton %d, radii %d (V / target before %.2f..%.2f, '
                   '1-99 %% %.2f..%.2f, share outside [0.5, 2] %.1e at median height %.1f h; after %.0e), %.2f s / step' % (
                       q[0], time.time()-t0, q[1], q[2], q[5], q[6], q[7], q[8], q[9], q[10], q[11], q[12], q[13], q[14], q[15], q[17], q[18], q[20],
-                      q[21], q[22], q[23], q[19], q[16]), flush=True)
-        if rep['solve']['residual'] > args.tol:
-            print('step %d: the solve stopped at %.1e of the weight (%s)' % (s, rep['solve']['residual'], rep['solve']), flush=True)
+                      q[21], q[22], q[23], q[19], q[16])+('; free columns |b| %.3f..%.3f' % (float(rep['cols'].min()), float(rep['cols'].max()))
+                                                           if 'cols' in rep else '')+('; tetrahedra min J %.3f' % rep['tet_minJ'] if 'tet_minJ' in rep else '')+'; radii floor exits %d, overflowed trials %d (so far)' % (
+                      mdl.recut.stats.get('floor', 0), mdl.recut.stats.get('overflow', 0)), flush=True)
+            print('    energy (J/kg, since the last record): within the steps: kinetic dissipation %+.2e, Bregman %+.2e, residual work %+.1e; '
+                  'at the recuts: elastic cells %+.1e, stabilisation %+.2e, jump term kept walls %+.2e, born %+.2e, gone %+.2e; ground kept balls '
+                  '%+.2e, joining %+.2e, leaving %+.2e; account closure %+.1e' % tuple(eacc[k__]/M for k__ in ekeys), flush=True)
+            eacc = dict.fromkeys(ekeys, 0.)
+            frame(len(rec), s*dt, st)
+            np.savez(args.out/(args.tag+'.npz'), cols=np.array(cols), rec=np.array(rec))
     R = np.array(rec)
     np.savez(args.out/(args.tag+'.npz'), cols=np.array(cols), rec=R)
+    if len(R) == 0:
+        print('no record', flush=True)
+        return
     c = {k: R[:, i] for i, k in enumerate(cols)}
     on = np.flatnonzero(c['contact/weight'] > .01); t_on = c['t'][on[0]] if len(on) else np.nan
     imin = int(np.argmin(c['com_y'])); after = c['t'] > t_on
