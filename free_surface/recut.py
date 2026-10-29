@@ -7,6 +7,8 @@ A_patch,i / (2 r_i) (a volume moves only by its boundary's normal velocity; chec
 retess_check.py), solved by CG preconditioned by its diagonal; the full step halved until every cell keeps a positive
 volume and the residual falls; it stops when the volumes hold to tol or the step reaches the rounding. A hidden site
 (no volume: no derivative) first gets the weight that makes it own its position (w_i = max_j (w_j - |p_i - p_j|^2))."""
+import time
+
 import numpy as np
 import torch
 
@@ -66,11 +68,12 @@ class Recut:
     def __init__(self, n, device='cuda', margin=.05):
         self.n, self.dev, self.margin = n, device, margin
         self.A = AlphaComplex(n, device)
-        self.stats = dict(geometry=0, cg=0, overlaps=0)
+        self.stats = dict(geometry=0, cg=0, overlaps=0, t_geometry=0., t_cg=0.)
         self.gcg = None
 
     def geometry(self, p, r, reuse=False):
         """reuse: the overlap candidates of the last call at these sites while they still cover (AlphaComplex)"""
+        t_ = time.perf_counter()
         if not reuse:
             self.A.overlaps(p, r, self.margin); self.stats['overlaps'] += 1
         out = self.A(p, r, reuse=True)
@@ -79,7 +82,11 @@ class Recut:
             raise RuntimeError('alpha complex: per-cell storage overflow or an open cut (status %s)' % torch.unique(out['status']).tolist())
         S = self.A.structure_gpu(out, self.n)
         self.stats['geometry'] += 1
-        return Geometry(p, r, S), S
+        G = Geometry(p, r, S)
+        if p.is_cuda:
+            torch.cuda.synchronize()
+        self.stats['t_geometry'] += time.perf_counter()-t_
+        return G, S
 
     def jacobian(self, G, r):
         keep = G.wall_A > 0
@@ -122,10 +129,11 @@ class Recut:
         foam, nearly all kernel launches)"""
         i, j, c, d = J
         if b.is_cuda:
+            t_ = time.perf_counter()
             if self.gcg is None or self.gcg.check != check:
                 self.gcg = GraphedCG(self.n, check, b.device)
             x, k = self.gcg(J, b, scale, rtol, maxit)
-            self.stats['cg'] += k
+            self.stats['cg'] += k; self.stats['t_cg'] += time.perf_counter()-t_
             return x
         def H(x):
             return d*x-torch.zeros_like(x).index_add(0, i, c*x[j]).index_add(0, j, c*x[i])
@@ -145,6 +153,11 @@ class Recut:
         for i_ in torch.nonzero(hid).flatten().tolist():
             d2 = ((p-p[i_])**2).sum(1)
             reach = (d2 < (r.max()+r[i_])**2); reach[i_] = False
+            if getattr(self.A, 'allow', None) is not None:                         # (10-29 cut_bonds: over the bond family only,
+                ar = torch.arange(len(p), device=p.device)                         # the planes the cut uses)
+                reach &= torch.isin(torch.minimum(ar, torch.tensor(i_, device=p.device))*len(p)+torch.maximum(ar, torch.tensor(i_, device=p.device)), self.A.allow)
+            if not bool(reach.any()):
+                continue
             need = float((w[reach]-d2[reach]).max())
             w[i_] = max(float(w[i_]), need*(1+1e-9)+1e-12*float(w.max()))
         return torch.sqrt(w)

@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from free_surface.ul_model import ULModel, cell_moments_grid
+from free_surface.ul_model import GraphedProduct, ULModel, cell_moments_grid
 
 f64, dev = torch.float64, 'cuda'
 
@@ -31,6 +31,10 @@ def main():
     a_.add_argument('--height', type=float, default=.02)
     a_.add_argument('--dt', type=float, default=1/1200)
     a_.add_argument('--T', type=float, default=.5)
+    a_.add_argument('--start', type=Path, default=None, help='a <tag>_frames directory: start from its frame nearest --start-t (x, F, r; v from the '
+                    'frame before it), for solver tests at a given state (10-29)')
+    a_.add_argument('--start-t', type=float, default=0.)
+    a_.add_argument('--steps', type=int, default=0, help='> 0: this many steps instead of T / dt')
     a_.add_argument('--tol', type=float, default=1e-3)
     a_.add_argument('--maxit', type=int, default=5000, help="the step solve's product budget (a solve above --tol at it stops the run)")
     a_.add_argument('--E', type=float, default=23008.38)
@@ -51,6 +55,19 @@ def main():
     a_.add_argument('--mass', default='diag', help="ul_model mass: 'diag' (the sites' own cells) or 'consistent' (the kinetic energy of the model's field, 10-29)")
     a_.add_argument('--shift', default='displacement', help="ul_model shift: 'displacement' (two-step fit, carried to the centroid) or 'none' (site-level fit)")
     a_.add_argument('--agg', type=float, default=0., help='> 0: cells below this x the median volume take their neighbours\' fit (ul_model agg, 10-29)')
+    a_.add_argument('--beta', type=float, default=0., help='Kelvin-Voigt time (s), the DEM\'s: eta = beta mu, zeta = beta (lam + 2 mu / 3) (10-29)')
+    a_.add_argument('--self-contact', default=None, choices=['air', 'compat', 'cap', 'skin', 'bond'], help='contact walls (air: grown in air or out of a contact interface; '
+                    'compat: the pair\'s offset not explained by either side\'s deformation from rest) out of the '
+                    'material terms, Hertz across them (ul_model self_contact, 10-29)')
+    a_.add_argument('--sc-birth', type=int, default=0, help='1: the self-contact Hertz overlap counted from each contact wall\'s birth')
+    a_.add_argument('--sc-eps', type=float, default=.25, help='self-contact bond: the visibility tolerance, x the median cell size')
+    a_.add_argument('--cut-bonds', type=int, default=0, help='1: the recut over the bond family only (rest walls + pairs within --bond-delta h at rest, '
+                    'visible through the rest body); the other overlapping balls are the contact (ul_model cut_bonds, 10-29)')
+    a_.add_argument('--bond-delta', type=float, default=4.)
+    a_.add_argument('--bond-eps', type=float, default=.25)
+    a_.add_argument('--sc-thr', type=float, default=2.5, help='self-contact compat threshold, x the median cell size')
+    a_.add_argument('--jump-n', default='current', choices=['current', 'start'], help='the jump term\'s normal: along the pair now, or at the step\'s cut (ul_model jump_n, 10-29)')
+    a_.add_argument('--precond', default='scalar', choices=['scalar', 'visc', 'block'], help='the CG\'s preconditioner (ul_model, 10-29)')
     a_.add_argument('--grad', default='fit', help="ul_model grad: 'fit' or 'corrected' (the fit with the integration constraint, 10-29)")
     a_.add_argument('--fit-cap', type=float, default=None, help="ul_model fit_cap (the current-cut fits' conditioning cap, 10-29)")
     a_.add_argument('--carry-cap', type=float, default=None, help='ul_model carry_cap (the carried displacement\'s sensitivity cap, 10-29)')
@@ -67,7 +84,7 @@ def main():
         dlt, J0, cnt = cell_moments_grid(X, r, V, args.grid); np.savez(cf, dlt=dlt, J0=J0, cnt=cnt)
     E, nu = args.E/1000, args.nu
     mdl = ULModel(X, r, V, dlt, J0, E, nu, f_mode=args.f_mode, new_ref=args.new_ref, fit_w=args.fit_w, tet_w=args.tet, mass=args.mass, grad=args.grad,
-                  fit_cap=args.fit_cap, carry_cap=args.carry_cap, f_substeps=args.f_substeps, shift=args.shift, agg=args.agg)
+                  fit_cap=args.fit_cap, carry_cap=args.carry_cap, f_substeps=args.f_substeps, shift=args.shift, agg=args.agg, beta=args.beta, precond=args.precond, jump_n=args.jump_n, self_contact=args.self_contact, sc_thr=args.sc_thr, sc_birth=bool(args.sc_birth), sc_eps=args.sc_eps, cut_bonds=bool(args.cut_bonds), bond_delta=args.bond_delta, bond_eps=args.bond_eps)
     if args.tet > 0:
         print('site tetrahedra: %d, their volume / the body %.3f, weight %g' % (len(mdl.tets), float(mdl.tet_V.sum()/mdl.V0.sum()), args.tet), flush=True)
     k_ = args.up; e_up = tuple(float(a == k_) for a in range(3))
@@ -87,8 +104,15 @@ def main():
     if args.squeeze > 0:
         yc = float((mdl.m*st['x'][:, k_]).sum())/M
         st['v'] = torch.zeros_like(st['v']); st['v'][:, k_] = -args.squeeze*(st['x'][:, k_]-yc); ground = None; gacc = 0.
+    T0 = 0.
+    if args.start is not None:                                                     # (10-29: a saved frame as the start)
+        fs = sorted(args.start.glob('f*.npz')); ts_ = np.array([float(np.load(f_)['t']) for f_ in fs]); kf = int(np.argmin(np.abs(ts_-args.start_t)))
+        z1, z0 = np.load(fs[kf]), np.load(fs[kf-1]); T0 = float(z1['t'])
+        tt = lambda a: torch.as_tensor(a, dtype=f64, device=dev)
+        st = dict(x=tt(z1['x']), v=(tt(z1['x'])-tt(z0['x']))/(T0-float(z0['t'])), F=tt(z1['F']), r=tt(z1['r']))
+        print('start: %s at t %.4f s (v from the frame at %.4f s)' % (fs[kf], T0, float(z0['t'])), flush=True)
     hgt = lambda x: x[:, k_]-float((x[:, k_]-mdl.r0).min())                          # a site's height above the lowest rest-radius ball point
-    dt = args.dt; nst = int(round(args.T/dt)); every = max(1, round(1/(240*dt)))
+    dt = args.dt; nst = args.steps if args.steps > 0 else int(round(args.T/dt)); every = max(1, round(1/(240*dt)))
     print('%s: %d cells, lowest ball point %.4f m above the plane, v0 %s m/s, up axis %d; E %.1f, nu %.4f, E* %.3f (per unit density); dt 1/%.0f, '
           'tol %.0e of the weight, %d steps' % (args.foam.name, n, float((st['x'][:, k_]-mdl.r0).min())-gc, list(args.v0), k_, args.E, nu, E/(1-nu**2),
                                                 1/dt, args.tol, nst), flush=True)
@@ -96,24 +120,29 @@ def main():
             'products', 'Newton', 'radii it', 'step s', 'V/target lo', 'V/target hi', 'vol err', 'V/target p1', 'V/target p99', 'off share',
             'off height']
     cols += ['diss K', 'Bregman', 'res work', 'jump cells', 'jump stab', 'jump kept', 'jump born', 'jump gone', 'ground kept', 'ground in',
-             'ground out', 'closure']
+             'ground out', 'self-contact', 'viscous', 'closure']
     rec = []
     fdir = args.out/(args.tag+'_frames'); fdir.mkdir(exist_ok=True)
     def frame(k, t, st_):
-        np.savez(fdir/('f%04d.npz' % k), t=t, x=st_['x'].cpu().numpy(), r=st_['r'].cpu().numpy(), F=st_['F'].cpu().numpy().astype(np.float32),
+        sck = mdl.sc_prev['keys'][mdl.sc_prev['contact']].cpu().numpy() if mdl.sc and mdl.sc_prev is not None else (
+            mdl.sc_keys_last.cpu().numpy() if getattr(mdl, 'sc_keys_last', None) is not None else np.zeros(0, np.int64))
+        np.savez(fdir/('f%04d.npz' % k), sck=sck, t=t, x=st_['x'].cpu().numpy(), r=st_['r'].cpu().numpy(), F=st_['F'].cpu().numpy().astype(np.float32),
                  cols=st_['cols'].cpu().numpy() if 'cols' in st_ else np.zeros((0, 3)))
-    frame(0, 0., dict(st, cols=mdl.deg_q))
+    frame(0, T0, dict(st, cols=mdl.deg_q))
     def split(k_new, e_new, k_old, e_old):
         """a per-item energy's change between two lists keyed by k: the kept items' change, the new ones', minus the gone ones'"""
         o = torch.argsort(k_old); ko = k_old[o]
         pos = torch.searchsorted(ko, k_new).clamp(max=max(len(ko)-1, 0))
         found = (ko[pos] == k_new) if len(ko) else torch.zeros_like(k_new, dtype=torch.bool)
         return (float((e_new[found]-e_old[o][pos[found]]).sum()), float(e_new[~found].sum()), -float(e_old[~torch.isin(k_old, k_new)].sum()))
-    ekeys = ('dK', 'B', 'res', 'cells', 'stab', 'kept', 'born', 'gone', 'gkept', 'gin', 'gout', 'closure')
+    ekeys = ('dK', 'B', 'res', 'cells', 'stab', 'kept', 'born', 'gone', 'gkept', 'gin', 'gout', 'selfc', 'visc', 'closure')
     eacc = dict.fromkeys(ekeys, 0.); prev = None
     com = lambda x: float((mdl.m*x[:, k_]).sum())/M
     H0 = gacc*float((mdl.m*st['x'][:, k_]).sum())+mdl.kinetic(st['v']); v_init = st['v'].clone(); U_prev = None; keys_prev = None; acc = dict(born=0, died=0, jump=0.)
     t0 = time.time()
+    sacc = dict(born=0, overlap=0., last=None)
+    tkeys = ('t_geometry', 't_cg', 'geometry', 'cg')
+    tacc = dict(ops=0., solve=0., radii=0., products=0, hvp=0., eg=0., newton=0, rej=0, inf=0, neg=0, edge=0, caps=GraphedProduct.captures, **{k__: mdl.recut.stats[k__] for k__ in tkeys})
     hist = []
     def fail(s, msg):
         print('step %d (t %.4f s): %s; stopping' % (s, s*dt, msg), flush=True)
@@ -139,6 +168,11 @@ def main():
         if rep['solve']['residual'] > args.tol:
             fail(s, 'the solve stopped at %.1e of the weight (%s)' % (rep['solve']['residual'], rep['solve']))
             break
+        tacc['ops'] += rep['time']['operators']; tacc['solve'] += rep['time']['solve']; tacc['radii'] += rep['time']['radii']
+        if 'sc' in rep:
+            sacc['born'] += rep['sc']['born_contact']; sacc['overlap'] = max(sacc['overlap'], rep['sc']['overlap']); sacc['last'] = rep['sc']
+        tacc['products'] += rep['solve']['products']; tacc['hvp'] += rep['solve']['t_hvp']; tacc['eg'] += rep['solve']['t_eg']; tacc['newton'] += rep['solve']['outer']
+        tacc['rej'] += rep['solve']['rejected']; tacc['inf'] += rep['solve']['inf']; tacc['neg'] += rep['solve']['negative']; tacc['edge'] += rep['solve']['edge']
         q_ = rep['radii_start']; acc['qlo'] = min(acc.get('qlo', 1.), q_[0]); acc['qhi'] = max(acc.get('qhi', 1.), q_[1])
         acc['p1'] = min(acc.get('p1', 1.), q_[2]); acc['p99'] = max(acc.get('p99', 1.), q_[3]); acc['off'] = max(acc.get('off', 0.), q_[4])
         if len(q_[5]):
@@ -156,22 +190,24 @@ def main():
         H = K+U1+rep['ground']['energy']+gacc*float((mdl.m*st['x'][:, k_]).sum())
         if s == 1 and args.squeeze > 0:
             H0 = mdl.kinetic(v_init); H_prev = H0
-        a_ = rep['acct']; eacc['dK'] -= a_['DK']; eacc['B'] -= a_['B']; eacc['res'] += a_['res']
+        a_ = rep['acct']; eacc['dK'] -= a_['DK']; eacc['B'] -= a_['B']; eacc['res'] += a_['res']; eacc['visc'] -= a_.get('DV', 0.)
         across = a_['H0']-a_['K0']-a_['P0']                                            # U0 + G0 at the step's start
         if prev is not None:
             across -= prev['H1']-prev['K1']-prev['P1']
+            eacc['selfc'] += a_['U0'].get('selfc', 0.)-prev['U1'].get('selfc', 0.)
             eacc['cells'] += a_['U0']['cells']-prev['U1']['cells']; eacc['stab'] += a_['U0'].get('stab', 0.)-prev['U1'].get('stab', 0.)
             kp, bn, gn_ = split(*a_['wall_start'], *prev['wall_end']); eacc['kept'] += kp; eacc['born'] += bn; eacc['gone'] += gn_
             if 'ball_start' in a_:
                 kp, bn, gn_ = split(*a_['ball_start'], *prev['ball_end']); eacc['gkept'] += kp; eacc['gin'] += bn; eacc['gout'] += gn_
         else:
+            eacc['selfc'] += a_['U0'].get('selfc', 0.)
             eacc['cells'] += a_['U0']['cells']; eacc['stab'] += a_['U0'].get('stab', 0.); eacc['kept'] += a_['U0'].get('jump', 0.)
             if 'ball_start' in a_:
                 eacc['gin'] += float(a_['ball_start'][1].sum())
         eacc['closure'] += (H-H_prev)-(a_['H1']-a_['H0']+across)
         H_prev = H; prev = {k__: v__ for k__, v__ in a_.items() if k__ in ('H1', 'K1', 'P1', 'U1', 'wall_end', 'ball_end')}
         if s % every == 0 or s == nst:
-            rec.append((s*dt, com(st['x']), float((mdl.m*st['v'][:, k_]).sum())/M, K, U1, rep['ground']['force']/ref, rep['ground']['touching'],
+            rec.append((T0+s*dt, com(st['x']), float((mdl.m*st['v'][:, k_]).sum())/M, K, U1, rep['ground']['force']/ref, rep['ground']['touching'],
                         rep['ground']['overlap'], rep['minJ'], (H-H0)/M, acc['born'], acc['died'], acc['jump']/M, rep['solve']['products'],
                         rep['solve']['outer'], rep['radii_it'], time.time()-ts, acc['qlo'], acc['qhi'], acc['verr'], acc['p1'], acc['p99'], acc['off'],
                         acc.get('offh', np.nan))+tuple(eacc[k__]/M for k__ in ekeys))
@@ -186,9 +222,20 @@ def main():
                       mdl.recut.stats.get('floor', 0), mdl.recut.stats.get('overflow', 0)), flush=True)
             print('    energy (J/kg, since the last record): within the steps: kinetic dissipation %+.2e, Bregman %+.2e, residual work %+.1e; '
                   'at the recuts: elastic cells %+.1e, stabilisation %+.2e, jump term kept walls %+.2e, born %+.2e, gone %+.2e; ground kept balls '
-                  '%+.2e, joining %+.2e, leaving %+.2e; account closure %+.1e' % tuple(eacc[k__]/M for k__ in ekeys), flush=True)
+                  '%+.2e, joining %+.2e, leaving %+.2e; self-contact at the recuts %+.2e; viscous dissipation %+.2e; account closure %+.1e' % tuple(eacc[k__]/M for k__ in ekeys), flush=True)
             eacc = dict.fromkeys(ekeys, 0.)
-            frame(len(rec), s*dt, st)
+            rs_ = {k__: mdl.recut.stats[k__]-tacc[k__] for k__ in tkeys}
+            if sacc['last'] is not None:
+                print('    self-contact: %d contact walls of %d (new this record %d), largest overlap %.3f of the smaller radius, energy %.2e J/kg' % (
+                    sacc['last']['contact'], sacc['last']['walls'], sacc['born'], sacc['overlap'], sacc['last']['energy']/M), flush=True)
+                sacc = dict(born=0, overlap=0., last=None)
+            print('    time (s, since the last record): operators %.2f, solve %.2f (%d products %.2f, %d Newton iterates\' energy and gradient %.2f, '
+                  '%d graph captures; trials rejected %d (J <= 0 %d), negative curvature %d, region edge %d), radii %.2f (%d cuts %.2f, %d radii CG iterations %.2f; all cuts this record incl. the step start\'s)' % (
+                      tacc['ops'], tacc['solve'], tacc['products'], tacc['hvp'], tacc['newton'], tacc['eg'], GraphedProduct.captures-tacc['caps'], tacc['rej'], tacc['inf'], tacc['neg'], tacc['edge'],
+                      tacc['radii'], rs_['geometry'], rs_['t_geometry'], rs_['cg'], rs_['t_cg']), flush=True)
+            tacc = dict(ops=0., solve=0., radii=0., products=0, hvp=0., eg=0., newton=0, rej=0, inf=0, neg=0, edge=0, caps=GraphedProduct.captures,
+                        **{k__: mdl.recut.stats[k__] for k__ in tkeys})
+            frame(len(rec), T0+s*dt, st)
             np.savez(args.out/(args.tag+'.npz'), cols=np.array(cols), rec=np.array(rec))
     R = np.array(rec)
     np.savez(args.out/(args.tag+'.npz'), cols=np.array(cols), rec=R)

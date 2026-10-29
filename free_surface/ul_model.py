@@ -73,7 +73,7 @@ class GraphedProduct:
     pays off after ~25 products (20 ms / 0.8 ms saved per product); the number an iterate will take is predicted by the
     last iterate's (kept across steps): at least 25, capture at the third call, else only after 25 calls (10-28 lion,
     deep compression: ~500 Newton iterates of ~4 products each, a capture per iterate cost more than the products)"""
-    breakeven, last = 25, None
+    breakeven, last, captures = 25, None, 0
 
     def __init__(self, f, after=2):
         self.f, self.after, self.key, self.calls, self.graph = f, after, None, 0, None
@@ -87,6 +87,7 @@ class GraphedProduct:
         last = GraphedProduct.last
         after = self.after if last is None or last >= self.breakeven else self.breakeven
         if self.graph is None and self.calls > after:
+            GraphedProduct.captures += 1
             self.d = d.clone()
             s_ = torch.cuda.Stream(); s_.wait_stream(torch.cuda.current_stream())
             with torch.cuda.stream(s_):
@@ -125,7 +126,7 @@ def cell_moments_grid(X, r, V, spacing, dev='cuda'):
 
 class ULModel:
     def __init__(self, X0, r0, V0, dlt0, J0, E, nu, rho=1., dev='cuda', jump=True, stab=True, shift='displacement', smooth='centroid',
-                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0.):
+                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25):
         t = lambda a: torch.as_tensor(np.asarray(a), dtype=f64, device=dev)
         self.tet_w, self.tet_qmin = tet_w, tet_qmin
         self.wall_w, self.cell_w, self.cellhg_w, self.cellhg_k = wall_w, cell_w, cellhg_w, cellhg_k
@@ -138,6 +139,35 @@ class ULModel:
         self.I3 = torch.eye(3, dtype=f64, device=dev)
         self.f_mode, self.new_ref, self.fit_w = f_mode, new_ref, fit_w
         self.fit_cap, self.carry_cap, self.f_substeps = fit_cap, carry_cap, f_substeps
+        self.beta = beta                                                               # (10-29: Kelvin-Voigt, as the DEM's: eta = beta mu, zeta =
+                                                                                       # beta (lam + 2 mu / 3), see visc_terms)
+        self.precond = precond                                                         # (10-29: the CG's preconditioner, see step / block_precond)
+        self.jump_n = jump_n                                                           # (10-29: the jump term's normal, see _jn)
+        self.sc, self.sc_prev, self.sc_stats = self_contact, None, {}                   # (10-29: self-contact, None / 'air' / 'compat',
+        self.sc_thr, self.h_med = sc_thr, float(self.V0.median())**(1/3)               # see classify_walls / _sc)
+        self.sc_birth = sc_birth                                                       # (the overlap from the wall's birth, see _sc)
+        self.sc_eps = sc_eps
+        self.cut_bonds = cut_bonds                                                     # (10-29: the recut over the bond family, see
+        if cut_bonds:                                                                  # _bond_family / _contact_pairs)
+            t0_ = time.time()
+            self.bonds, self.sc_rest_keys, self.sc_rest_ov = self._bond_family(bond_delta, bond_eps)
+            self.recut.A.allow = self.bonds
+            self.recut_full = Recut(self.n, dev)                                       # (the full recut: where parts meet)
+            print('cut_bonds: %d bonds (%.1f per cell; delta %g h, eps %g h), %d pairs overlapping at rest outside them; %.0f s' % (
+                len(self.bonds), 2*len(self.bonds)/self.n, bond_delta, bond_eps, len(self.sc_rest_keys), time.time()-t0_), flush=True)
+        if self_contact == 'bond':                                                     # (the rest walls: always material)
+            G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
+            self.sc_rest = torch.sort(torch.minimum(G0.i[kp], G0.j[kp])*self.n+torch.maximum(G0.i[kp], G0.j[kp])).values
+        if self_contact == 'skin':                                                     # (the rest skin: the cells with an exposed cap
+            import scipy.sparse as sp_                                                 # at rest; the pairs within 2 steps on it, i.e.
+            G0, _ = self.recut.geometry(self.X0, self.r0)                              # skin neighbours or sharing a skin neighbour)
+            kp = G0.wall_A > 0; a0, b0 = G0.i[kp].cpu().numpy(), G0.j[kp].cpu().numpy()
+            skin = (G0.patch_A.detach() > 0).cpu().numpy(); ks = skin[a0] & skin[b0]
+            As = sp_.coo_matrix((np.ones(int(ks.sum())), (a0[ks], b0[ks])), shape=(self.n, self.n)).tocsr(); As = ((As+As.T) > 0).astype(np.float64)
+            near = sp_.triu((As+As@As) > 0, k=1).tocoo()
+            self.sc_skin = torch.as_tensor(skin, device=dev)
+            self.sc_near = torch.sort(torch.as_tensor(near.row.astype(np.int64)*self.n+near.col, device=dev)).values
+        self.E_sc = E/(2*(1-nu**2))                                                    # (two balls of the same material)
         self.agg = agg                                                                 # (10-29: cells below agg x the median volume take their
                                                                                        # neighbours' fit, see operators)
         self.deg_cells = torch.zeros(0, dtype=torch.long, device=dev); self.deg_q = torch.zeros(0, 3, dtype=f64, device=dev)
@@ -624,6 +654,9 @@ class ULModel:
         """the step's linear maps, built at the step start (x^n, F^n, geometry); f_mode 'total': the fits' levers are the
         walls' material reference vectors D (pair_refs; at rest the rest offsets) and F = kin(x) itself (section 20)"""
         i, j, A, c = geo['i'], geo['j'], geo['A'], geo['c']
+        if 'contact' in geo:                                                           # (self_contact: the fits, the jump term, the
+            mk = ~geo['contact']                                                       # stabilisation and the aggregation over the
+            i, j, A, c = i[mk], j[mk], A[mk], c[mk]                                    # material walls; the centroids from all)
         d = x[j]-x[i]; L = d.norm(dim=1); nrm = d/L[:, None]
         total = self.f_mode == 'total'
         if total and D is None:
@@ -709,6 +742,11 @@ class ULModel:
             as_, ao_ = torch.cat([i[m1], j[m2]]), torch.cat([j[m1], i[m2]])            # non-tiny wall neighbours' increment on this cut)
             den = torch.zeros(n, dtype=f64, device=self.dev).index_add_(0, as_, self.V0[ao_])
             ops_['agg'] = (as_, ao_, self.V0[ao_]/den[as_], tiny & (den > 0))
+        if 'contact' in geo and bool(geo['contact'].any()):                            # (self_contact: the pairs across the contact
+            ci, cj = geo['i'][geo['contact']], geo['j'][geo['contact']]                # walls, see _sc)
+            dd_ = x[cj]-x[ci]; rr = geo['r']
+            db = geo['sc_db'][geo['contact']] if self.sc_birth else 0.
+            ops_['sc'] = (ci, cj, dd_/dd_.norm(dim=1, keepdim=True), rr[ci]+rr[cj]-db, self.E_sc*torch.sqrt(rr[ci]*rr[cj]/(rr[ci]+rr[cj])))
         if total and self.grad.startswith('gg_'):                                     # (the divergence-theorem gradient, 10-29)
             ops_.update(KS=self.gg_ops[0], KO=self.gg_ops[1], T=self.gg_ops[2], onestepT=True)
             if self.gg_off is not None:
@@ -758,8 +796,10 @@ class ULModel:
         if self.jump:
             i, j = ops['i'], ops['j']
             dlt = (x[j]-x[i])-.5*torch.einsum('fab,fb->fa', F[i]+F[j], ops['b'])
-            nc = (x[j]-x[i])/(x[j]-x[i]).norm(dim=1, keepdim=True)
+            nc = self._jn(x, ops)
             e['jump'] = .5*(ops['Kj']*(self.mu*(dlt*dlt).sum(1)+(self.lam+self.mu)*(dlt*nc).sum(1)**2)).sum()
+        if 'sc' in ops:
+            e['selfc'] = self._sc(x, ops)[0]
         if self.tet_w > 0:
             e['tet'], _ = self.tet_energy(x, ops)
         if self.wall_w > 0:
@@ -768,12 +808,168 @@ class ULModel:
             e['cellhg'], _ = self.cellhg_energy(x, ops)
         return (e, F) if terms else sum(e.values())
 
+    def _jn(self, y, ops):
+        """the jump term's normal per wall: along the pair at y (jump_n 'current'), or along the pair at the step's cut
+        (jump_n 'start', 10-29: fixed within the step, so the term is exactly quadratic in the positions; the wall's
+        normal of the cut. Near-twin sites, 0.07 h apart on the lion, turned the current normal by ~90 degrees within one
+        Newton step and broke the solve's quadratic model)"""
+        if self.jump_n == 'start':
+            y = ops['x0']
+        a = y[ops['j']]-y[ops['i']]
+        return a/a.norm(dim=1, keepdim=True)
+
+    def classify_walls(self, x, r, geo, F=None, K=24, chunk=512):
+        """self_contact (10-29): each wall of this cut is 'contact' or 'material' by where it grew. A wall that was in the
+        last classified cut keeps its label. A new wall (i, j) is contact when, on that last cut, the segment between the
+        two sites crossed air or a contact wall, else material: a wall grown where there was material is the material
+        rearranging itself, one grown in air or out of a contact interface is two surfaces touching (or sliding along each
+        other) (self_contact 'air'). Along the segment the owners (least power distance) at K points; between two consecutive different
+        owners a, b the exact point where their power distances are equal: air when it lies outside a's ball (10-29: the
+        gaps closing between the lion's leg and chest were too thin for any sample, even 200, to land in; the exact
+        crossing found them), across a contact wall when (a, b) is one. 10-29: on the lion the air test also took ~17 %
+        of the new walls between material neighbours (the dimples between neighbouring surface balls), and the bottom
+        layer fell apart. self_contact 'compat': a new wall is contact when the pair's offset is not explained by the
+        deformation of either side from rest, max_k |x_j - x_i - F_k (X0_j - X0_i)| > sc_thr h (k = i, j; one side at a
+        time: the mean of the two F of a fold's sides collapses the offset; on the lion's frames the foreign walls,
+        >= 4 rest hops, 99 % above h, median 7 h; new walls of material neighbours, 1-2 hops, at most 2.4 h). A contact
+        wall never turns material while it lives (no adhesion). The first cut (no last one): every wall material"""
+        n = self.n
+        i, j = geo['i'], geo['j']
+        key = torch.minimum(i, j)*n+torch.maximum(i, j)
+        contact = torch.zeros(len(i), dtype=torch.bool, device=self.dev); born = torch.zeros_like(contact)
+        db = torch.zeros(len(i), dtype=f64, device=self.dev)                            # (each contact wall's overlap at its birth)
+        pv = self.sc_prev
+        if pv is not None:
+            pos = torch.searchsorted(pv['keys'], key).clamp(max=len(pv['keys'])-1)
+            found = pv['keys'][pos] == key
+            contact[found] = pv['contact'][pos[found]]; db[found] = pv['db'][pos[found]]
+            born = ~found
+            if self.sc == 'bond':
+                pass
+            elif self.sc == 'skin':                                                    # (the rest-skin rule: the pair alone decides,
+                pass                                                                   # every wall each step, below)
+            elif bool(born.any()) and self.sc == 'cap':                                 # (the user's rule, 10-29: outside a cap is
+                bi, bj = i[born], j[born]; xp, rp = pv['x'], pv['r']                    # air, so caps meeting never make a connection:
+                D = xp[bj]-xp[bi]; L2 = (D*D).sum(1)                                    # the two balls apart on the last cut. Or the
+                apart = L2.sqrt() >= rp[bi]+rp[bj]                                      # contact interface growing / sliding: the lens
+                q = xp[bi]+((L2+rp[bi]**2-rp[bj]**2)/(2*L2))[:, None]*D                 # point (equal power on the segment) owned on the
+                own = torch.empty(len(q), dtype=torch.long, device=self.dev)           # last cut by a third cell in contact with i or j)
+                for c0 in range(0, len(q), chunk):
+                    own[c0:c0+chunk] = (((q[c0:c0+chunk, None, :]-xp[None])**2).sum(2)-(rp**2)[None]).argmin(1)
+                ck = pv['keys'][pv['contact']]
+                inh = (torch.isin(torch.minimum(own, bi)*n+torch.maximum(own, bi), ck) | torch.isin(torch.minimum(own, bj)*n+torch.maximum(own, bj), ck)) & (own != bi) & (own != bj)
+                contact[born] = apart | inh
+                self.sc_stats_extra = dict(apart=int(apart.sum()), inherited=int((inh & ~apart).sum()))
+            elif bool(born.any()) and self.sc == 'compat':
+                bi, bj = i[born], j[born]
+                d0, dx = self.X0[bj]-self.X0[bi], x[bj]-x[bi]
+                mis = torch.maximum((dx-mv(F[bi], d0)).norm(dim=1), (dx-mv(F[bj], d0)).norm(dim=1))
+                contact[born] = mis > self.sc_thr*self.h_med
+            elif bool(born.any()):
+                bi, bj = i[born], j[born]
+                xp, rp = pv['x'], pv['r']
+                s_ = torch.arange(1, K+1, dtype=f64, device=self.dev)/(K+1)
+                pts = (xp[bi][:, None, :]+s_[None, :, None]*(xp[bj]-xp[bi])[:, None, :]).reshape(-1, 3)
+                own = torch.empty(len(pts), dtype=torch.long, device=self.dev); air = torch.empty(len(pts), dtype=torch.bool, device=self.dev)
+                for c0 in range(0, len(pts), chunk):                                   # (the owner: the least power distance;
+                    pw = ((pts[c0:c0+chunk, None, :]-xp[None])**2).sum(2)-(rp**2)[None]   # air where it is positive)
+                    m_, a_ = pw.min(1); own[c0:c0+chunk] = a_; air[c0:c0+chunk] = m_ > 0
+                seq = torch.cat([bi[:, None], own.view(-1, K), bj[:, None]], 1)
+                a, b = seq[:, :-1], seq[:, 1:]
+                z_, o_ = torch.zeros(len(bi), 1, dtype=f64, device=self.dev), torch.ones(len(bi), 1, dtype=f64, device=self.dev)
+                sv = torch.cat([z_, s_[None].expand(len(bi), K), o_], 1)[:, :-1]
+                P, D = xp[bi][:, None, :], (xp[bj]-xp[bi])[:, None, :]
+                Pa, Pb = xp[a], xp[b]                                                   # (pow_a = pow_b is linear in s)
+                c1 = 2*((Pb-Pa)*D).sum(2); c0_ = ((P-Pa)**2).sum(2)-((P-Pb)**2).sum(2)-rp[a]**2+rp[b]**2
+                q = P+torch.where(c1.abs() > 0, -c0_/c1, sv)[..., None]*D
+                air_x = (a != b) & ((((q-Pa)**2).sum(2)-rp[a]**2) > 0)
+                cross = torch.isin(torch.minimum(a, b)*n+torch.maximum(a, b), pv['keys'][pv['contact']]) & (a != b)
+                contact[born] = air.view(-1, K).any(1) | air_x.any(1) | cross.any(1)
+        if self.sc == 'bond':                                                          # (10-29: the bond family with visibility; the new
+            sel = born if pv is not None else torch.ones_like(contact)                # walls only, a function of the pair)
+            if bool(sel.any()):
+                bi, bj = i[sel], j[sel]
+                far = (self.X0[bj]-self.X0[bi]).norm(dim=1) > self.sc_thr*self.h_med
+                hid = self._rest_outside(bi, bj) > self.sc_eps*self.h_med
+                contact[sel] = (far | hid) & ~torch.isin(key[sel], self.sc_rest)
+        if self.sc == 'skin':                                                          # (10-29, the user's rest-surface rule: contact
+            contact = self.sc_skin[i] & self.sc_skin[j] & ~torch.isin(key, self.sc_near)   # = two pieces of the rest skin >= 3 steps
+        o = torch.argsort(key)                                                         # apart on it came together)
+        nb = born & contact
+        if bool(nb.any()):
+            db[nb] = (r[i[nb]]+r[j[nb]]-(x[j[nb]]-x[i[nb]]).norm(dim=1)).clamp(min=0.)
+        geo['sc_db'] = db
+        self.sc_prev = dict(x=x.clone(), r=r.clone(), keys=key[o], contact=contact[o], db=db[o])
+        self.sc_stats = dict(walls=len(i), contact=int(contact.sum()), born=int(born.sum()), born_contact=int((contact & born).sum()))
+        return contact
+
+    def _bond_family(self, delta, eps):
+        """the bond family (10-29; the peridynamic horizon with the meshless visibility criterion): the rest walls, plus
+        the pairs within delta h at rest whose rest segment stays in the body (no point more than eps h outside the rest
+        union of balls), as sorted keys min n + max; and the pairs outside it whose balls overlap at rest, with that
+        overlap (the contact counts from it)"""
+        n, X, r, h = self.n, self.X0, self.r0, self.h_med
+        G0, _ = self.recut.geometry(X, r); kp = G0.wall_A > 0
+        rest = torch.minimum(G0.i[kp], G0.j[kp])*n+torch.maximum(G0.i[kp], G0.j[kp])
+        A_, B_ = [], []
+        for c0 in range(0, n, 1024):
+            a, b = torch.nonzero(torch.cdist(X[c0:c0+1024], X) <= delta*h, as_tuple=True); a = a+c0
+            k = a < b; A_.append(a[k]); B_.append(b[k])
+        a, b = torch.cat(A_), torch.cat(B_)
+        vis = torch.cat([self._rest_outside(a[c0:c0+65536], b[c0:c0+65536]) for c0 in range(0, len(a), 65536)]) <= eps*h
+        bonds = torch.unique(torch.cat([a[vis]*n+b[vis], rest]))
+        key = a*n+b; ov = r[a]+r[b]-(X[b]-X[a]).norm(dim=1)
+        m = (ov > 0) & ~torch.isin(key, bonds)
+        o = torch.argsort(key[m])
+        return bonds, key[m][o], ov[m][o]
+
+    def _contact_pairs(self, x, r, ops):
+        """cut_bonds: the walls of the full recut at the step's start between cells outside each other's bond family (two
+        parts' caps meeting), as ops['sc'] for _sc (Hertz between their balls along the step's pair direction, from 0
+        when the caps first meet; less the rest overlap for pairs already so at rest: none, the rest walls are bonds)"""
+        n = self.n
+        Gf, _ = self.recut_full.geometry(x, r); kf = Gf.wall_A > 0
+        i, j = torch.minimum(Gf.i[kf], Gf.j[kf]), torch.maximum(Gf.i[kf], Gf.j[kf])
+        key = i*n+j; nb = ~torch.isin(key, self.bonds); i, j, key = i[nb], j[nb], key[nb]
+        d = x[j]-x[i]; L = d.norm(dim=1)
+        off = (r[i]+r[j]-L).clamp(min=0.)                                             # (a pair's first touch: its overlap now;
+        pv = getattr(self, 'cb_prev', None)                                            # one met before keeps its first touch's)
+        if pv is not None and len(pv[0]) and len(i):
+            pos = torch.searchsorted(pv[0], key).clamp(max=len(pv[0])-1)
+            f_ = pv[0][pos] == key; off[f_] = pv[1][pos[f_]]
+        o_ = torch.argsort(key); self.cb_prev = (key[o_], off[o_])
+        if len(i):
+            ops['sc'] = (i, j, d/L[:, None], r[i]+r[j]-off, self.E_sc*torch.sqrt(r[i]*r[j]/(r[i]+r[j])))
+        self.sc_keys_last = key
+        self.sc_stats = dict(walls=0, contact=len(i), born=0, born_contact=0)
+
+    def _rest_outside(self, a, b, K=16, chunk=1024):
+        """per pair (a, b) the largest distance outside the rest union of balls along the rest segment X0_a -> X0_b (the
+        visibility criterion; negative: the segment inside the body)"""
+        s_ = torch.linspace(0, 1, K+2, dtype=f64, device=self.dev)[1:-1]
+        P = (self.X0[a][:, None, :]+s_[None, :, None]*(self.X0[b]-self.X0[a])[:, None, :]).reshape(-1, 3)
+        d = torch.empty(len(P), dtype=f64, device=self.dev)
+        for c0 in range(0, len(P), chunk):
+            d[c0:c0+chunk] = (torch.cdist(P[c0:c0+chunk], self.X0)-self.r0[None]).min(1).values
+        return d.view(-1, K).max(1).values
+
+    def _sc(self, y, ops):
+        """self-contact (10-29): Hertz between the balls across each contact wall, along the pair's direction on the step's
+        cut n0 (fixed within the step, as the jump term's normal): overlap d = r_i + r_j - n0 . (y_j - y_i) with the step
+        start's radii, energy 8/15 E* sqrt(R) d^5/2 (E* = E / (2 (1 - nu^2)), R = r_i r_j / (r_i + r_j)); frictionless,
+        compression only, as the ground. Returns the energy, the gradient and the products' stiffness 2 E* sqrt(R) d^1/2"""
+        ci, cj, n0, rs, c = ops['sc']
+        dl = (rs-((y[cj]-y[ci])*n0).sum(1)).clamp(min=0.)
+        f = 4/3*c*dl**1.5
+        g = torch.zeros_like(y).index_add_(0, ci, f[:, None]*n0).index_add_(0, cj, -f[:, None]*n0)
+        return (8/15*c*dl**2.5).sum(), g, 2*c*dl.sqrt()
+
     def wall_jump(self, y, ops):
         """the jump term's energy per wall at y (as elastic() takes it) and the walls' keys min(i, j) n + max(i, j)"""
         F = self.def_grad(y, ops)
         i, j = ops['i'], ops['j']
         a = y[j]-y[i]
-        dl = a-.5*mv(F[i]+F[j], ops['b']); nc = a/a.norm(dim=1, keepdim=True)
+        dl = a-.5*mv(F[i]+F[j], ops['b']); nc = self._jn(y, ops)
         e = .5*ops['Kj']*(self.mu*(dl*dl).sum(1)+(self.lam+self.mu)*(dl*nc).sum(1)**2)
         return torch.minimum(i, j)*self.n+torch.maximum(i, j), e
 
@@ -872,16 +1068,21 @@ class ULModel:
         yg = torch.zeros_like(y)
         if self.jump:
             i, j, b, Kj = ops['i'], ops['j'], ops['b'], ops['Kj'][:, None]
-            a = y[j]-y[i]; la = a.norm(dim=1, keepdim=True); nc = a/la
+            a = y[j]-y[i]; la = a.norm(dim=1, keepdim=True); nc = a/la if self.jump_n == 'current' else self._jn(y, ops)
             dl = a-.5*mv(F[i]+F[j], b); sn = (dl*nc).sum(1, keepdim=True)
             e['jump'] = .5*float((Kj*(self.mu*(dl*dl).sum(1, keepdim=True)+(self.lam+self.mu)*sn**2)).sum())
             gd = Kj*(self.mu*dl+(self.lam+self.mu)*sn*nc); gn = Kj*(self.lam+self.mu)*sn*dl
-            tn = gn-nc*(nc*gn).sum(1, keepdim=True)
-            ga = gd+tn/la
+            if self.jump_n == 'current':
+                tn = gn-nc*(nc*gn).sum(1, keepdim=True)
+                ga = gd+tn/la
+            else:
+                tn, ga = None, gd
             PF = -.5*gd[:, :, None]*b[:, None, :]
             P = P.index_add(0, i, PF).index_add_(0, j, PF)
             yg.index_add_(0, j, ga).index_add_(0, i, -ga)
             st.update(nc=nc, la=la, dl=dl, sn=sn, gn=gn, tn=tn)
+        if 'sc' in ops:
+            E_, g_, st['ksc'] = self._sc(y, ops); e['selfc'] = float(E_); yg = yg+g_
         if self.tet_w > 0 or self.wall_w > 0 or self.cellhg_w > 0:                                           # (autograd: their products by one
             with torch.enable_grad():                                                   # backward through the retained gradient
                 yt = y.detach().requires_grad_(True)                                    # graph)
@@ -895,9 +1096,31 @@ class ULModel:
                 gt, = torch.autograd.grad(Ea, yt, create_graph=True)
             st['ag'] = (gt, yt)
             yg = yg+gt.detach()
+        Parg = P if ops['total'] else mm(P, ops['F0'].transpose(1, 2))
+        if 'visc' in ops:
+            Uv, Pv = self.visc_terms(Gc, ops)
+            e['visc'] = float(Uv)
+            st['visc_grad'] = self.kin_T(Pv, ops)
+            Parg = Parg+Pv
         st['e'] = e
-        st['grad'] = self.kin_T(P if ops['total'] else mm(P, ops['F0'].transpose(1, 2)), ops)+yg
+        st['grad'] = self.kin_T(Parg, ops)+yg
         return st
+
+    def visc_terms(self, Gc, ops):
+        """Kelvin-Voigt (10-29; the DEM's definition: eta = beta mu, zeta = beta (lam + 2 mu / 3)) in the step's incremental
+        potential: dt V_n [eta |dev d|^2 + zeta / 2 (tr d)^2], d = sym(dG) / dt the rate of deformation of the step's
+        increment dG = (F - F_n) F_n^-1 (f_mode 'increment': the kinematic map's own increment), V_n = V0 det F_n. Quadratic in
+        the positions, zero for a rigid rotation to first order. Returns the potential and dU / d(kinematic map's G)"""
+        vs = ops['visc']; dt, Vn = vs['dt'], vs['Vn']
+        dG = Gc if not ops['total'] else (Gc+ops.get('F_off', 0.)-vs['Fn'])@vs['Fni']
+        D = .5*(dG+dG.transpose(1, 2)); tr = D.diagonal(dim1=1, dim2=2).sum(1)
+        dev = D-tr[:, None, None]/3*self.I3
+        eta, zeta = self.beta*self.mu, self.beta*(self.lam+2*self.mu/3)
+        Uv = ((Vn/dt)*(eta*(dev*dev).sum((1, 2))+.5*zeta*tr*tr)).sum()
+        Pv = (Vn/dt)[:, None, None]*(2*eta*dev+zeta*tr[:, None, None]*self.I3)
+        if ops['total']:
+            Pv = Pv@vs['Fni'].transpose(1, 2)
+        return Uv, Pv
 
     def hvp(self, st, d, ops):
         """the elastic energy's Hessian at the state st times d (n, 3)"""
@@ -919,41 +1142,104 @@ class ULModel:
             dot = lambda p, q: (p*q).sum(1, keepdim=True)
             da = d[j]-d[i]
             ddl = da-.5*mv(dF[i]+dF[j], b)
-            dnc = (da-nc*dot(nc, da))/la
-            ds = dot(ddl, nc)+dot(dl, dnc)
-            dgd = Kj*(self.mu*ddl+(self.lam+self.mu)*(ds*nc+sn*dnc))
-            dgn = Kj*(self.lam+self.mu)*(ds*dl+sn*ddl)
-            dga = dgd+(dgn-dnc*dot(nc, gn)-nc*dot(dnc, gn)-nc*dot(nc, dgn))/la-tn*dot(nc, da)/la**2
+            if self.jump_n == 'current':
+                dnc = (da-nc*dot(nc, da))/la
+                ds = dot(ddl, nc)+dot(dl, dnc)
+                dgd = Kj*(self.mu*ddl+(self.lam+self.mu)*(ds*nc+sn*dnc))
+                dgn = Kj*(self.lam+self.mu)*(ds*dl+sn*ddl)
+                dga = dgd+(dgn-dnc*dot(nc, gn)-nc*dot(dnc, gn)-nc*dot(nc, dgn))/la-tn*dot(nc, da)/la**2
+            else:
+                dgd = Kj*(self.mu*ddl+(self.lam+self.mu)*dot(ddl, nc)*nc); dga = dgd
             dPF = -.5*dgd[:, :, None]*b[:, None, :]
             dP = dP.index_add(0, i, dPF).index_add_(0, j, dPF)
             dy.index_add_(0, j, dga).index_add_(0, i, -dga)
+        if 'sc' in ops:
+            ci, cj, n0 = ops['sc'][:3]
+            q = st['ksc']*((d[cj]-d[ci])*n0).sum(1)
+            dy.index_add_(0, cj, q[:, None]*n0).index_add_(0, ci, -q[:, None]*n0)
         if 'ag' in st:
             dy = dy+torch.autograd.grad(st['ag'][0], st['ag'][1], d, retain_graph=True)[0]
-        return self.kin_T(dP if ops['total'] else mm(dP, ops['F0'].transpose(1, 2)), ops)+dy
+        dParg = dP if ops['total'] else mm(dP, ops['F0'].transpose(1, 2))
+        if 'visc' in ops:
+            g_ = self.kin(d, ops)
+            if ops['total']:
+                g_ = g_+ops['visc']['Fn']                                            # (visc_terms subtracts F_n: the product's increment)
+                g_ = g_-ops.get('F_off', 0.)
+            dParg = dParg+self.visc_terms(g_, ops)[1]
+        return self.kin_T(dParg, ops)+dy
+
+    def block_precond(self, x, F, ops, dt, mass):
+        """per site the 3 x 3 diagonal block of the step's Hessian at its start (10-29, the CG's preconditioner): mass (per
+        site, already / dt^2) times I; the cells' neo-Hookean term (f_mode 'increment', onestep: cell c's increment is
+        G_c = sum over its pairs (v_O - v_S) (x) R, a tiny cell's its neighbours' V0-weighted mean, so site a enters it as
+        dG_c = dv_a (x) g_ca and dF = dv_a (x) h, h = F0^T g_ca: the block is V0 [mu |h|^2 I + (mu + lam - lam ln J) u u^T],
+        u = F^-T h, the coefficient clamped at 0); the viscous term's (Vn / dt) [eta |g|^2 I + (eta / 3 + zeta) g g^T]; the
+        jump term's direct part K (mu I + (lam + mu) n n^T) at each wall end. Left out: the stabilisation and the jump
+        term's dependence through F (a preconditioner only; block_check in tmp compares with the probed blocks)"""
+        assert ops.get('onestep') and not ops.get('onestepT') and not ops['total'], 'block_precond: f_mode increment, onestep only'
+        n, f64_, dev = self.n, x.dtype, x.device
+        S, O, R = ops['KS'], ops['KO'], ops['R']
+        cell, site, g = torch.cat([S, S]), torch.cat([O, S]), torch.cat([R, -R])
+        if 'agg' in ops:                                                               # (the tiny cells' entries: their
+            as_, ao_, aw, used = ops['agg']                                            # neighbours', re-labelled and weighted)
+            o = torch.argsort(cell); cell, site, g = cell[o], site[o], g[o]
+            cnt = torch.bincount(cell, minlength=n); off = torch.cumsum(cnt, 0)-cnt
+            rep = cnt[ao_]; tot = int(rep.sum())
+            start = torch.repeat_interleave(torch.cumsum(rep, 0)-rep, rep)
+            idx = torch.repeat_interleave(off[ao_], rep)+torch.arange(tot, device=dev)-start
+            keep = ~used[cell]
+            cell = torch.cat([cell[keep], torch.repeat_interleave(as_, rep)]); site = torch.cat([site[keep], site[idx]])
+            g = torch.cat([g[keep], g[idx]*torch.repeat_interleave(aw, rep)[:, None]])
+        key, inv = torch.unique(cell*n+site, return_inverse=True)                     # (a site in a cell once: its g summed)
+        g = torch.zeros(len(key), 3, dtype=f64_, device=dev).index_add_(0, inv, g); cell, site = key//n, key % n
+        I3 = self.I3
+        F0 = ops['F0']; FiT = torch.linalg.inv(F0).transpose(1, 2); lnJ = torch.log(torch.linalg.det(F0))
+        h = torch.einsum('emk,em->ek', F0[cell], g); u = torch.einsum('eij,ej->ei', FiT[cell], h)
+        co = (self.mu+self.lam-self.lam*lnJ).clamp(min=0.)[cell]
+        blk = (self.cell_w*self.V0[cell])[:, None, None]*(self.mu*(h*h).sum(1)[:, None, None]*I3+co[:, None, None]*u[:, :, None]*u[:, None, :])
+        if 'visc' in ops:
+            eta, zeta = self.beta*self.mu, self.beta*(self.lam+2*self.mu/3)
+            Vn = ops['visc']['Vn'][cell]/dt
+            blk = blk+Vn[:, None, None]*(eta*(g*g).sum(1)[:, None, None]*I3+(eta/3+zeta)*g[:, :, None]*g[:, None, :])
+        B = torch.zeros(n, 3, 3, dtype=f64_, device=dev).index_add_(0, site, blk)+mass[:, None, None]*I3
+        if self.jump:
+            i, j = ops['i'], ops['j']
+            nc = (x[j]-x[i])/(x[j]-x[i]).norm(dim=1, keepdim=True)
+            bj = ops['Kj'][:, None, None]*(self.mu*I3+(self.lam+self.mu)*nc[:, :, None]*nc[:, None, :])
+            B = B.index_add(0, i, bj).index_add_(0, j, bj)
+        if len(self.deg_cells):
+            B = torch.cat([B, ((self.lam+2*self.mu)*self.V0[self.deg_cells])[:, None, None]*I3])
+        return B
 
     # ---- the step's solve: trust-region Newton-CG (Steihaug-Toint, as skin_solve.SkinSolver), the region in the norm of
-    # a diagonal preconditioner per site (mass / dt^2 plus the stiffness scale (lam + 2 mu) sum_walls A / l)
+    # a preconditioner per site: diagonal (mass / dt^2 plus the stiffness scale (lam + 2 mu) sum_walls A / l, times
+    # 1 + beta / dt with precond 'visc') or the 3 x 3 diagonal blocks of the step's Hessian (precond 'block', 10-29)
     def tr_newton(self, eg, hvp, y, dg, ref, noise, tol=1e-9, maxit=5000):
         """minimises Pi from y (eg(y): Pi, its gradient (None where Pi is infinite) and what hvp(aux, d) needs); stops at
         |dPi/dy| <= tol ref, or at the energy's rounding: noise (a step whose predicted decrease is below it is accepted
         when the gradient shrinks, else the solve ends there). The inner CG stops at min(0.01, res) times the residual
         (quadratic outer convergence). The region starts at the larger of twice the last call's largest accepted step
         and the preconditioned gradient's length. Returns y, Pi(y), stats"""
-        stats = dict(products=0, outer=0, rejected=0, negative=0, floor=False)
+        stats = dict(products=0, outer=0, rejected=0, negative=0, floor=False, t_hvp=0., t_eg=0., inf=0, edge=0)
+        if dg.dim() == 1:
+            prec = lambda r: r/dg[:, None]
+        else:
+            Bi = torch.linalg.inv(dg); prec = lambda r: torch.einsum('nij,nj->ni', Bi, r)
         e0, g, aux = eg(y); yg = y
         if g is None:
             raise RuntimeError('tr_newton: the start has no finite energy')
         res = float(g.norm())/ref
-        delta = max(getattr(self, 'delta', 0.), float((g.detach()**2/dg[:, None]).sum())**.5)
+        delta = max(getattr(self, 'delta', 0.), float((g.detach()*prec(g.detach())).sum())**.5)
         big = 0.
         while res > tol and stats['products'] < maxit:
             stats['outer'] += 1
-            r_ = -g.detach(); z = r_/dg[:, None]; d = z.clone(); rz = float((r_*z).sum())
+            r_ = -g.detach(); z = prec(r_); d = z.clone(); rz = float((r_*z).sum())
             p = torch.zeros_like(r_); Hp = torch.zeros_like(r_); pMp, pMd, dMd = 0., 0., rz
             edge = False; stop = max(tol, min(.01, res)*res)*ref
             while True:                                                           # Steihaug-Toint CG
+                t_ = time.perf_counter()
                 Hd = hvp(aux, d); stats['products'] += 1
-                dHd = float((d*Hd).sum())
+                dHd = float((d*Hd).sum()); stats['t_hvp'] += time.perf_counter()-t_
                 to_edge = lambda: (-pMd+(pMd**2+dMd*(delta**2-pMp))**.5)/dMd
                 if dHd <= 0:
                     tau = to_edge(); p, Hp = p+tau*d, Hp+tau*Hd; edge = True; stats['negative'] += 1; break
@@ -961,12 +1247,14 @@ class ULModel:
                 if pMp+2*al*pMd+al**2*dMd >= delta**2:
                     tau = to_edge(); p, Hp = p+tau*d, Hp+tau*Hd; edge = True; break
                 p = p+al*d; Hp = Hp+al*Hd; pMp = pMp+2*al*pMd+al**2*dMd
-                r_ = r_-al*Hd; z = r_/dg[:, None]; rz1 = float((r_*z).sum())
+                r_ = r_-al*Hd; z = prec(r_); rz1 = float((r_*z).sum())
                 if float(r_.norm()) <= stop or stats['products'] >= maxit:
                     break
                 be = rz1/rz; pMd = be*(pMd+al*dMd); dMd = rz1+be**2*dMd; d = z+be*d; rz = rz1
             pred = -float((g.detach()*p).sum()+.5*(p*Hp).sum())
-            yg1 = yg+p; e1, g1, aux1 = eg(yg1)
+            t_ = time.perf_counter()
+            yg1 = yg+p; e1, g1, aux1 = eg(yg1); stats['t_eg'] += time.perf_counter()-t_
+            stats['inf'] += g1 is None; stats['edge'] += edge
             pM = delta if edge else pMp**.5
             if pred <= noise:                                                     # below the energy's rounding
                 if g1 is not None and float(g1.norm()) < res*ref:
@@ -1016,7 +1304,13 @@ class ULModel:
         tm = {}; t0 = clock()
         GS = st['GS'] if 'GS' in st else self.recut.geometry(x, r)
         geo = self.geometry(x, r, GS)
+        if self.sc:
+            geo['contact'] = self.classify_walls(x, r, geo, F)
         ops = self.operators(x, F, geo, self.pair_refs(x, F, r, geo) if self.f_mode == 'total' else None)
+        if self.beta > 0:
+            ops['visc'] = dict(dt=dt, Vn=self.V0*torch.linalg.det(F), Fn=F, Fni=torch.linalg.inv(F))
+        if self.cut_bonds:
+            self._contact_pairs(x, r, ops)
         tm['operators'] = clock()-t0; t0 = clock()
         gv = torch.zeros(3, dtype=f64, device=self.dev) if grav is None else torch.as_tensor(grav, dtype=f64, device=self.dev)
         mdt = ext(self.m[:, None]/(2*dt*dt), torch.zeros(nr, 1, dtype=f64, device=self.dev)); xp = ext(x+dt*v, cols)
@@ -1046,10 +1340,20 @@ class ULModel:
             return e
         w = geo['A']/(x[geo['j']]-x[geo['i']]).norm(dim=1)
         k = torch.zeros(self.n, dtype=f64, device=self.dev).index_add_(0, geo['i'], w).index_add_(0, geo['j'], w)
-        dg = ext((self.mdiag if cons else self.m)/dt**2+(self.lam+2*self.mu)*k, (self.lam+2*self.mu)*self.V0[self.deg_cells])
+        if self.precond == 'block':
+            dg = self.block_precond(x, F, ops, dt, (self.mdiag if cons else self.m)/dt**2)
+        else:
+            sk = 1+self.beta/dt if self.precond == 'visc' else 1.                         # (the viscous term: beta / dt times the
+            dg = ext((self.mdiag if cons else self.m)/dt**2+(self.lam+2*self.mu)*sk*k,    # small-strain elastic Hessian)
+                     (self.lam+2*self.mu)*self.V0[self.deg_cells])
         y0 = ext(x+dt*v+dt*dt*gv, cols)
         if ground is not None:
-            dg = dg.index_add(0, cb, contact(y0)[2])
+            kc0 = contact(y0)[2]
+            dg = dg.index_add(0, cb, kc0) if dg.dim() == 1 else dg.index_add(0, cb, kc0[:, None, None]*torch.outer(gn, gn))
+        if 'sc' in ops:                                                                # (self-contact: its normal stiffness, as the ground's)
+            ci, cj, n0 = ops['sc'][:3]; ks0 = self._sc(y0, ops)[2]
+            for s_ in (ci, cj):
+                dg = dg.index_add(0, s_, ks0) if dg.dim() == 1 else dg.index_add(0, s_, ks0[:, None, None]*n0[:, :, None]*n0[:, None, :])
         if not math.isfinite(float(Pi(y0))):
             y0 = ext(x, cols)
         e_start, _ = self.elastic(ext(x, cols), ops, terms=True)
@@ -1098,6 +1402,9 @@ class ULModel:
             if gf is None or not analytic:
                 raise RuntimeError('account: the end has no finite energy (or the autograd path)')
             gW = gf-inert(Y-xp)[1]+mg*gv
+            if 'visc' in ops:
+                sY = self.state(Y, ops)
+                gW = gW-sY['visc_grad']; acct['DV'] = 2*sY['e']['visc']                    # (quadratic in Y - X: grad . (Y - X) = 2 U)
             acct.update(wall_end=self.wall_jump(Y, ops), U1={k_: float(v_) for k_, v_ in e_end.items()},
                         K1=self.kinetic((Y[:self.n]-x)/dt), P1=-float((mg*gv*Y).sum()),
                         DK=self.kinetic((Y[:self.n]-x)/dt-v), res=float((gf*(Y-X0e)).sum()))
@@ -1137,6 +1444,12 @@ class ULModel:
             dl = (Rb-(y[cb]@gn-gc)).clamp(min=0.)
             rep['ground'] = dict(force=float((4/3*cR*dl**1.5).sum()), touching=int((dl > 0).sum()), overlap=float((dl/Rb).max()),
                                  energy=float((8/15*cR*dl**2.5).sum()), balls=len(cb))
+        if self.sc or self.cut_bonds:
+            rep['sc'] = dict(self.sc_stats, overlap=0., energy=0.)
+            if 'sc' in ops:
+                ci, cj, n0, rs, c_ = ops['sc']
+                dl_ = (rs-((y[cj]-y[ci])*n0).sum(1)).clamp(min=0.)
+                rep['sc'].update(overlap=float((dl_/torch.minimum(r[ci], r[cj])).max()), energy=float((8/15*c_*dl_**2.5).sum()))
         if tet_min is not None:
             rep['tet_minJ'] = tet_min
         if wall_min is not None:

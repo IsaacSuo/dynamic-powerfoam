@@ -250,6 +250,8 @@ class AlphaComplex:
         L = d.norm(dim=1)
         h = (L*L+r[i]**2-r[j]**2)/(2*L)
         keep = (h < r[i]) & (L > 0)
+        if getattr(self, 'allow', None) is not None:                                  # (10-29 cut_bonds: the bond family's planes only)
+            keep = keep & torch.isin(torch.minimum(i, j)*n+torch.maximum(i, j), self.allow)
         i, j, d, L, h = i[keep], j[keep], d[keep], L[keep], h[keep]
         o = torch.argsort(h, stable=True); o = o[torch.argsort(i[o], stable=True)]
         i, j, nn, h = i[o], j[o], (d/L[:, None])[o], h[o]
