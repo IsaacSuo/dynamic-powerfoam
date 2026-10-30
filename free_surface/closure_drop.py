@@ -132,16 +132,7 @@ def main():
     order = torch.argsort(ends, stable=True); wid_s = wid[order]
     woff = torch.zeros(n+1, dtype=torch.long, device=dev); woff[1:] = torch.cumsum(torch.bincount(ends, minlength=n), 0)
     import warp as wp
-    LUt = wp.to_torch(W.B['J'], requires_grad=False).view(n, 9, 9)               # (k_closure keeps its LU factors there:
-    perm_t = wp.to_torch(W.B['perm'], requires_grad=False).long()                 # the Jacobian is P^T L U)
-
-    class _J:
-        def __getitem__(self, B):
-            LU = LUt[B]; L = torch.tril(LU, -1)+torch.eye(9, dtype=f64, device=dev); U = torch.triu(LU)
-            PA = L@U
-            A = torch.empty_like(PA); A.scatter_(1, perm_t[B][:, :, None].expand(-1, -1, 9), PA)
-            return A
-    Jtor = _J()
+    Jtor = wp.to_torch(W.B['Jr'], requires_grad=False).view(n, 9, 9)              # (k_closure keeps the Jacobian there)
 
     def gap_vectors(cs):
         """d g_c / dx for contact cells cs at the last grad call: n e_B + d(n . F_B w)/dx, F_B's change through the

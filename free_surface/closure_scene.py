@@ -24,7 +24,7 @@ import warp as wp
 from free_surface import identify as idf                                       # (its import puts the renderer's code on the path)
 from experiments.pacnerf_dem_forward import build                               # noqa: E402
 from free_surface.closure_drop import colouring, probe_blocks                   # noqa: E402
-from free_surface.closure_warp import ClosureCG, ClosureWarp, MidpointStep      # noqa: E402
+from free_surface.closure_warp import ClosureWarp, MidpointStep, TrustCG        # noqa: E402
 from free_surface.sphere_closure import ClosureTerms                            # noqa: E402
 
 f64, dev = torch.float64, 'cuda'
@@ -63,20 +63,22 @@ class Scene:
         Kbb = probe_blocks(W, self.X, self.color)
         self.probed = (th[0], th[1])
         W.tball[0], W.tball[1] = 2., .5                                            # (the step's end: 2 z - x_n, weight 1/2)
-        self.CG = ClosureCG(W, self.mass, a.dt, per=a.cg_check, product_iters=1)
+        self.CG = TrustCG(W, self.mass, a.dt, per=a.cg_check, product_iters=1)
         self.ST = MidpointStep(W, self.CG, self.mass, Kbb, self.fg, a.dt, math.exp(th[6]))
         tb = time.time()-t0
-        model, data = rd.load(rd.RUN)                                              # (identify.Problem's)
-        src = torch.as_tensor(cells['source_index'], device=model.device)
-        with torch.no_grad():
-            for name in rd.NAMES:
-                setattr(model, name, torch.nn.Parameter(getattr(model, name).data[src].clone()))
-            model.rebuild_adjacency()
-        self.model, self.up = model, rd.Update(model)
-        assert float((self.up.p0.double()-self.X).abs().max()) < 1e-6, 'the DEM cells are not the foam\'s sites'
-        self.cams = [idf.ss_camera(data.cameras[v], a.ss) for v in a.fit+a.held]
-        self._base_cams = {v: data.cameras[v] for v in a.fit+a.held}
-        self.nfit = len(a.fit)
+        self.render = getattr(a, 'render', True)                                  # (False: no renderer, no features; e.g.
+        self.nfit = len(a.fit)                                                     # another foam than rd.RUN's)
+        if self.render:
+            model, data = rd.load(rd.RUN)                                          # (identify.Problem's)
+            src = torch.as_tensor(cells['source_index'], device=model.device)
+            with torch.no_grad():
+                for name in rd.NAMES:
+                    setattr(model, name, torch.nn.Parameter(getattr(model, name).data[src].clone()))
+                model.rebuild_adjacency()
+            self.model, self.up = model, rd.Update(model)
+            assert float((self.up.p0.double()-self.X).abs().max()) < 1e-6, 'the DEM cells are not the foam\'s sites'
+            self.cams = [idf.ss_camera(data.cameras[v], a.ss) for v in a.fit+a.held]
+            self._base_cams = {v: data.cameras[v] for v in a.fit+a.held}
         self.steps = int(round(a.frames/24/a.dt)); self.every = int(round(1/(24*a.dt)))
         assert abs(self.every*a.dt*24-1) < 1e-9
         wp.set_stream(self.wstream)
@@ -84,8 +86,8 @@ class Scene:
             W.n, len(cbody), a.ground, tb, self.steps, a.frames, self.nfit, len(a.held), a.ss, a.ss), flush=True)
 
     @torch.no_grad()
-    def features(self, x, F):
-        self.up.apply(x.float(), F.float())
+    def features(self, x, F, radii=None):
+        self.up.apply(x.float(), F.float(), radii)
         f = torch.stack([idf.moments(rd.render(self.model, c)[1].reshape(c.height, c.width).double(), self.args.ss) for c in self.cams])
         wp.set_stream(self.wstream)                                                # (the rasterizer sets its own; identify.features)
         return f
@@ -117,57 +119,63 @@ class Scene:
             x = ST.tx.clone()
             W.grad(x); F = W.tF.clone()
             self.states.append((x, F))
-            torch.cuda.synchronize(); t1 = time.time()
-            fs.append(self.features(x, F))
-            torch.cuda.synchronize(); tr += time.time()-t1
+            if self.render:
+                torch.cuda.synchronize(); t1 = time.time()
+                fs.append(self.features(x, F))
+                torch.cuda.synchronize(); tr += time.time()-t1
             if verbose:
                 print('  frame %d (t %.3f s): com y %.4f m, balls touching %d, min J %.3f' % (s//self.every, s*a.dt, float((self.mass[:, None]*x).sum(0)[1]/self.mass.sum()),
                                                                                           int((W.tbdelta > 0).sum()), math.exp(float(W.tlj.min()))), flush=True)
-        return torch.stack(fs), dict(seconds=time.time()-t0-tr, render=tr, products=prods, newton_max=newton)
+        return (torch.stack(fs) if fs else None), dict(seconds=time.time()-t0-tr, render=tr, products=prods, newton_max=newton)
 
     @torch.no_grad()
     def show(self, cams, photos, crop, path):
         """the last run's frames (self.states) against the real photos; cams: renderer camera indices, photos(c, k) ->
-        the real image (H, W, 3) in [0, 1] (k -1: the background), crop[c] = (x0, y0, size)"""
+        the real image (H, W, 3) in [0, 1] (k -1: the background), crop[c] = (x0, y0, size). Per camera three rows: the
+        photo with the rendered silhouettes' outlines (red: the radii r0 det(F_B)^(1/3), PowerSim's; blue: the rest
+        radii r0), the render with the scaled radii over the real background, the same with the rest radii"""
         from PIL import Image, ImageDraw
         nk = len(self.states)
+        rules = (('scaled', None, (1., 0., 0.)), ('rest', self.up.r0, (0., .3, 1.)))
         tiles = []
         for c in cams:
             bg = torch.as_tensor(photos(c, -1), device=dev, dtype=torch.float32)
             x0, y0, sz = crop[c]
-            rows = [[], []]
+            rows = [[], [], []]
             for k, (x, F) in enumerate(self.states):
-                self.up.apply(x.float(), F.float())
-                c1 = self._base_cams[c]
-                rgb, al = rd.render(self.model, c1)
-                H, Wd = c1.height, c1.width
-                rgb, al = rgb.reshape(H, Wd, 3).float(), al.reshape(H, Wd, 1).float()
-                over = (rgb+(1-al)*bg).clamp(0, 1)
-                ph = torch.as_tensor(photos(c, k), device=dev, dtype=torch.float32)
-                m = (al[..., 0] > .5)
-                er = m.clone()
-                er[1:-1, 1:-1] = m[1:-1, 1:-1] & m[:-2, 1:-1] & m[2:, 1:-1] & m[1:-1, :-2] & m[1:-1, 2:]
-                edge = m & ~er
-                out = ph.clone(); out[edge] = torch.tensor([1., 0., 0.], device=dev)
-                rows[0].append(out[y0:y0+sz, x0:x0+sz].cpu().numpy()); rows[1].append(over[y0:y0+sz, x0:x0+sz].cpu().numpy())
+                out = torch.as_tensor(photos(c, k), device=dev, dtype=torch.float32)
+                for j, (_, rr, col) in enumerate(rules):
+                    self.up.apply(x.float(), F.float(), rr)
+                    c1 = self._base_cams[c]
+                    rgb, al = rd.render(self.model, c1)
+                    H, Wd = c1.height, c1.width
+                    rgb, al = rgb.reshape(H, Wd, 3).float(), al.reshape(H, Wd, 1).float()
+                    rows[1+j].append((rgb+(1-al)*bg).clamp(0, 1)[y0:y0+sz, x0:x0+sz].cpu().numpy())
+                    m = (al[..., 0] > .5)
+                    er = m.clone()
+                    er[1:-1, 1:-1] = m[1:-1, 1:-1] & m[:-2, 1:-1] & m[2:, 1:-1] & m[1:-1, :-2] & m[1:-1, 2:]
+                    out[m & ~er] = torch.tensor(col, device=dev)
+                rows[0].append(out[y0:y0+sz, x0:x0+sz].cpu().numpy())
             tiles.append((c, rows))
             wp.set_stream(self.wstream)
         sz = max(t_[1][0][0].shape[0] for t_ in tiles)
-        head, lab = 16, 70
-        img = np.ones((head+len(tiles)*2*sz, lab+nk*sz, 3))
+        head, lab, nr = 16, 70, 3
+        img = np.ones((head+len(tiles)*nr*sz, lab+nk*sz, 3))
         for i, (c, rows) in enumerate(tiles):
-            for r_ in range(2):
+            for r_ in range(nr):
                 for k in range(nk):
                     t_ = rows[r_][k]
-                    y = head+(2*i+r_)*sz
+                    y = head+(nr*i+r_)*sz
                     img[y:y+t_.shape[0], lab+k*sz:lab+k*sz+t_.shape[1]] = t_
         im = Image.fromarray((img*255).astype(np.uint8))
         d = ImageDraw.Draw(im)
         for k in range(nk):
             d.text((lab+k*sz+3, 2), 'frame %d (%.3f s)' % (k, k/24), fill=(0, 0, 0))
         for i, (c, _) in enumerate(tiles):
-            d.text((2, head+2*i*sz+4), 'camera %d\nphoto +\nours (red)' % c, fill=(0, 0, 0))
-            d.text((2, head+(2*i+1)*sz+4), 'camera %d\nours on the\nbackground' % c, fill=(0, 0, 0))
+            y = head+nr*i*sz
+            d.text((2, y+4), 'camera %d\nphoto;\nred: r0 J^1/3\nblue: r0' % c, fill=(0, 0, 0))
+            d.text((2, y+sz+4), 'camera %d\nours, radii\nr0 J^1/3' % c, fill=(0, 0, 0))
+            d.text((2, y+2*sz+4), 'camera %d\nours, radii\nr0 (rest)' % c, fill=(0, 0, 0))
         im.save(path)
         print('wrote %s' % path, flush=True)
 
@@ -356,6 +364,13 @@ def main():
             x0 = int(round(.5*(cx.max()+cx.min())-sz/2)); y0 = int(round(.5*(cy.max()+cy.min())-sz/2))
             crop[c] = (max(x0, 0), max(y0, 0), sz)
         S.show(cams, photos, crop, args.out/'identify'/('%s_show.png' % args.tag))
+        fr = np.stack([S.features(x_, F_, S.up.r0).cpu().numpy() for x_, F_ in S.states[1:]])
+        print('signed mean over the fit views, rendered - observed (px): radii r0 det(F)^(1/3) | rest radii r0', flush=True)
+        for k in range(len(d)):
+            a_, b_ = d[k, :nf].mean(0), (fr[k]-f_obs[k])[:nf].mean(0)
+            print('  frame %2d: cy %+6.2f wx %+6.2f wy %+6.2f sqrtA %+6.2f | cy %+6.2f wx %+6.2f wy %+6.2f sqrtA %+6.2f' % ((k+1,)+tuple(a_[1:])+tuple(b_[1:])), flush=True)
+        dr = fr-f_obs
+        print('RMS all fit features: scaled radii %.3f px, rest radii %.3f px; held view %.3f / %.3f px' % (rms(d[:, :nf]), rms(dr[:, :nf]), rms(d[:, nf:]), rms(dr[:, nf:])), flush=True)
 
 
 if __name__ == '__main__':

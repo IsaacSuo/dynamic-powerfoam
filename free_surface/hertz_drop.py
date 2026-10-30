@@ -11,6 +11,9 @@ y = 0, gravity -y, Kelvin-Voigt beta, implicit midpoint dt 1/1200, tol 1e-3 of |
            evaluation), block-Jacobi P = R K_bb R^T (1 + 2 beta / dt) + 4 m / dt^2 + the touching balls' 2 k_n n n^T
            (k_n = 2 E* (R delta)^1/2) and the glued ones' 2 k_t (I - n n^T); Armijo backtracking, the accepted trial's
            gradient reused. No energy record (user: speed first).
+  scene    (10-27, the lion) --up the up axis (gravity along -up), --ground the plane's height along it with the body left
+           where its foam puts it (default: the plane at 0 and the lowest ball point --height above it), --v0 the
+           initial velocity
   PYTHONPATH=<main repo>:<worktree> python free_surface/hertz_drop.py [--mu 0.3]"""
 import argparse
 import math
@@ -22,7 +25,7 @@ import torch
 
 from experiments.pacnerf_dem_forward import build
 from free_surface.closure_drop import colouring, probe_blocks
-from free_surface.closure_warp import ClosureCG, ClosureWarp, MidpointStep
+from free_surface.closure_warp import ClosureCG, ClosureWarp, MidpointStep, TrustCG
 from free_surface.sphere_closure import ClosureTerms
 
 f64, dev = torch.float64, 'cuda'
@@ -49,6 +52,9 @@ def main():
     a_.add_argument('--E', type=float, default=23008.38)
     a_.add_argument('--nu', type=float, default=.3008)
     a_.add_argument('--tag', default='hertz_drop')
+    a_.add_argument('--up', type=int, default=1, help='the up axis (0 x, 1 y, 2 z)')
+    a_.add_argument('--ground', type=float, default=None, help='the plane at this height along up, the body as its foam has it')
+    a_.add_argument('--v0', type=float, nargs=3, default=[0., 0., 0.])
     args = a_.parse_args()
     cells = np.load(args.out/'dem_exact_single'/'cells.npz')
     g = dict(np.load(args.out/'dem_exact_single'/'geometry.npz'))
@@ -65,22 +71,29 @@ def main():
     boc = torch.as_tensor(np.asarray(g['body_of_cell']), device=dev).long()
     site = torch.as_tensor(bsk['patch_site'], device=dev).long()
     cbody = boc[site]; Rb = torch.as_tensor(r, dtype=f64, device=dev)[site]
-    W.set_ball(cbody, Rb, (0., 1., 0.), 0., args.mu)
+    upt = tuple(1. if k == args.up else 0. for k in range(3)); c0 = 0. if args.ground is None else args.ground
+    W.set_ball(cbody, Rb, upt, c0, args.mu)
     W.prepare()
     n = W.n; X = st.X
     mass = m.mass.to(f64); M3 = mass[:, None]; Mtot = float(mass.sum())
-    up = torch.tensor([0., 1., 0.], dtype=f64, device=dev); I3 = torch.eye(3, dtype=f64, device=dev); Pt = I3-up[:, None]*up[None, :]
+    up = torch.tensor(upt, dtype=f64, device=dev); I3 = torch.eye(3, dtype=f64, device=dev); Pt = I3-up[:, None]*up[None, :]
     nn_ = up[:, None]*up[None, :]
     fg = -9.8*M3*up; ref = float(fg.norm())
     low = float(((X[cbody]*up).sum(1)-Rb).min())
-    x = X+(args.height-low)*up; v = torch.zeros_like(x)
+    x = X+(args.height-low)*up if args.ground is None else X.clone()
+    v = torch.tensor(args.v0, dtype=f64, device=dev).expand_as(x).clone()
+    print('the lowest ball point %.4f m above the plane' % (float(((x[cbody]*up).sum(1)-Rb).min())-c0), flush=True)
     color = colouring(st.i.cpu().numpy(), st.j.cpu().numpy(), n)
     Kbb = probe_blocks(W, x, color)
     if args.beta > 0:
         W.visc_ref(x)
     W.tball[0], W.tball[1] = 2., .5                                              # the step's end: 2 z - x_n, weight 1/2
-    CG = ClosureCG(W, mass, dt, per=args.cg_check, product_iters=args.product_iters or None) if args.graph_cg else None
-    ST = MidpointStep(W, CG, mass, Kbb, fg, dt, args.mu) if args.gpu_step and CG is not None else None
+    if args.gpu_step and args.graph_cg:                                          # (the trust-region step, 10-27)
+        CG = TrustCG(W, mass, dt, per=args.cg_check, product_iters=args.product_iters or 1)
+        ST = MidpointStep(W, CG, mass, Kbb, fg, dt, args.mu)
+    else:                                                                       # (the torch loop's line search)
+        CG = ClosureCG(W, mass, dt, per=args.cg_check, product_iters=args.product_iters or None) if args.graph_cg else None
+        ST = None
     Es, Gs = W.Es, W.Gs
     print('jack: %d bodies, %d surface balls (radius median %.4f m); built in %.0f s; E* %.3f, G* %.3f (per unit density); beta %g, mu %g, '
           'dt 1/%.0f, tol %.0e' % (n, len(cbody), float(Rb.median()), time.time()-t0, Es, Gs, args.beta, args.mu, 1/dt, args.tol), flush=True)
@@ -93,10 +106,10 @@ def main():
     def record(s, x, v, fn, dend, prods, its):
         com = (M3*x).sum(0)/Mtot; vcom = (M3*v).sum(0)/Mtot
         on = dend > 0
-        rec.append((s*dt, float(com[1]), float(vcom[1]), float(fn.sum())/(9.8*Mtot), int(on.sum()), float((dend.clamp(min=0.)/Rb).max()),
+        rec.append((s*dt, float(com@up), float(vcom@up), float(fn.sum())/(9.8*Mtot), int(on.sum()), float((dend.clamp(min=0.)/Rb).max()),
                     math.exp(float(W.tlj.min())), prods, its))
-        print('t %.4f s (%.1f s): com y %.5f m, vy %+.4f m/s; contact force / weight %.3f on %d balls, overlap max %.3f R (%.1f mm); min J %.3f; '
-              'products %d, Newton %d' % (s*dt, time.time()-t1, float(com[1]), float(vcom[1]), float(fn.sum())/(9.8*Mtot), int(on.sum()),
+        print('t %.4f s (%.1f s): com up %.5f m, v up %+.4f m/s; contact force / weight %.3f on %d balls, overlap max %.3f R (%.1f mm); min J %.3f; '
+              'products %d, Newton %d' % (s*dt, time.time()-t1, float(com@up), float(vcom@up), float(fn.sum())/(9.8*Mtot), int(on.sum()),
                                          rec[-1][5], 1e3*float(dend.max()), rec[-1][6], prods, its), flush=True)
     torch.cuda.synchronize(); t1 = time.time()
     if ST is not None:
@@ -111,10 +124,10 @@ def main():
             prods_all.append(prods); its_all.append(its)
             if s % every == 0 or s == nsteps:
                 record(s, ST.tx, ST.tv, W.tbfn, W.tbdelta, prods, its)
-        vmax = ST.vmax(); x = ST.tx.clone()
+        vmax = ST.vmax() if args.up == 1 else max([r_[2] for r_ in rec], default=-1e9); x = ST.tx.clone()
     for s in range(1, (nsteps if ST is None else 0)+1):                             # (--no-gpu-step: the torch loop)
         xc = x[cbody]
-        dn = (Rb-(xc*up).sum(1)).clamp(min=0.)
+        dn = (Rb-((xc*up).sum(1)-c0)).clamp(min=0.)
         W.tbxn.copy_(xc)
         W.tbkt.copy_(8*Gs*torch.sqrt(Rb*dn))
         W.tbbound.copy_(args.mu*4/3*Es*torch.sqrt(Rb*dn)*dn)
@@ -186,7 +199,7 @@ def main():
         lamt = fend*(dend > 0)[:, None]
         prods_all.append(prods[0]); its_all.append(its)
         com = (M3*x).sum(0)/Mtot; vcom = (M3*v).sum(0)/Mtot
-        vmax = max(vmax, float(vcom[1]))
+        vmax = max(vmax, float(vcom@up))
         if s % every == 0 or s == nsteps:
             record(s, x, v, fn, dend, prods[0], its)
     torch.cuda.synchronize()
@@ -194,8 +207,8 @@ def main():
     if len(R_) == 0:
         return
     i = int(np.argmin(R_[:, 1]))
-    print('total %.1f s for %d steps: products per step median %.0f, max %d (all %d); Newton per step median %.0f, max %d; com y min %.4f m at t %.3f; '
-          'largest upward com velocity %.4f m/s; at the end com y %.4f, vy %+.4f; overlap max %.3f R; min J %.3f' % (
+    print('total %.1f s for %d steps: products per step median %.0f, max %d (all %d); Newton per step median %.0f, max %d; com up min %.4f m at t %.3f; '
+          'largest upward com velocity %.4f m/s; at the end com up %.4f, v up %+.4f; overlap max %.3f R; min J %.3f' % (
               time.time()-t1, len(P_), np.median(P_), P_.max(), P_.sum(), np.median(its_all), max(its_all), R_[i, 1], R_[i, 0], vmax,
               R_[-1, 1], R_[-1, 2], R_[:, 5].max(), R_[:, 6].min()), flush=True)
     np.savez(args.out/('%s_beta%g_mu%g.npz' % (args.tag, args.beta, args.mu)), rec=R_, prods=P_, its=np.array(its_all), x=x.cpu().numpy())

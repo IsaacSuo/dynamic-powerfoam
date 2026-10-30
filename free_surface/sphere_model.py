@@ -115,7 +115,8 @@ class SkinTerms:
         # L / 2 weights (moment Mb); symmetric in its two derivative indices
         # pseudo-inverse: a cell with two walls (new foam, 10-22) has a rank-2 bond moment; along the missing direction
         # the bonds carry no curvature information, and no curvature reference is used there (numerical rank only)
-        self.Mb_inv = torch.linalg.pinv(Mb, hermitian=True)
+        self.Mb_inv = torch.linalg.pinv(Mb.cpu(), hermitian=True).to(dev)        # (on the CPU: the GPU batched eigensolver took 4 GB
+                                                                                    # of workspace for the 8k jack, 15 GB for 30k, 10-26)
         self.dX = X[self.j]-X[self.i]; self.wb = self.A/(2*self.L)
         # gamma 'sym_skin' (10-23): Gamma_i (symmetric in its derivative indices, 6 unknowns) by least squares over the bonds,
         # wb |F_j - F_B - Gamma dX|^2, plus the skin points as observations that F does not change toward them,

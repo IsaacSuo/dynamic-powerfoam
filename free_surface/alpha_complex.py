@@ -16,7 +16,9 @@ import numpy as np
 import torch
 import warp as wp
 
-PMAX, TMAX, WMAX, LMAX = 128, 256, 64, 24
+PMAX, TMAX, WMAX, LMAX = 192, 512, 128, 24                                      # (WMAX 64 -> 128, PMAX 128 -> 192, TMAX 256 -> 512
+                                                                                # 10-28: a compressed lion cell; a cell with W faces
+                                                                                # has up to 2 (W + 6) - 4 vertices)
 
 
 @wp.func
