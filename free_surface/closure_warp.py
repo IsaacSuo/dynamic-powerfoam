@@ -990,10 +990,11 @@ class ClosureWarp(SkinWarp):
         self.tball, self.tbxn, self.tbkt, self.tbbound, self.tblamt = (tt(self.ball[a_]) for a_ in ('par', 'xn', 'kt', 'bound', 'lamt'))
         self.tbR = tt(self.ball['R'])
 
-    def set_self_contact(self, r, K=20000):
+    def set_self_contact(self, r, K=20000, sigma=0.):
         """self contact between surface cells (k_self; 10-29, user: contact from the current configuration's exact cut),
         before prepare() and after set_ball (its cs, wt). r: the cells' rest radii (the cut's balls). update_self(x) at
-        each step's start (MidpointStep.step) re-cuts at x and keeps the pair list; K the list's capacity"""
+        each step's start (MidpointStep.step) re-cuts at x and keeps the pair list; K the list's capacity. sigma > 0 (10-30):
+        the colour code instead of the facing caps, see _color_code"""
         from free_surface.recut import Recut
         dev = 'cuda'; n = self.n
         self._rr = r.to(f64).contiguous(); self._recut = Recut(n, dev)
@@ -1002,6 +1003,8 @@ class ClosureWarp(SkinWarp):
         self._rest_keys = torch.unique(a.long()*n+b.long())
         G, _ = self._recut.geometry(st.X, self._rr)
         self._cap_prev, self._m_prev = self._caps(G)
+        self._col_Q = self._color_code(G, sigma) if sigma > 0 else None
+        self._pw = torch.zeros(0, dtype=f64, device=dev)
         z = lambda dt_: wp.zeros(K, dtype=dt_, device=dev)
         self.selfc = dict(K=K, i=z(wp.int32), k=z(wp.int32), Rs=z(wp.float64), d0=z(wp.float64), Reff=z(wp.float64), fn=z(wp.float64),
                           nv=z(wp.vec3d), xn=wp.zeros(n, dtype=wp.vec3d, device=dev), Esp=wp.float64(self.Es/2))
@@ -1055,11 +1058,38 @@ class ClosureWarp(SkinWarp):
         pa = G.patch_A.detach(); pn = G.patch_n.detach()
         return pa > 0, pn/pn.norm(dim=1, keepdim=True).clamp(min=1e-300)
 
+    def _color_code(self, G, sigma):
+        """a static colour per cell (10-30, the user's idea, from the UL model). Each cell of the rest skin has its own colour, spread over the rest skin
+        graph as exp(-d^2 / (2 sigma^2)), d in steps; the others inherit from their neighbours, as the average weighted by the rest A / L (a harmonic
+        extension). The similarity of two cells is sum sqrt(p_i p_j); a contact's push is scaled by 1 - similarity. sigma: half similarity at the reach of
+        deformation alone, A^(2/3) steps with A the stretch ratio the impact's energy density pays for (lion: A 4.72, 2.81 steps, sigma 1.19)"""
+        import scipy.sparse as sp_
+        from scipy.sparse.linalg import splu
+        from scipy.sparse.csgraph import dijkstra
+        n = self.n; X = self.st.X; kp = G.wall_A.detach() > 0
+        i0, j0 = G.i[kp], G.j[kp]
+        w = (G.wall_A.detach()[kp]/(X[j0]-X[i0]).norm(dim=1)).cpu().numpy()
+        W = sp_.coo_matrix((w, (i0.cpu().numpy(), j0.cpu().numpy())), shape=(n, n)).tocsr(); W = W+W.T
+        skin = (G.patch_A.detach() > 0).cpu().numpy(); sid, iid = np.where(skin)[0], np.where(~skin)[0]
+        ds = dijkstra((W[sid][:, sid] > 0).astype(np.float64).tocsr(), unweighted=True)
+        Ps = np.exp(-np.where(np.isfinite(ds), ds, 1e6)**2/(2*sigma**2)); Ps = Ps/Ps.sum(1, keepdims=True)
+        P = np.zeros((n, len(sid)), dtype=np.float32); P[sid] = Ps
+        L = (sp_.diags(np.asarray(W.sum(1)).ravel())-W).tocsc()
+        P[iid] = splu(L[iid][:, iid].tocsc()).solve(np.asarray(W[iid][:, sid]@Ps)).astype(np.float32)
+        return torch.as_tensor(np.sqrt(np.clip(P, 0, None)), device='cuda')
+
+    def _color_sim(self, a, b, chunk=4096):
+        s = torch.zeros(len(a), dtype=f64, device=a.device)
+        for c0 in range(0, len(a), chunk):
+            s[c0:c0+chunk] = (self._col_Q[a[c0:c0+chunk]]*self._col_Q[b[c0:c0+chunk]]).sum(1).to(f64).clamp(max=1.)
+        return s
+
     def update_self(self, x):
         """the self contact list at the step's start x (torch, n x 3): re-cut at x with the rest radii; a wall (i, k) of
         the cut that is not a rest wall and not yet a contact becomes one when both cells had an exposed cap at the last
         cut and the caps face each other (n_ik . m_i > 0 > n_ik . m_k, n_ik from i to k, m the caps' mean normals there),
-        with d0 its balls' overlap now (born without force); a contact leaves when its overlap is back to d0"""
+        with d0 its balls' overlap now (born without force); a contact leaves when its overlap is back to d0. With the
+        colour code every such wall is a contact, its push scaled by 1 - the cells' similarity (10-30)"""
         n = self.n; dev = x.device
         x = x.detach(); self._self_calls += 1
         P = self._pairs
@@ -1068,6 +1098,7 @@ class ClosureWarp(SkinWarp):
             stay = ov > self._pd0
             self.self_stats['left'] += int((~stay).sum())
             self._pairs, self._pd0 = P[stay], self._pd0[stay]
+            self._pw = self._pw[stay]
         try:
             G, _ = self._recut.geometry(x, self._rr)
         except RuntimeError:
@@ -1081,14 +1112,17 @@ class ClosureWarp(SkinWarp):
             old = torch.isin(key, self._rest_keys)
             if len(self._pairs):
                 old |= torch.isin(key, self._pairs[:, 0]*n+self._pairs[:, 1])
-            cand = ~old & self._cap_prev[a] & self._cap_prev[b]
+            cand = ~old if self._col_Q is not None else ~old & self._cap_prev[a] & self._cap_prev[b]
             a, b = a[cand], b[cand]
             nab = x[b]-x[a]; nab = nab/nab.norm(dim=1, keepdim=True)
-            face = ((nab*self._m_prev[a]).sum(1) > 0) & ((nab*self._m_prev[b]).sum(1) < 0)
-            a, b = a[face], b[face]
+            if self._col_Q is not None:
+                pw = 1-self._color_sim(a, b); face = pw > 0
+            else:
+                pw = torch.ones(len(a), dtype=f64, device=dev); face = ((nab*self._m_prev[a]).sum(1) > 0) & ((nab*self._m_prev[b]).sum(1) < 0)
+            a, b, pw = a[face], b[face], pw[face]
             if len(a):
                 d0 = self._rr[a]+self._rr[b]-(x[b]-x[a]).norm(dim=1)
-                self._pairs = torch.cat([self._pairs, torch.stack([a, b], 1)]); self._pd0 = torch.cat([self._pd0, d0])
+                self._pairs = torch.cat([self._pairs, torch.stack([a, b], 1)]); self._pd0 = torch.cat([self._pd0, d0]); self._pw = torch.cat([self._pw, pw])
                 self.self_stats['born'] += len(a)
                 nf = nab[face]
                 self.self_births.append(torch.stack([torch.full_like(d0, self._self_calls), a.to(f64), b.to(f64), d0, (self.st.X[b]-self.st.X[a]).norm(dim=1),
@@ -1102,7 +1136,7 @@ class ClosureWarp(SkinWarp):
         if m:
             P = self._pairs; ra, rb = self._rr[P[:, 0]], self._rr[P[:, 1]]
             t['i'][:m] = P[:, 0].to(torch.int32); t['k'][:m] = P[:, 1].to(torch.int32)
-            t['Rs'][:m] = ra+rb; t['d0'][:m] = self._pd0; t['Reff'][:m] = ra*rb/(ra+rb)
+            t['Rs'][:m] = ra+rb; t['d0'][:m] = self._pd0; t['Reff'][:m] = ra*rb/(ra+rb)*self._pw**2       # (k_self's force goes as sqrt(Reff): the weight)
         t['xn'].copy_(x)
         self.self_stats['pairs'] = m
 

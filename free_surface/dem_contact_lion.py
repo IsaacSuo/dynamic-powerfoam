@@ -16,6 +16,9 @@ a_.add_argument('--out', type=Path, required=True)
 a_.add_argument('--sweep-mult', type=int, default=1)
 a_.add_argument('--tag', default='')
 a_.add_argument('--self-contact', type=int, default=0)
+a_.add_argument('--sc-sigma', type=float, default=0.)     # > 0: the colour code for the contacts (set_self_contact, 10-30)
+a_.add_argument('--sc-cap', type=int, default=40000)      # the contact list's capacity
+a_.add_argument('--save', type=Path, default=None)        # where the frames go (default --out, the foam's directory)
 a_.add_argument('--a-floor', type=float, default=0.)      # set_cap_floor: the floor on the one-way cap's normal (10-30)
 a_.add_argument('--watch', default='')                     # cells to log at every step from --watch-from on
 a_.add_argument('--watch-from', type=int, default=400)
@@ -34,7 +37,7 @@ cbody = boc[site]; Rb = torch.as_tensor(cells['radii'], dtype=f64, device=dev)[s
 upt = tuple(1. if k == UP else 0. for k in range(3))
 W.set_ball(cbody, Rb, upt, C0, 0.)
 if args.self_contact:
-    W.set_self_contact(torch.as_tensor(cells['radii'], dtype=f64, device=dev))
+    W.set_self_contact(torch.as_tensor(cells['radii'], dtype=f64, device=dev), K=args.sc_cap, sigma=args.sc_sigma)
 if args.cap == 'pos':
     W.set_cap_positions()
     W.set_cap_floor(args.a_floor)
@@ -78,7 +81,7 @@ def save():
     sv = dict(x=np.array(xs), F=np.array(Fs), t=np.array(ts), J=np.array(Js), source_index=cells['source_index'])
     if W.selfc is not None:
         sv.update(self_births=torch.cat(W.self_births).numpy() if W.self_births else np.zeros((0, 7)), self_pairs=np.concatenate(sp))
-    np.savez(OUT/('lion_frames_beta%g%s.npz' % (args.beta, args.tag)), **sv)
+    np.savez((args.save or OUT)/('lion_frames_beta%g%s.npz' % (args.beta, args.tag)), **sv)
 def floor_report():
     """the frame's smallest fit area a over the caps, and the caps below the floor (q = n_t along the reference)"""
     G_ = wp.to_torch(W.B['G'], requires_grad=False); nt_ = torch.linalg.cross(torch.einsum('bij,bj->bi', G_, st.t1), torch.einsum('bij,bj->bi', G_, st.t2))[st.cap]
@@ -92,7 +95,7 @@ for s in range(1, nsteps+1):
         zf_ = wp.to_torch(ST.a['z'], requires_grad=False).clone(); W.grad(zf_)     # (the failing midpoint: its F_B, J)
         gf_ = W.tgx.norm(dim=1); of_ = torch.argsort(gf_, descending=True)[:6]
         print('failing iterate: largest |dE/dx| at bodies %s' % ' '.join('%d %.2f,' % (c_, gf_[c_]) for c_ in of_.tolist()), flush=True)
-        np.savez(OUT/('lion_fail_beta%g%s.npz' % (args.beta, args.tag)), z=zf_.cpu().numpy(), x=ST.tx.cpu().numpy(), F=W.tF.cpu().numpy(), J=torch.exp(W.tlj).cpu().numpy(), step=s, t=s*DT)
+        np.savez((args.save or OUT)/('lion_fail_beta%g%s.npz' % (args.beta, args.tag)), z=zf_.cpu().numpy(), x=ST.tx.cpu().numpy(), F=W.tF.cpu().numpy(), J=torch.exp(W.tlj).cpu().numpy(), step=s, t=s*DT)
         break
     nrb = W._pos['nr'].clone() if args.a_floor > 0 else None
     ST.end()
