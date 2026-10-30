@@ -171,6 +171,9 @@ class ULModel:
             self.recut_full = Recut(self.n, dev)                                       # (the full recut: where parts meet)
             print('cut_bonds: %d bonds (%.1f per cell; delta %g h, eps %g h), %d pairs overlapping at rest outside them; %.0f s' % (
                 len(self.bonds), 2*len(self.bonds)/self.n, bond_delta, bond_eps, len(self.sc_rest_keys), time.time()-t0_), flush=True)
+        if self_contact == 'color':                                                    # (10-30: the colour code, see _color_code)
+            assert sc_birth and f_mode != 'total', 'self_contact color: sc_birth, f_mode increment'
+            self.col_Q, self.col_rest = self._color_code()
         if self_contact == 'bond':                                                     # (the rest walls: always material)
             G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
             self.sc_rest = torch.sort(torch.minimum(G0.i[kp], G0.j[kp])*self.n+torch.maximum(G0.i[kp], G0.j[kp])).values
@@ -671,7 +674,10 @@ class ULModel:
         """the step's linear maps, built at the step start (x^n, F^n, geometry); f_mode 'total': the fits' levers are the
         walls' material reference vectors D (pair_refs; at rest the rest offsets) and F = kin(x) itself (section 20)"""
         i, j, A, c = geo['i'], geo['j'], geo['A'], geo['c']
-        if 'contact' in geo:                                                           # (self_contact: the fits, the jump term, the
+        sim = None
+        if self.sc == 'color':                                                         # (10-30: every wall, its area scaled by the colour
+            sim = self._color_sim(i, j); A = A*sim                                     # similarity, see _color_code; the centroids from all)
+        elif 'contact' in geo:                                                         # (self_contact: the fits, the jump term, the
             mk = ~geo['contact']                                                       # stabilisation and the aggregation over the
             i, j, A, c = i[mk], j[mk], A[mk], c[mk]                                    # material walls; the centroids from all)
         d = x[j]-x[i]; L = d.norm(dim=1); nrm = d/L[:, None]
@@ -757,13 +763,20 @@ class ULModel:
             tiny = self.V0 < self.agg*self.V0.median()                                 # problem, cf. cell merging / aggregated FEM: a cell below
             m1 = tiny[i] & ~tiny[j]; m2 = tiny[j] & ~tiny[i]                           # agg x the median volume takes the V0-weighted mean of its
             as_, ao_ = torch.cat([i[m1], j[m2]]), torch.cat([j[m1], i[m2]])            # non-tiny wall neighbours' increment on this cut)
-            den = torch.zeros(n, dtype=f64, device=self.dev).index_add_(0, as_, self.V0[ao_])
-            ops_['agg'] = (as_, ao_, self.V0[ao_]/den[as_], tiny & (den > 0))
+            va = self.V0[ao_]
+            if sim is not None:                                                        # (color: the V0 weights scaled too, a neighbour
+                va = va*torch.cat([sim[m1], sim[m2]]); ka = va > 0                     # sharing no colour lends nothing)
+                as_, ao_, va = as_[ka], ao_[ka], va[ka]
+            den = torch.zeros(n, dtype=f64, device=self.dev).index_add_(0, as_, va)
+            ops_['agg'] = (as_, ao_, va/den[as_], tiny & (den > 0))
         if 'contact' in geo and bool(geo['contact'].any()):                            # (self_contact: the pairs across the contact
             ci, cj = geo['i'][geo['contact']], geo['j'][geo['contact']]                # walls, see _sc)
             dd_ = x[cj]-x[ci]; rr = geo['r']
             db = geo['sc_db'][geo['contact']] if self.sc_birth else 0.
-            ops_['sc'] = (ci, cj, dd_/dd_.norm(dim=1, keepdim=True), rr[ci]+rr[cj]-db, self.E_sc*torch.sqrt(rr[ci]*rr[cj]/(rr[ci]+rr[cj])))
+            c_ = self.E_sc*torch.sqrt(rr[ci]*rr[cj]/(rr[ci]+rr[cj]))
+            if sim is not None:                                                        # (color: what the wall no longer pulls with)
+                c_ = c_*(1-sim[geo['contact']])
+            ops_['sc'] = (ci, cj, dd_/dd_.norm(dim=1, keepdim=True), rr[ci]+rr[cj]-db, c_)
         if self.sc == 'rest':                                                          # (10-29: the material connection is the rest one:
             ri, rj, rA = self.rb_i, self.rb_j, self.rb_A                               # the fit and the jump term over every rest pair,
             dr = x[rj]-x[ri]; Lr = dr.norm(dim=1); wr = rA/Lr                          # rest areas, current offsets; the same as the
@@ -876,12 +889,14 @@ class ULModel:
         contact = torch.zeros(len(i), dtype=torch.bool, device=self.dev); born = torch.zeros_like(contact)
         db = torch.zeros(len(i), dtype=f64, device=self.dev)                            # (each contact wall's overlap at its birth)
         pv = self.sc_prev
+        if pv is None and self.sc == 'color':                                          # (color: the first cut's walls count from now)
+            born = torch.ones_like(contact)
         if pv is not None:
             pos = torch.searchsorted(pv['keys'], key).clamp(max=len(pv['keys'])-1)
             found = pv['keys'][pos] == key
             contact[found] = pv['contact'][pos[found]]; db[found] = pv['db'][pos[found]]
             born = ~found
-            if self.sc in ('bond', 'rest'):
+            if self.sc in ('bond', 'rest', 'color'):
                 pass
             elif self.sc == 'skin':                                                    # (the rest-skin rule: the pair alone decides,
                 pass                                                                   # every wall each step, below)
@@ -927,6 +942,8 @@ class ULModel:
                     contact[born] = air.view(-1, K).any(1) | air_x.any(1) | cross.any(1)
         if self.sc == 'rest':                                                          # (10-29: material iff a rest pair; a function of the pair)
             contact = ~torch.isin(key, self.rb_keys)
+        if self.sc == 'color':                                                         # (10-30: 'contact' = the walls that can push, weighted
+            contact = ~torch.isin(key, self.col_rest)                                  # by 1 - similarity in operators)
         if self.sc == 'bond':                                                          # (10-29: the bond family with visibility; the new
             sel = born if pv is not None else torch.ones_like(contact)                # walls only, a function of the pair)
             if bool(sel.any()):
@@ -947,6 +964,40 @@ class ULModel:
         self.sc_prev = dict(x=x.clone(), r=r.clone(), keys=key[o], contact=contact[o], db=db[o])
         self.sc_stats = dict(walls=len(i), contact=int(contact.sum()), born=int(born.sum()), born_contact=int((contact & born).sum()))
         return contact
+
+    def _color_code(self):
+        """self_contact 'color' (10-30, the user's idea): a static colour per cell, and no contact / material label: a wall's
+        pull scales with how alike its two cells' colours are, down to push only. Each cell of the rest skin has its own
+        colour, shared evenly with its direct skin neighbours; the others inherit from their neighbours, as the average
+        weighted by the rest A / L (a harmonic extension: colours fade by mixing with depth, without a decay rate). The
+        similarity is sum sqrt(p_i p_j). Returns sqrt(p) (cells x colours, single precision) and the sorted rest keys: the
+        rest pairs stay at similarity 1, the rest material. On the lion's cuts: foreign walls of the legs 0.00, new walls of
+        cells 2 rest hops apart at 0.85 inside, 0.26 on the skin. Not for plasticity: a function of the rest state"""
+        import scipy.sparse as sp_
+        from scipy.sparse.linalg import splu
+        G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
+        i0, j0 = G0.i[kp], G0.j[kp]
+        w = (G0.wall_A.detach()[kp]/(self.X0[j0]-self.X0[i0]).norm(dim=1)).cpu().numpy()
+        W = sp_.coo_matrix((w, (i0.cpu().numpy(), j0.cpu().numpy())), shape=(self.n, self.n)).tocsr(); W = W+W.T
+        skin = (G0.patch_A.detach() > 0).cpu().numpy(); sid, iid = np.where(skin)[0], np.where(~skin)[0]
+        Ps = ((W[sid][:, sid] > 0).astype(np.float64)+sp_.eye(len(sid), format='csr')).tocsr()
+        Ps = (sp_.diags(1/np.asarray(Ps.sum(1)).ravel())@Ps).tocsr()
+        P = np.zeros((self.n, len(sid)), dtype=np.float32)
+        P[sid] = np.asarray(Ps.todense(), dtype=np.float32)
+        if len(iid):
+            L = (sp_.diags(np.asarray(W.sum(1)).ravel())-W).tocsc()
+            P[iid] = splu(L[iid][:, iid].tocsc()).solve(np.asarray((W[iid][:, sid]@Ps).todense())).astype(np.float32)
+        Q = torch.as_tensor(np.sqrt(np.clip(P, 0, None)), device=self.dev)
+        return Q, torch.sort(torch.minimum(i0, j0)*self.n+torch.maximum(i0, j0)).values
+
+    def _color_sim(self, i, j, chunk=4096):
+        """each wall's colour similarity (see _color_code), 1 on the rest pairs"""
+        s = torch.ones(len(i), dtype=f64, device=self.dev)
+        new = torch.nonzero(~torch.isin(torch.minimum(i, j)*self.n+torch.maximum(i, j), self.col_rest)).flatten()
+        for c0 in range(0, len(new), chunk):
+            p = new[c0:c0+chunk]
+            s[p] = (self.col_Q[i[p]]*self.col_Q[j[p]]).sum(1).to(f64).clamp(max=1.)
+        return s
 
     def _bond_family(self, delta, eps):
         """the bond family (10-29; the peridynamic horizon with the meshless visibility criterion): the rest walls, plus

@@ -56,7 +56,7 @@ def main():
     a_.add_argument('--shift', default='displacement', help="ul_model shift: 'displacement' (two-step fit, carried to the centroid) or 'none' (site-level fit)")
     a_.add_argument('--agg', type=float, default=0., help='> 0: cells below this x the median volume take their neighbours\' fit (ul_model agg, 10-29)')
     a_.add_argument('--beta', type=float, default=0., help='Kelvin-Voigt time (s), the DEM\'s: eta = beta mu, zeta = beta (lam + 2 mu / 3) (10-29)')
-    a_.add_argument('--self-contact', default=None, choices=['air', 'compat', 'cap', 'skin', 'bond', 'rest', 'arc'], help='contact walls (air: grown in air or out of a contact interface; '
+    a_.add_argument('--self-contact', default=None, choices=['air', 'compat', 'cap', 'skin', 'bond', 'rest', 'arc', 'color'], help='contact walls (air: grown in air or out of a contact interface; '
                     'compat: the pair\'s offset not explained by either side\'s deformation from rest) out of the '
                     'material terms, Hertz across them (ul_model self_contact, 10-29)')
     a_.add_argument('--sc-birth', type=int, default=0, help='1: the self-contact Hertz overlap counted from each contact wall\'s birth')
