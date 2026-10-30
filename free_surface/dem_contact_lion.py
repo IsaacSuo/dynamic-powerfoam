@@ -17,7 +17,7 @@ a_.add_argument('--sweep-mult', type=int, default=1)
 a_.add_argument('--tag', default='')
 a_.add_argument('--self-contact', type=int, default=0)
 a_.add_argument('--sc-sigma', type=float, default=0.)     # > 0: the colour code for the contacts (set_self_contact, 10-30)
-a_.add_argument('--sc-cap', type=int, default=40000)      # the contact list's capacity
+a_.add_argument('--sc-cap', type=int, default=None)       # the contact list's capacity (default the rest walls)
 a_.add_argument('--save', type=Path, default=None)        # where the frames go (default --out, the foam's directory)
 a_.add_argument('--a-floor', type=float, default=0.)      # set_cap_floor: the floor on the one-way cap's normal (10-30)
 a_.add_argument('--watch', default='')                     # cells to log at every step from --watch-from on

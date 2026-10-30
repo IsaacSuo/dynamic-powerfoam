@@ -895,17 +895,21 @@ def k_closP_adj(poff: wp.array(dtype=int), pk: wp.array(dtype=int), pdX: wp.arra
 
 
 # UL's F in place of the fitted skin (10-30, the user: the bonds carry the force, UL's F needs no skin): within a step, on the step-start cut, F_b = (I + G_b(x - x_n)) F_n with G_b = sum_e (dx_O - dx_S) (x) R_e
-# UL's least-squares fit on the cut's walls (R_e = w d^T M_S^+), a tiny cell's G the V0-weighted mean of its non-tiny wall neighbours' (agg). Padding entries have R = 0, Aw = 0
+# UL's least-squares fit on the cut's walls (R_e = w d^T M_S^+), a tiny cell's G the V0-weighted mean of its non-tiny wall neighbours' (agg). Padding entries have S = O, Aw = 0 and return at once (their atomic adds would all queue on cell 0)
 @wp.kernel(enable_backward=False)
 def k_Gul(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), S: wp.array(dtype=int), O: wp.array(dtype=int), Rw: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d)):
     e = wp.tid()
     s, o = S[e], O[e]
+    if s == o:
+        return
     wp.atomic_add(G, s, wp.outer((x[o]-xn[o])-(x[s]-xn[s]), Rw[e]))
 
 
 @wp.kernel(enable_backward=False)
 def k_Aul(G: wp.array(dtype=wp.mat33d), As: wp.array(dtype=int), Ao: wp.array(dtype=int), Aw: wp.array(dtype=wp.float64), Ga: wp.array(dtype=wp.mat33d)):
     e = wp.tid()
+    if Aw[e] == wp.float64(0.0):
+        return
     wp.atomic_add(Ga, As[e], G[Ao[e]]*Aw[e])
 
 
@@ -930,6 +934,8 @@ def k_Ful_adj(Fb: wp.array(dtype=wp.mat33d), used: wp.array(dtype=int), F0: wp.a
 @wp.kernel(enable_backward=False)
 def k_Aul_adj(Fb: wp.array(dtype=wp.mat33d), F0: wp.array(dtype=wp.mat33d), As: wp.array(dtype=int), Ao: wp.array(dtype=int), Aw: wp.array(dtype=wp.float64), Gb: wp.array(dtype=wp.mat33d)):
     e = wp.tid()
+    if Aw[e] == wp.float64(0.0):
+        return
     s = As[e]
     wp.atomic_add(Gb, Ao[e], (Fb[s]@wp.transpose(F0[s]))*Aw[e])
 
@@ -937,6 +943,8 @@ def k_Aul_adj(Fb: wp.array(dtype=wp.mat33d), F0: wp.array(dtype=wp.mat33d), As: 
 @wp.kernel(enable_backward=False)
 def k_Gul_adj(Gb: wp.array(dtype=wp.mat33d), S: wp.array(dtype=int), O: wp.array(dtype=int), Rw: wp.array(dtype=wp.vec3d), x_bar: wp.array(dtype=wp.vec3d)):
     e = wp.tid()
+    if S[e] == O[e]:
+        return
     v = Gb[S[e]]@Rw[e]
     wp.atomic_add(x_bar, O[e], v)
     wp.atomic_add(x_bar, S[e], -v)
@@ -1043,13 +1051,14 @@ class ClosureWarp(SkinWarp):
         self.tball, self.tbxn, self.tbkt, self.tbbound, self.tblamt = (tt(self.ball[a_]) for a_ in ('par', 'xn', 'kt', 'bound', 'lamt'))
         self.tbR = tt(self.ball['R'])
 
-    def set_self_contact(self, r, K=20000, sigma=0.):
+    def set_self_contact(self, r, K=None, sigma=0.):
         """self contact between surface cells (k_self; 10-29, user: contact from the current configuration's exact cut),
         before prepare() and after set_ball (its cs, wt). r: the cells' rest radii (the cut's balls). update_self(x) at
-        each step's start (MidpointStep.step) re-cuts at x and keeps the pair list; K the list's capacity. sigma > 0 (10-30):
-        the colour code instead of the facing caps, see _color_code"""
+        each step's start (MidpointStep.step) re-cuts at x and keeps the pair list; K the list's capacity (default the rest
+        walls; over it update_self stops). sigma > 0 (10-30): the colour code instead of the facing caps, see _color_code"""
         from free_surface.recut import Recut
         dev = 'cuda'; n = self.n
+        K = self.nb if K is None else K
         self._rr = r.to(f64).contiguous(); self._recut = Recut(n, dev)
         st = self.st
         a, b = torch.minimum(st.i, st.j), torch.maximum(st.i, st.j)
@@ -1092,10 +1101,12 @@ class ClosureWarp(SkinWarp):
         self.capnr, self.capeps = T(P['nr'], wp.vec3d), wp.array([0.], dtype=wp.float64, device='cuda')
         self.cap_pos = True
 
-    def set_cap_ul(self, agg=.1, Kw=80000, Ka=20000, vol_tol=1e-5):
+    def set_cap_ul(self, agg=.1, Kw=None, Ka=None, vol_tol=1e-5):
         """UL's F instead of the fitted skin, after set_self_contact (its colours and cut), before prepare(): each step re-solves the radii for V0 det F_n and re-cuts (update_ul), the fit on the cut's walls
-        with areas scaled by the colour similarity, F within the step k_Gul / k_Aul / k_Ful; the volume term on det F alone (no k_walls). Not for plasticity: the bonds are the rest bonds. Kw, Ka: capacities"""
+        with areas scaled by the colour similarity, F within the step k_Gul / k_Aul / k_Ful; the volume term on det F alone (no k_walls). Not for plasticity: the bonds are the rest bonds. Kw, Ka: capacities,
+        by default three times the rest walls (padding costs next to nothing; over them update_ul stops) and Kw (a wall gives at most one aggregation entry)"""
         dev = 'cuda'; n = self.n
+        Kw = 3*self.nb if Kw is None else Kw; Ka = Kw if Ka is None else Ka
         self.cap_ul = True; self._ul_agg = agg; self._ul_tol = vol_tol
         self._rr0 = self._rr.clone(); self._ulr = self._rr.clone(); self._ulG = None
         self._Fn = torch.eye(3, dtype=f64, device=dev).repeat(n, 1, 1)
