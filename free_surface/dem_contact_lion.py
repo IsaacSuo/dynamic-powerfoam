@@ -63,6 +63,7 @@ if args.cap == 'dir':
     print('free direction: %d colours for the curvature probe, %d non-positive (floored)' % (W.dir_colours, W.dir_neg), flush=True)
 else:
     CG = TrustCG(W, mass, DT, per=2, product_iters=1); ST = MidpointStep(W, CG, mass, Kbb, fg, DT, 0.)
+    ST.pre_ul = W.cap_ul                                   # (UL's F: the blocks at each step's start, not the rest blocks)
 tol = 1e-3*ref
 ST.set_state(x, v, fg/M3)
 xs, Fs, ts = [X.cpu().numpy()], [np.tile(np.eye(3), (n, 1, 1))], [0.]
