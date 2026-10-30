@@ -126,7 +126,7 @@ def cell_moments_grid(X, r, V, spacing, dev='cuda'):
 
 class ULModel:
     def __init__(self, X0, r0, V0, dlt0, J0, E, nu, rho=1., dev='cuda', jump=True, stab=True, shift='displacement', smooth='centroid',
-                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25, bond_floor=0., sc_memory=False):
+                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25, bond_floor=0., sc_memory=False, sc_sigma=0.):
         t = lambda a: torch.as_tensor(np.asarray(a), dtype=f64, device=dev)
         self.tet_w, self.tet_qmin = tet_w, tet_qmin
         self.wall_w, self.cell_w, self.cellhg_w, self.cellhg_k = wall_w, cell_w, cellhg_w, cellhg_k
@@ -173,6 +173,7 @@ class ULModel:
                 len(self.bonds), 2*len(self.bonds)/self.n, bond_delta, bond_eps, len(self.sc_rest_keys), time.time()-t0_), flush=True)
         if self_contact == 'color':                                                    # (10-30: the colour code, see _color_code)
             assert sc_birth and f_mode != 'total', 'self_contact color: sc_birth, f_mode increment'
+            self.sc_sigma = sc_sigma
             self.col_Q, self.col_rest = self._color_code()
         if self_contact == 'bond':                                                     # (the rest walls: always material)
             G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
@@ -972,21 +973,33 @@ class ULModel:
         weighted by the rest A / L (a harmonic extension: colours fade by mixing with depth, without a decay rate). The
         similarity is sum sqrt(p_i p_j). Returns sqrt(p) (cells x colours, single precision) and the sorted rest keys: the
         rest pairs stay at similarity 1, the rest material. On the lion's cuts: foreign walls of the legs 0.00, new walls of
-        cells 2 rest hops apart at 0.85 inside, 0.26 on the skin. Not for plasticity: a function of the rest state"""
+        cells 2 rest hops apart at 0.85 inside, 0.26 on the skin. Not for plasticity: a function of the rest state.
+        sc_sigma > 0 (10-30, the user: skin colours close, the farther the more different): the colour spreads over the rest
+        skin graph as exp(-d^2 / (2 sigma^2)), d in steps, so the similarity is about exp(-d^2 / (8 sigma^2)). The scale is
+        in cells (contact sharp as h -> 0). Half similarity at the reach of deformation alone: a wall means an empty sphere
+        through both sites, at rest an ellipsoid longer by A = stretch_max / stretch_min at about the same volume, so the reach is
+        A^(2/3) steps; on the lion A = 4.72, what the impact's energy density 0.42 E pays for at most, gives 2.81 steps and
+        sigma 1.19 (the slope 2/3 is only an upper bound on the frames, about 0.5 measured)"""
         import scipy.sparse as sp_
         from scipy.sparse.linalg import splu
+        from scipy.sparse.csgraph import dijkstra
         G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
         i0, j0 = G0.i[kp], G0.j[kp]
         w = (G0.wall_A.detach()[kp]/(self.X0[j0]-self.X0[i0]).norm(dim=1)).cpu().numpy()
         W = sp_.coo_matrix((w, (i0.cpu().numpy(), j0.cpu().numpy())), shape=(self.n, self.n)).tocsr(); W = W+W.T
         skin = (G0.patch_A.detach() > 0).cpu().numpy(); sid, iid = np.where(skin)[0], np.where(~skin)[0]
-        Ps = ((W[sid][:, sid] > 0).astype(np.float64)+sp_.eye(len(sid), format='csr')).tocsr()
-        Ps = (sp_.diags(1/np.asarray(Ps.sum(1)).ravel())@Ps).tocsr()
+        SS = (W[sid][:, sid] > 0).astype(np.float64).tocsr()
+        if self.sc_sigma > 0:
+            ds = dijkstra(SS, unweighted=True)
+            Ps = np.exp(-np.where(np.isfinite(ds), ds, 1e6)**2/(2*self.sc_sigma**2))
+        else:
+            Ps = (SS+sp_.eye(len(sid), format='csr')).toarray()
+        Ps = Ps/Ps.sum(1, keepdims=True)
         P = np.zeros((self.n, len(sid)), dtype=np.float32)
-        P[sid] = np.asarray(Ps.todense(), dtype=np.float32)
+        P[sid] = Ps
         if len(iid):
             L = (sp_.diags(np.asarray(W.sum(1)).ravel())-W).tocsc()
-            P[iid] = splu(L[iid][:, iid].tocsc()).solve(np.asarray((W[iid][:, sid]@Ps).todense())).astype(np.float32)
+            P[iid] = splu(L[iid][:, iid].tocsc()).solve(np.asarray(W[iid][:, sid]@Ps)).astype(np.float32)
         Q = torch.as_tensor(np.sqrt(np.clip(P, 0, None)), device=self.dev)
         return Q, torch.sort(torch.minimum(i0, j0)*self.n+torch.maximum(i0, j0)).values
 
