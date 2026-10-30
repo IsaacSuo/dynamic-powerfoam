@@ -1139,7 +1139,11 @@ class ClosureWarp(SkinWarp):
         d = x[j]-x[i]; w = A*s/d.norm(dim=1)
         q = w[:, None, None]*d[:, :, None]*d[:, None, :]
         M = torch.zeros(n, 3, 3, dtype=f64, device=x.device).index_add(0, i, q).index_add(0, j, q)
-        Mi = torch.linalg.pinv(M)
+        a0, a1, a2 = M[:, :, 0], M[:, :, 1], M[:, :, 2]; c0, c1, c2 = torch.linalg.cross(a1, a2), torch.linalg.cross(a2, a0), torch.linalg.cross(a0, a1)   # (the inverse by cofactors; the SVD only near singular)
+        det = (a0*c0).sum(1); sing = det.abs() <= 1e-10*(M*M).sum((1, 2))**1.5
+        Mi = torch.stack([c0, c1, c2], 1)/torch.where(sing, torch.ones_like(det), det)[:, None, None]
+        if bool(sing.any()):
+            Mi[sing] = torch.linalg.pinv(M[sing])
         vd = w[:, None]*d
         Ri = torch.einsum('fa,fab->fb', vd, Mi[i]); Rj = torch.einsum('fa,fab->fb', -vd, Mi[j])
         m = len(i); U = self.ul; t = self.tul

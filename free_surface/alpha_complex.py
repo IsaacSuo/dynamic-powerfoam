@@ -226,6 +226,7 @@ class AlphaComplex:
         self.nwall, self.nlink, self.status = z(n, int), z((n, WMAX), int), z(n, int)
         from powerfoam.bvh import AABBTree
         self.tree = AABBTree(device)
+        self.f32, self.f32_falls = False, 0                                        # (the clipping in single precision, alpha_complex32; a cell that closes badly: the double kernel)
 
     def overlaps(self, p, r, margin=0.):
         """the overlapping pairs (Power Foam's BVH) with the radii raised by margin: a superset of the overlaps at any
@@ -259,9 +260,20 @@ class AlphaComplex:
     def __call__(self, p, r, reuse=False):
         coff, j, nn, h = self.candidates(p, r, reuse)
         wf = lambda t, dt: wp.from_torch(t.contiguous(), dtype=dt)
-        wp.launch(k_alpha, self.n, inputs=[wf(p, wp.vec3d), wf(r, wp.float64), wf(coff.int(), wp.int32), wf(j.int(), wp.int32), wf(nn, wp.vec3d), wf(h, wp.float64),
-                                           self.P, self.Pid, self.T, self.V, self.rem, self.ea, self.eb, self.nxt],
-                  outputs=[self.walls, self.links, self.nwall, self.nlink, self.status])
+        done = False
+        if self.f32:
+            from free_surface.alpha_complex32 import k_alpha32
+            if not hasattr(self, 'P32'):
+                self.P32, self.V32 = wp.zeros((self.n, PMAX), dtype=wp.vec4f, device=self.P.device), wp.zeros((self.n, TMAX), dtype=wp.vec3f, device=self.P.device)
+            wp.launch(k_alpha32, self.n, inputs=[wf(p.float(), wp.vec3f), wf(r.float(), wp.float32), wf(coff.int(), wp.int32), wf(j.int(), wp.int32), wf(nn.float(), wp.vec3f), wf(h.float(), wp.float32),
+                                                 self.P32, self.Pid, self.T, self.V32, self.rem, self.ea, self.eb, self.nxt],
+                      outputs=[self.walls, self.links, self.nwall, self.nlink, self.status])
+            done = not bool((wp.to_torch(self.status) > 1).any())
+            self.f32_falls += not done
+        if not done:
+            wp.launch(k_alpha, self.n, inputs=[wf(p, wp.vec3d), wf(r, wp.float64), wf(coff.int(), wp.int32), wf(j.int(), wp.int32), wf(nn, wp.vec3d), wf(h, wp.float64),
+                                               self.P, self.Pid, self.T, self.V, self.rem, self.ea, self.eb, self.nxt],
+                      outputs=[self.walls, self.links, self.nwall, self.nlink, self.status])
         return dict(walls=wp.to_torch(self.walls), links=wp.to_torch(self.links), nwall=wp.to_torch(self.nwall), nlink=wp.to_torch(self.nlink),
                     status=wp.to_torch(self.status), ncand=len(j))
 

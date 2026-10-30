@@ -28,6 +28,7 @@ a_.add_argument('--lr', type=float, default=64.)          # --cap ul: the precon
 a_.add_argument('--pre-every', type=int, default=4)       # --cap ul: the blocks and the low-rank term every so many steps
 a_.add_argument('--smooth-start', type=int, default=-1)   # Newton's start without the step-to-step reversal, the region carried over (-1: with --cap ul)
 a_.add_argument('--theta', type=float, default=.5)        # 1/2: the midpoint; above: damps the modes stiffer than the step (MidpointStep.set_theta)
+a_.add_argument('--cut32', type=int, default=1)           # the cut's clipping in single precision
 args = a_.parse_args()
 OUT = args.out; E, NU, DT, UP, C0, V0 = 10648.614517785627, .3912951704721983, 1/1200, 2, -.2, (0., 0., -.245)
 cells = np.load(OUT/'dem_exact_single'/'cells.npz'); g = dict(np.load(OUT/'dem_exact_single'/'geometry.npz')); bsk = dict(np.load(OUT/'boundary_skin.npz'))
@@ -44,6 +45,7 @@ if args.self_contact:
     W.set_self_contact(torch.as_tensor(cells['radii'], dtype=f64, device=dev), K=args.sc_cap, sigma=args.sc_sigma)
     if args.self_contact == 2:                             # (2: only the cut for --cap ul, no contact force)
         W.selfc = None
+    W._recut.A.f32 = bool(args.cut32)                      # (the clipping in single precision: the same structure, the values in double)
 if args.cap == 'ul':                                       # (UL's F, no fitted skin; needs --self-contact 1 --sc-sigma > 0)
     W.set_cap_ul()
 if args.cap == 'pos':
