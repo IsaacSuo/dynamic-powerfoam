@@ -24,6 +24,10 @@ a_.add_argument('--watch', default='')                     # cells to log at eve
 a_.add_argument('--watch-from', type=int, default=400)
 a_.add_argument('--fine-until', type=float, default=0.)   # a frame every 4 steps up to this time
 a_.add_argument('--cap', choices=('rim', 'pos', 'wall', 'ul'), default='pos')     # 10-29 user: the one-way cap by default  # pos: the one-way cap; dir: the free direction (set_free_direction)
+a_.add_argument('--lr', type=float, default=64.)          # --cap ul: the preconditioner's low-rank term above this charge on a neighbour's block (0: none)
+a_.add_argument('--pre-every', type=int, default=4)       # --cap ul: the blocks and the low-rank term every so many steps
+a_.add_argument('--smooth-start', type=int, default=-1)   # Newton's start without the step-to-step reversal, the region carried over (-1: with --cap ul)
+a_.add_argument('--theta', type=float, default=.5)        # 1/2: the midpoint; above: damps the modes stiffer than the step (MidpointStep.set_theta)
 args = a_.parse_args()
 OUT = args.out; E, NU, DT, UP, C0, V0 = 10648.614517785627, .3912951704721983, 1/1200, 2, -.2, (0., 0., -.245)
 cells = np.load(OUT/'dem_exact_single'/'cells.npz'); g = dict(np.load(OUT/'dem_exact_single'/'geometry.npz')); bsk = dict(np.load(OUT/'boundary_skin.npz'))
@@ -62,8 +66,15 @@ if args.cap == 'dir':
     CG = JointTrustCG(W, mass, DT, per=2); ST = JointMidpointStep(W, CG, mass, Kbb, fg, DT, 0.)
     print('free direction: %d colours for the curvature probe, %d non-positive (floored)' % (W.dir_colours, W.dir_neg), flush=True)
 else:
-    CG = TrustCG(W, mass, DT, per=2, product_iters=1); ST = MidpointStep(W, CG, mass, Kbb, fg, DT, 0.)
+    lr_cap = n//40 if W.cap_ul and args.lr > 0 else 0      # (the low-rank term's cells; it only sets the pace)
+    CG = TrustCG(W, mass, DT, per=2, product_iters=1, lr_cols=10*lr_cap); ST = MidpointStep(W, CG, mass, Kbb, fg, DT, 0.)
     ST.pre_ul = W.cap_ul                                   # (UL's F: the blocks at each step's start, not the rest blocks)
+    if W.cap_ul:                                           # (none of these changes the solution, 10-31)
+        ST.pre_every = args.pre_every
+        ST.lr_thr, ST.lr_cap = (args.lr, lr_cap) if lr_cap else (None, 0)
+    ST.smooth_pred = ST.carry_delta = bool(args.smooth_start if args.smooth_start >= 0 else W.cap_ul)
+    if args.theta != .5:
+        ST.set_theta(args.theta, mass)
 tol = 1e-3*ref
 ST.set_state(x, v, fg/M3)
 xs, Fs, ts = [X.cpu().numpy()], [np.tile(np.eye(3), (n, 1, 1))], [0.]
@@ -96,7 +107,7 @@ def floor_report():
     G_ = wp.to_torch(W.B['G'], requires_grad=False); nt_ = torch.linalg.cross(torch.einsum('bij,bj->bi', G_, st.t1), torch.einsum('bij,bj->bi', G_, st.t2))[st.cap]
     q_ = (nt_*W._pos['nr'][st.cap]).sum(1)
     return '; min a %.4f, below the floor %d, of them q < 0: %d' % (float(nt_.norm(dim=1).min()), int((q_ < args.a_floor).sum()), int((q_ < 0).sum()))
-t0 = time.time(); nsteps = int(round(args.T/DT))
+t0 = t_saved = time.time(); nsteps = int(round(args.T/DT))
 for s in range(1, nsteps+1):
     prods, its, g2 = ST.step(tol, lambda g2_: .5*tol)
     if not math.isfinite(g2) or math.sqrt(g2) > tol or (args.cap == "dir" and not ST.dd <= ST.dd_tol):
@@ -125,7 +136,7 @@ for s in range(1, nsteps+1):
             dirs = '; d off m: max %.1f deg, median %.2f deg; direction decrease / its tolerance %.2f' % (float(ang.max()), float(ang.median()), ST.dd/ST.dd_tol)
         print('t %.4f s (%.0f s): com up %.5f m; min J %.3f; products %d, Newton %d%s%s%s' % (s*DT, time.time()-t0, float(com@up), math.exp(float(W.tlj.min())), prods, its,
               self_report() if W.selfc is not None else ('; UL walls %d, radii iterations %d, radii failures %d, J floored %d' % tuple(W.ul_stats[k_] for k_ in ('walls', 'radii_it', 'radii_fail', 'floored')) if W.cap_ul else ''), dirs, floor_report() if args.a_floor > 0 else ''), flush=True)
-        if s % 20 == 0:
-            save()
+        if time.time()-t_saved > 60:                       # (the frames grow: not every record)
+            save(); t_saved = time.time()
 save()
 print('done: %d frames, %.0f s' % (len(ts), time.time()-t0), flush=True)

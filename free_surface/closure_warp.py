@@ -1160,15 +1160,18 @@ class ClosureWarp(SkinWarp):
         t['used'].copy_((tiny & (den > 0)).to(torch.int32))
         t['xn'].copy_(x); t['F0'].copy_(self._Fn)
 
-    def end_ul(self):
-        """after the step: F_n+1 = 2 F(z) - F_n, F linear in x and the buffers at the accepted midpoint z"""
-        self._Fn = 2*self.tF-self._Fn
+    def end_ul(self, th=.5):
+        """after the step: F_n+1 = (F(z) - (1 - th) F_n) / th (th = 1/2: 2 F(z) - F_n), F linear in x and the buffers at the accepted point z"""
+        self._Fn = (self.tF-(1-th)*self._Fn)/th
 
-    def ul_blocks(self):
+    def ul_blocks(self, lr_thr=None, lr_cap=0):
         """the elastic diagonal blocks on UL's F at the step's start, after update_ul (10-30; against blocks probed by differences 1.000 at rest, 0.95-1.05 at the 1-99 % on
         the lion's states). delta F_s = delta x_k (x) c_sk, c_sk = F_n^T rho_sk, rho_sk = dG_s/dx_k; the spin Om_sk = E [c]x R^T, E = (tr U I - U)^-1; delta (R r) = T delta x,
         T = -R [r]x Om. Gauss-Newton on the bonds: k J^T J, J = +-I + T_j - T_i (kn = ks), and Th^T (kb (I - n n^T) + kt n n^T) Th, Th = Om_j - Om_i; the volume
-        V lam (1 - ln J) rho rho^T; the variance 2 wv (rho_i - rho_j)(rho_i - rho_j)^T; the outer layer 2 mu r R Q R^T, Q = 1/4 [c (N c)^T + (N c) c^T + |c|^2 N + (c^T N c) I]"""
+        V lam (1 - ln J) rho rho^T; the variance 2 wv (rho_i - rho_j)(rho_i - rho_j)^T; the outer layer 2 mu r R Q R^T, Q = 1/4 [c (N c)^T + (N c) c^T + |c|^2 N + (c^T N c) I].
+        lr_thr (10-31): the cells whose F charges a neighbour's diagonal more than lr_thr times that neighbour's own bonds (at most lr_cap of them, the largest) leave the blocks and
+        come back as columns of a low-rank term, W W^T = sum_s U_s C_s U_s^T: spin U = Om^T, C = sum_b (k [r]x^T [r]x + K_th); volume U = rho, C = V lam (1 - ln J); outer layer
+        U_m = R B_m c, C_mn = 2 mu r sym tr(B_m B_n N). Returns then (blocks, (k, col, w)): W's entries; a diagonal block cannot tell these few stiff directions from the soft ones"""
         f32 = torch.float32                                                         # (a preconditioner: single precision; R the last evaluation's)
         st, t = self.st, self.tul; F, Rot = self._Fn.to(f32), self.tR.to(f32); n, nb, dev = self.n, self.nb, st.X.device; I3 = torch.eye(3, dtype=f32, device=dev)
         m = st.model; ke, ri, rj, n0 = self._kb_t.to(f32), m.ri.to(f32), m.rj.to(f32), m.n0.to(f32); bi, bj = st.i.long(), st.j.long()
@@ -1205,9 +1208,34 @@ class ClosureWarp(SkinWarp):
         Om = E[s]@cross(c)@Rot[s].transpose(1, 2)
         K = torch.zeros(n, 3, 3, dtype=f32, device=dev)
         L = torch.log((F[:, :, 0]*torch.linalg.cross(F[:, :, 1], F[:, :, 2])).sum(1).clamp(min=1e-3))
-        K.index_add_(0, k, (V[s]*self.lam*(1-L[s]))[:, None, None]*rho[:, :, None]*rho[:, None, :])
         Nf = torch.zeros_like(K); rc = torch.zeros(n, dtype=f32, device=dev); Nf[st.c_body] = st.c_N.to(f32); rc[st.c_body] = st.c_r.to(f32)
         Nc = torch.einsum('sab,sb->sa', Nf[s], c); cc = (c*c).sum(1); cNc = (c*Nc).sum(1)
+        lr = None
+        if lr_thr is not None:
+            nn = n0[:, :, None]*n0[:, None, :]; Kth = ke[:, 2, None, None]*(I3-nn)+ke[:, 3, None, None]*nn
+            Cs = torch.zeros_like(K).index_add(0, bi, ke[:, 0, None, None]*(cross(ri).transpose(1, 2)@cross(ri))+Kth).index_add(0, bj, ke[:, 0, None, None]*(cross(rj).transpose(1, 2)@cross(rj))+Kth)
+            own = torch.zeros(n, dtype=f32, device=dev).index_add(0, bi, ke[:, 0]).index_add(0, bj, ke[:, 0])
+            charge = ((Cs[s]@Om)*Om).sum((1, 2))+V[s]*self.lam*(1-L[s])*(rho*rho).sum(1)+.5*self.mu*rc[s]*(5*cNc+cc*Nf[s].diagonal(dim1=1, dim2=2).sum(1))
+            phi = torch.zeros(n, dtype=f32, device=dev).scatter_reduce(0, s, charge/own[k], 'amax', include_self=True)
+            Qc = phi > lr_thr
+            if int(Qc.sum()) > lr_cap:
+                Qc = phi >= torch.topk(phi, lr_cap).values[-1]
+            ids = torch.where(Qc)[0]; base = torch.full((n,), -1, dtype=torch.long, device=dev); base[ids] = 10*torch.arange(len(ids), device=dev)
+            if not hasattr(self, '_B6'):
+                q2 = 2**-.5; self._B6 = torch.tensor([[[1, 0, 0], [0, 0, 0], [0, 0, 0]], [[0, 0, 0], [0, 1, 0], [0, 0, 0]], [[0, 0, 0], [0, 0, 0], [0, 0, 1]], [[0, q2, 0], [q2, 0, 0], [0, 0, 0]],
+                                                     [[0, 0, q2], [0, 0, 0], [q2, 0, 0]], [[0, 0, 0], [0, 0, q2], [0, q2, 0]]], dtype=f32, device=dev)
+                B_ = torch.einsum('mab,nbc->mnac', self._B6, self._B6); self._TB = .5*(B_+B_.transpose(0, 1))
+            q = Qc[s]; sq, kq, pq = s[q], k[q], base[s[q]]//10
+            Ls = torch.linalg.cholesky(Cs[ids]+1e-6*Cs[ids].diagonal(dim1=1, dim2=2).mean(1)[:, None, None]*I3)
+            C6 = (2*self.mu*rc[ids])[:, None, None]*torch.einsum('mnab,sab->smn', self._TB, Nf[ids])
+            w6, V6 = torch.linalg.eigh(.5*(C6+C6.transpose(1, 2))); L6 = V6*w6.clamp(min=0).sqrt()[:, None, :]
+            v6 = torch.einsum('sab,mbc,sc->sma', Rot[sq], self._B6, c[q])
+            cols = torch.cat([Om[q].transpose(1, 2)@Ls[pq], ((V[sq]*self.lam*(1-L[sq])).clamp(min=0).sqrt()[:, None]*rho[q])[:, :, None], torch.einsum('sma,smj->saj', v6, L6[pq])], 2)
+            kk_ = torch.repeat_interleave(kq, 10); cl_ = (base[sq][:, None]+torch.arange(10, device=dev)).reshape(-1); w_ = cols.transpose(1, 2).reshape(-1, 3)
+            nz = w_.norm(dim=1) > 0
+            lr = (kk_[nz], cl_[nz], w_[nz].to(f64))
+            keep = ~Qc[s]; s, k, rho, c, Om, Nc, cc, cNc = s[keep], k[keep], rho[keep], c[keep], Om[keep], Nc[keep], cc[keep], cNc[keep]
+        K.index_add_(0, k, (V[s]*self.lam*(1-L[s]))[:, None, None]*rho[:, :, None]*rho[:, None, :])
         Q = .25*(c[:, :, None]*Nc[:, None, :]+Nc[:, :, None]*c[:, None, :]+cc[:, None, None]*Nf[s]+cNc[:, None, None]*I3)
         K.index_add_(0, k, (2*self.mu*rc[s])[:, None, None]*(Rot[s]@Q@Rot[s].transpose(1, 2)))
         # the bonds' entries (b, k) from each end's stencil, coalesced per (b, k)
@@ -1226,7 +1254,8 @@ class ClosureWarp(SkinWarp):
         K.index_add_(0, k2, ke[b2, 0, None, None]*(Jd.transpose(1, 2)@Jd))
         K.index_add_(0, k2, Jt.transpose(1, 2)@(ke[b2, 2, None, None]*(I3-nn)+ke[b2, 3, None, None]*nn)@Jt)
         K.index_add_(0, k2, (2*wv[b2])[:, None, None]*Jg[:, :, None]*Jg[:, None, :])
-        return .5*(K+K.transpose(1, 2)).to(f64)
+        K = .5*(K+K.transpose(1, 2)).to(f64)
+        return K if lr_thr is None else (K, lr)
 
     def set_cap_floor(self, eps):
         """the floor on the one-way cap's normal (floored_nt), after set_cap_positions; 0: none, comp_a itself. The reference normal starts at the rest
@@ -1894,6 +1923,79 @@ def k_tr_update(d: wp.array(dtype=wp.vec3d), Hd: wp.array(dtype=wp.vec3d), Pinv:
     wp.atomic_add(tr, TR_RR, wp.dot(ri, ri))
 
 
+# the low-rank term of the preconditioner (10-31), P = D + W W^T, by Woodbury: y = D^-1 r - D^-1 W S^-1 W^T D^-1 r, S = I + W^T D^-1 W; W's entries padded with col < 0, S^-1 dense per
+# cluster of coupled columns (row i: size[i] values from off[i], for the columns from start[i]). Each kernel holds once the CG has ended, as k_tr_update does
+@wp.kernel(enable_backward=False)
+def k_tr_update_nd(d: wp.array(dtype=wp.vec3d), Hd: wp.array(dtype=wp.vec3d), Pinv: wp.array(dtype=wp.mat33d), tr: wp.array(dtype=wp.float64),
+                   p: wp.array(dtype=wp.vec3d), Hp: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.vec3d), y: wp.array(dtype=wp.vec3d)):
+    """k_tr_update, the dots left for k_tr_dots"""
+    i = wp.tid()
+    if tr[TR_DONE0] > wp.float64(0.0):
+        return
+    al = tr[TR_AL]
+    p[i] = p[i]+al*d[i]
+    Hp[i] = Hp[i]+al*Hd[i]
+    if tr[TR_DONE] > wp.float64(0.0):
+        return
+    ri = r[i]-al*Hd[i]
+    r[i] = ri
+    y[i] = Pinv[i]@ri
+
+
+@wp.kernel(enable_backward=False)
+def k_lr_zero(tr: wp.array(dtype=wp.float64), u: wp.array(dtype=wp.float32)):
+    if tr[TR_DONE] > wp.float64(0.0):
+        return
+    u[wp.tid()] = 0.0
+
+
+@wp.kernel(enable_backward=False)
+def k_lr_u(kk: wp.array(dtype=int), col: wp.array(dtype=int), W: wp.array(dtype=wp.vec3f), y: wp.array(dtype=wp.vec3d), tr: wp.array(dtype=wp.float64), u: wp.array(dtype=wp.float32)):
+    e = wp.tid()
+    c = col[e]
+    if c < 0 or tr[TR_DONE] > wp.float64(0.0):
+        return
+    a = y[kk[e]]
+    wp.atomic_add(u, c, wp.dot(W[e], wp.vec3f(wp.float32(a[0]), wp.float32(a[1]), wp.float32(a[2]))))
+
+
+@wp.kernel(enable_backward=False)
+def k_lr_v(u: wp.array(dtype=wp.float32), start: wp.array(dtype=int), size: wp.array(dtype=int), off: wp.array(dtype=int), Si: wp.array(dtype=wp.float32), tr: wp.array(dtype=wp.float64),
+           v: wp.array(dtype=wp.float32)):
+    i = wp.tid()
+    if tr[TR_DONE] > wp.float64(0.0):
+        return
+    s = wp.float32(0.0)
+    for q in range(size[i]):
+        s = s+Si[off[i]+q]*u[start[i]+q]
+    v[i] = s
+
+
+@wp.kernel(enable_backward=False)
+def k_lr_y(kk: wp.array(dtype=int), col: wp.array(dtype=int), DW: wp.array(dtype=wp.vec3f), v: wp.array(dtype=wp.float32), tr: wp.array(dtype=wp.float64), y: wp.array(dtype=wp.vec3d)):
+    e = wp.tid()
+    c = col[e]
+    if c < 0 or tr[TR_DONE] > wp.float64(0.0):
+        return
+    a = v[c]*DW[e]
+    wp.atomic_add(y, kk[e], wp.vec3d(-wp.float64(a[0]), -wp.float64(a[1]), -wp.float64(a[2])))
+
+
+@wp.kernel(enable_backward=False)
+def k_tr_dots(r: wp.array(dtype=wp.vec3d), y: wp.array(dtype=wp.vec3d), tr: wp.array(dtype=wp.float64)):
+    i = wp.tid()
+    if tr[TR_DONE] > wp.float64(0.0):
+        return
+    wp.atomic_add(tr, TR_RZN, wp.dot(r[i], y[i]))
+    wp.atomic_add(tr, TR_RR, wp.dot(r[i], r[i]))
+
+
+@wp.kernel(enable_backward=False)
+def k_tr_rz(r: wp.array(dtype=wp.vec3d), y: wp.array(dtype=wp.vec3d), tr: wp.array(dtype=wp.float64)):
+    i = wp.tid()
+    wp.atomic_add(tr, TR_RZ, wp.dot(r[i], y[i]))
+
+
 @wp.kernel(enable_backward=False)
 def k_tr_beta(tr: wp.array(dtype=wp.float64)):
     """|p|_M^2; the stop (|r| <= stop or cap products) or the next direction's beta and M-products"""
@@ -1937,9 +2039,17 @@ class TrustCG:
     search's ClosureCG let each product's result be the next one's start: on the 30k jack a drift of 3e-5 in one cell's F
     and a curvature -120 where the true one is +52). Per graph `per` iterations; nothing changes after the exit. Arrays
     in a: z, p (the step; MidpointStep's dz), g0 (dE/dx at z), Pinv, cm = 4 m / dt^2, tr (scalars)"""
-    def __init__(self, W, mass, dt, per=2, h=1e-9, product_iters=1):
+    def __init__(self, W, mass, dt, per=2, h=1e-9, product_iters=1, lr_cols=0):
         self.W, self.per, self.h = W, per, float(h)
         n = W.n; dev = 'cuda'; B = W.B
+        self.lr = None
+        if lr_cols:                                                                 # (the preconditioner's low-rank term, set_lr; lr_cols its capacity)
+            zi = lambda k_: wp.zeros(k_, dtype=int, device=dev)
+            self.lr = dict(E=30*lr_cols, M=lr_cols, kk=zi(30*lr_cols), col=zi(30*lr_cols), W=wp.zeros(30*lr_cols, dtype=wp.vec3f, device=dev), DW=wp.zeros(30*lr_cols, dtype=wp.vec3f, device=dev),
+                           u=wp.zeros(lr_cols, dtype=wp.float32, device=dev), v=wp.zeros(lr_cols, dtype=wp.float32, device=dev), start=zi(lr_cols), size=zi(lr_cols), off=zi(lr_cols),
+                           Si=wp.zeros(lr_cols*lr_cols, dtype=wp.float32, device=dev))
+            self.tl = {k_: wp.to_torch(a_, requires_grad=False) for k_, a_ in self.lr.items() if k_ not in ('E', 'M')}
+            self.tl['col'].fill_(-1)
         z = lambda dt_: wp.zeros(n, dtype=dt_, device=dev)
         self.a = dict(z=z(wp.vec3d), p=z(wp.vec3d), d=z(wp.vec3d), r=z(wp.vec3d), y=z(wp.vec3d), Hd=z(wp.vec3d), Hp=z(wp.vec3d),
                       g0=z(wp.vec3d), Pinv=z(wp.mat33d), cm=wp.from_torch((4*mass.to(f64)/dt**2).contiguous(), dtype=wp.float64),
@@ -1955,7 +2065,12 @@ class TrustCG:
             W._run()                                                              # (no tape.reset here: it zeroes the gradients)
             wp.launch(k_tr_hd, n, inputs=[W.xw.grad, A['g0'], A['d'], A['cm'], A['tr'], self.h], outputs=[A['Hd']])
             wp.launch(k_tr_alpha, 1, inputs=[A['tr']])
-            wp.launch(k_tr_update, n, inputs=[A['d'], A['Hd'], A['Pinv'], A['tr']], outputs=[A['p'], A['Hp'], A['r'], A['y']])
+            if self.lr is None:
+                wp.launch(k_tr_update, n, inputs=[A['d'], A['Hd'], A['Pinv'], A['tr']], outputs=[A['p'], A['Hp'], A['r'], A['y']])
+            else:
+                wp.launch(k_tr_update_nd, n, inputs=[A['d'], A['Hd'], A['Pinv'], A['tr']], outputs=[A['p'], A['Hp'], A['r'], A['y']])
+                self._lr_apply()
+                wp.launch(k_tr_dots, n, inputs=[A['r'], A['y']], outputs=[A['tr']])
             wp.launch(k_tr_beta, 1, inputs=[A['tr']])
             wp.launch(k_tr_dir, n, inputs=[A['y'], A['tr']], outputs=[A['d']])
         W.cold()
@@ -1974,6 +2089,50 @@ class TrustCG:
         """the closure at W's last evaluation (the accepted z) as the linearised products' base"""
         self.W.save_closure()
 
+    def _lr_apply(self):
+        """y -= D^-1 W S^-1 W^T y, y = D^-1 r on entry"""
+        A, L = self.a, self.lr
+        wp.launch(k_lr_zero, L['M'], inputs=[A['tr']], outputs=[L['u']])
+        wp.launch(k_lr_u, L['E'], inputs=[L['kk'], L['col'], L['W'], A['y'], A['tr']], outputs=[L['u']])
+        wp.launch(k_lr_v, L['M'], inputs=[L['u'], L['start'], L['size'], L['off'], L['Si'], A['tr']], outputs=[L['v']])
+        wp.launch(k_lr_y, L['E'], inputs=[L['kk'], L['col'], L['DW'], L['v'], A['tr']], outputs=[A['y']])
+
+    def set_lr(self, kk, col, w):
+        """the term W W^T of P = D + W W^T, D^-1 in a['Pinv']: W's entries (dof block k, column, 3-vector); S = I + W^T D^-1 W from the pairs of entries at one k, inverted per cluster"""
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.csgraph import connected_components
+        L, T = self.lr, self.tl
+        Pi = self.t['Pinv']; dev = kk.device; n = self.W.n; E = len(kk)
+        T['col'].fill_(-1); T['size'].zero_()
+        if E == 0:
+            return dict(columns=0, clusters=0, largest=0)
+        cols, col = torch.unique(col, return_inverse=True); m = len(cols)
+        if E > L['E'] or m > L['M']:
+            raise RuntimeError('set_lr: %d entries, %d columns over the capacity %d, %d' % (E, m, L['E'], L['M']))
+        o = torch.argsort(kk); kk, col, w = kk[o], col[o], w[o]
+        dw = torch.einsum('eab,eb->ea', Pi[kk], w)
+        cnt = torch.bincount(kk, minlength=n); zero = torch.zeros(1, dtype=torch.long, device=dev); first = torch.cat([zero, torch.cumsum(cnt, 0)[:-1]])
+        rep = cnt[kk]; e1 = torch.repeat_interleave(torch.arange(E, device=dev), rep)
+        e2 = torch.arange(int(rep.sum()), device=dev)-torch.cat([zero, torch.cumsum(rep, 0)[:-1]])[e1]+first[kk][e1]
+        u, inv = torch.unique(col[e1]*m+col[e2], return_inverse=True); sv = torch.zeros(len(u), dtype=f64, device=dev).index_add(0, inv, (w[e1]*dw[e2]).sum(1)); a, b = u//m, u % m
+        nc, lab = connected_components(coo_matrix((np.ones(len(u)), (a.cpu().numpy(), b.cpu().numpy())), shape=(m, m)), directed=False)
+        lab = torch.as_tensor(lab, device=dev).long(); sizes = torch.bincount(lab, minlength=nc)
+        order = torch.argsort(sizes); rank = torch.zeros(nc, dtype=torch.long, device=dev); rank[order] = torch.arange(nc, device=dev)   # (clusters by size: those of one size inverted together)
+        lab = rank[lab]; sizes = sizes[order]
+        perm = torch.argsort(lab, stable=True); new = torch.zeros(m, dtype=torch.long, device=dev); new[perm] = torch.arange(m, device=dev)
+        st_ = torch.cat([zero, torch.cumsum(sizes, 0)[:-1]]); fl = torch.cat([zero, torch.cumsum(sizes*sizes, 0)])
+        a2, b2, ca = new[a], new[b], lab[a]
+        for k_ in torch.unique(sizes).tolist():
+            cs_ = torch.where(sizes == k_)[0]; idx = torch.full((nc,), -1, dtype=torch.long, device=dev); idx[cs_] = torch.arange(len(cs_), device=dev)
+            q = idx[ca] >= 0; Sb = torch.zeros(len(cs_), k_, k_, dtype=f64, device=dev)
+            Sb[idx[ca[q]], a2[q]-st_[ca[q]], b2[q]-st_[ca[q]]] = sv[q]
+            Sb = Sb+torch.eye(k_, dtype=f64, device=dev)
+            T['Si'][int(fl[cs_[0]]):int(fl[cs_[-1]+1])] = torch.linalg.inv(.5*(Sb+Sb.transpose(1, 2))).reshape(-1).to(torch.float32)
+        cc_ = torch.repeat_interleave(torch.arange(nc, device=dev), sizes)
+        T['start'][:m] = st_[cc_].to(torch.int32); T['size'][:m] = sizes[cc_].to(torch.int32); T['off'][:m] = (fl[cc_]+sizes[cc_]*(torch.arange(m, device=dev)-st_[cc_])).to(torch.int32)
+        T['kk'][:E] = kk.to(torch.int32); T['col'][:E] = new[col].to(torch.int32); T['W'][:E] = w.to(torch.float32); T['DW'][:E] = dw.to(torch.float32)
+        return dict(columns=m, clusters=nc, largest=int(sizes.max()), dense=int(fl[-1]))
+
     def solve(self, g, delta, stop, cap):
         """the subproblem for the gradient g (a Warp array) with z, g0, Pinv in a; delta <= 0: the preconditioned
         gradient's length. Returns dict(K products, EDGE, NEG, PMP |p|_M^2, DELTA, GP g . p, PHP p . H p); p in a['p']"""
@@ -1981,6 +2140,11 @@ class TrustCG:
         tr = self.t['tr']
         tr.zero_(); tr[TR_DELTA] = float(delta); tr[TR_STOP] = float(stop); tr[TR_CAP] = float(cap)
         wp.launch(k_tr_init, n, inputs=[g, A['Pinv']], outputs=[A['r'], A['y'], A['d'], A['p'], A['Hp'], A['tr']])
+        if self.lr is not None:
+            self._lr_apply()
+            tr[TR_RZ] = 0.
+            wp.launch(k_tr_rz, n, inputs=[A['r'], A['y']], outputs=[A['tr']])
+            self.t['d'].copy_(self.t['y'])
         wp.launch(k_tr_start, 1, inputs=[A['tr']])
         it = 0
         while it < cap+self.per:
@@ -2006,13 +2170,14 @@ def k_mid_set(ps: wp.array(dtype=wp.float64), k: int, val: wp.float64):
 
 
 @wp.kernel(enable_backward=False)
-def k_mid_begin(x: wp.array(dtype=wp.vec3d), v: wp.array(dtype=wp.vec3d), a: wp.array(dtype=wp.vec3d), dt: wp.float64,
+def k_mid_begin(x: wp.array(dtype=wp.vec3d), v: wp.array(dtype=wp.vec3d), a: wp.array(dtype=wp.vec3d), dt: wp.float64, th: wp.float64,
                 xt: wp.array(dtype=wp.vec3d), z: wp.array(dtype=wp.vec3d)):
-    """the predictor: xt = x + dt v / 2, z = xt + dt^2 a / 4"""
+    """the predictor: xt = x + th dt v, z = xt + (th dt)^2 a (th = 1/2 the midpoint)"""
     i = wp.tid()
-    xti = x[i]+(dt/wp.float64(2.0))*v[i]
+    h = th*dt
+    xti = x[i]+h*v[i]
     xt[i] = xti
-    z[i] = xti+(dt*dt/wp.float64(4.0))*a[i]
+    z[i] = xti+(h*h)*a[i]
 
 
 @wp.kernel(enable_backward=False)
@@ -2117,19 +2282,19 @@ def k_mid_inv(P: wp.array(dtype=wp.mat33d), Pinv: wp.array(dtype=wp.mat33d)):
 
 
 @wp.kernel(enable_backward=False)
-def k_mid_visc_bonds(bd: wp.array(dtype=wp.vec3d), bth: wp.array(dtype=wp.vec3d), rd: wp.array(dtype=wp.vec3d), rth: wp.array(dtype=wp.vec3d)):
-    """the viscosity's references at the step's end: 2 (midpoint measure) - start"""
+def k_mid_visc_bonds(bd: wp.array(dtype=wp.vec3d), bth: wp.array(dtype=wp.vec3d), ca: wp.float64, cb: wp.float64, rd: wp.array(dtype=wp.vec3d), rth: wp.array(dtype=wp.vec3d)):
+    """the viscosity's references at the step's end: ca (midpoint measure) - cb start, ca = 1 / th, cb = ca - 1 (th = 1/2: 2 m - start)"""
     e = wp.tid()
-    rd[e] = wp.float64(2.0)*bd[e]-rd[e]
-    rth[e] = wp.float64(2.0)*bth[e]-rth[e]
+    rd[e] = ca*bd[e]-cb*rd[e]
+    rth[e] = ca*bth[e]-cb*rth[e]
 
 
 @wp.kernel(enable_backward=False)
-def k_mid_visc_bodies(R: wp.array(dtype=wp.mat33d), F: wp.array(dtype=wp.mat33d), lj: wp.array(dtype=wp.float64),
+def k_mid_visc_bodies(R: wp.array(dtype=wp.mat33d), F: wp.array(dtype=wp.mat33d), lj: wp.array(dtype=wp.float64), ca: wp.float64, cb: wp.float64,
                       rP: wp.array(dtype=wp.mat33d), rL: wp.array(dtype=wp.float64)):
     b = wp.tid()
-    rP[b] = wp.float64(2.0)*(wp.transpose(R[b])@F[b])-rP[b]
-    rL[b] = wp.float64(2.0)*lj[b]-rL[b]
+    rP[b] = ca*(wp.transpose(R[b])@F[b])-cb*rP[b]
+    rL[b] = ca*lj[b]-cb*rL[b]
 
 
 @wp.kernel(enable_backward=False)
@@ -2143,13 +2308,13 @@ def k_mid_lamt(ff: wp.array(dtype=wp.vec3d), delta: wp.array(dtype=wp.float64), 
 
 
 @wp.kernel(enable_backward=False)
-def k_mid_end(z: wp.array(dtype=wp.vec3d), dt: wp.float64, m: wp.array(dtype=wp.float64), x: wp.array(dtype=wp.vec3d),
+def k_mid_end(z: wp.array(dtype=wp.vec3d), dt: wp.float64, th: wp.float64, m: wp.array(dtype=wp.float64), x: wp.array(dtype=wp.vec3d),
               v: wp.array(dtype=wp.vec3d), a: wp.array(dtype=wp.vec3d), mv: wp.array(dtype=wp.vec3d)):
-    """x1 = 2 z - x, v1 = 4 (z - x) / dt - v, a = (v1 - v) / dt; sum m v1 into mv"""
+    """x1 = x + (z - x) / th, v1 = (z - x) / (th^2 dt) - (1 - th) / th v, a = (v1 - v) / dt (th = 1/2: 2 z - x, 4 (z - x) / dt - v); sum m v1 into mv"""
     i = wp.tid()
     xi, vi, zi = x[i], v[i], z[i]
-    v1 = (zi-xi)*(wp.float64(4.0)/dt)-vi
-    x[i] = wp.float64(2.0)*zi-xi
+    v1 = (zi-xi)*(wp.float64(1.0)/(th*th*dt))-((wp.float64(1.0)-th)/th)*vi
+    x[i] = xi+(zi-xi)*(wp.float64(1.0)/th)
     a[i] = (v1-vi)/dt
     v[i] = v1
     wp.atomic_add(mv, 0, m[i]*v1)
@@ -2178,6 +2343,11 @@ class MidpointStep:
         self.W, self.CG, self.dt = W, CG, float(dt)
         self.eta, self.cg_cap, self.newton_max = float(eta), int(cg_cap), int(newton_max)
         self.pre_ul = self.pre_self = False
+        self.lr_thr, self.lr_cap = None, 0                                          # (W.ul_blocks' low-rank term, needs pre_ul and CG built with lr_cols)
+        self.smooth_pred, self.carry_delta = False, False                           # (the Newton's start, the region's start: neither changes the solution)
+        self._vp = self._ap = self.delta_start = None
+        self.pre_every, self._pre_age = 1, 0
+        self.th = .5
         n = W.n; dev = 'cuda'
         z = lambda dt_, k=n: wp.zeros(k, dtype=dt_, device=dev)
         A = CG.a
@@ -2187,6 +2357,7 @@ class MidpointStep:
         self.ps = wp.zeros(8, dtype=wp.float64, device=dev)
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tx, self.tv, self.ta, self.tps, self.tK = tt(self.a['x']), tt(self.a['v']), tt(self.a['a']), tt(self.ps), tt(self.a['K'])
+        self.tz = tt(self.a['z'])
         self.K0, self.mu0 = self.tK.clone(), W.mu
         self.mtot = float(mass.sum()); self.c0 = float(W.tball[2])
         self.update_material(muf)
@@ -2215,8 +2386,18 @@ class MidpointStep:
         if muf is not None:
             self.muf = float(muf); W.tball[4] = self.muf
         self.tK.copy_(self.K0*(W.mu/self.mu0))
-        self.c1 = 1+2*W.smu/self.dt
-        self.g8, self.cb, self.e4 = 8*W.Gs, self.muf*4/3*W.Es, 4*W.Es
+        self.c1 = 1+W.smu/(self.th*self.dt)
+        self.g8, self.cb, self.e4 = 8*W.Gs, self.muf*4/3*W.Es, 2*W.Es/self.th
+
+    def set_theta(self, th, mass):
+        """the theta method instead of the midpoint (10-31, off by default, the user keeps the midpoint): forces at x + th (x1 - x), th > 1/2 damps modes stiffer than the step by (1 - th) / th per step, the midpoint not at all;
+        a slow mode's extra damping is that of a Kelvin-Voigt time (th - 1/2) dt. Pi's inertia m / (th dt)^2, the step-end centres of the contacts and the viscous rate follow"""
+        W = self.W
+        self.th = float(th)
+        self.CG.t['cm'].copy_(mass.to(f64)/(self.th*self.dt)**2)
+        W.visc_weight = 1/self.th; W.total_mode()
+        W.tball[0], W.tball[1] = 1/self.th, self.th
+        self.update_material()
 
     def set_state(self, x, v, a):
         self.tx.copy_(x); self.tv.copy_(v); self.ta.copy_(a)
@@ -2247,26 +2428,39 @@ class MidpointStep:
         """the step's Newton iterations from the predictor, after begin(); repeatable until end(). pre_ul: the blocks of W.ul_blocks at the step's start in the bodies' frames
         in place of the rest blocks; pre_self: the self contacts in them. stats' trace: per Newton iteration (products, edge, negative, CG stop, |g|, ratio, taken)"""
         W, A, bl, n = self.W, self.a, self.W.ball, self.W.n
-        wp.launch(k_mid_begin, n, inputs=[A['x'], A['v'], A['a'], self.dt], outputs=[A['xt'], A['z']])
+        wp.launch(k_mid_begin, n, inputs=[A['x'], A['v'], A['a'], self.dt, self.th], outputs=[A['xt'], A['z']])
+        if self.smooth_pred and self._vp is not None:                               # (the start only: v, a averaged over two steps, without the mode reversing every step, which is not in z;
+            h_ = self.th*self.dt                                                    # v_n = v_avg + a dt / 2, so exact for constant a, as the plain predictor)
+            self.tz.copy_(self.tx+.5*h_*(self.tv+self._vp)+.5*(.5*h_*self.dt+h_*h_)*(self.ta+self._ap))
         wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
         g2 = self._eval(0.)[PS_GQ2]
         self._accept()
         evals, its = 1, 0
         st = dict(rejected=0, edge=0, negative=0, trace=[])
-        delta, delta0 = -1., None
+        delta, delta0 = (self.delta_start if self.carry_delta and self.delta_start else -1.), None
         while its < self.newton_max:
             if math.sqrt(g2) <= tol_abs:
                 break
             its += 1
-            if its == 1 and self.pre_ul:
-                self.tK.copy_(W.tR.transpose(1, 2)@W.ul_blocks()@W.tR)
-            wp.launch(k_mid_pre, n, inputs=[W.B['R'], A['K'], self.c1, A['cm']], outputs=[A['P']])
-            wp.launch(k_mid_pre_ball, bl['k'], inputs=[bl['body'], bl['R'], W.B['bdelta'], bl['ng'], self.e4, bl['kt'], bl['bound'], self.muf],
-                      outputs=[A['P']])
-            if self.pre_self and W.selfc is not None:
-                sc = W.selfc
-                wp.launch(k_mid_pre_self, sc['K'], inputs=[A['z'], sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['d0'], sc['Reff'], .5*self.e4], outputs=[A['P']])
-            wp.launch(k_mid_inv, n, inputs=[A['P']], outputs=[A['Pinv']])
+            lr = None
+            fresh = self._pre_age <= 0                                               # (the blocks and the low-rank term every pre_every steps)
+            if its == 1 and self.pre_ul and fresh:
+                self._pre_age = self.pre_every
+                if self.lr_thr is None:
+                    self.tK.copy_(W.tR.transpose(1, 2)@W.ul_blocks()@W.tR)
+                else:
+                    Kd, lr = W.ul_blocks(self.lr_thr, self.lr_cap)
+                    self.tK.copy_(W.tR.transpose(1, 2)@Kd@W.tR)
+            if (its == 1 and fresh) or self.lr_thr is None:                         # (with the low-rank term P stays as at the step's first iteration: S goes with its D)
+                wp.launch(k_mid_pre, n, inputs=[W.B['R'], A['K'], self.c1, A['cm']], outputs=[A['P']])
+                wp.launch(k_mid_pre_ball, bl['k'], inputs=[bl['body'], bl['R'], W.B['bdelta'], bl['ng'], self.e4, bl['kt'], bl['bound'], self.muf],
+                          outputs=[A['P']])
+                if self.pre_self and W.selfc is not None:
+                    sc = W.selfc
+                    wp.launch(k_mid_pre_self, sc['K'], inputs=[A['z'], sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['d0'], sc['Reff'], .5*self.e4], outputs=[A['P']])
+                wp.launch(k_mid_inv, n, inputs=[A['P']], outputs=[A['Pinv']])
+            if lr is not None:
+                st['lr'] = self.CG.set_lr(lr[0], lr[1], lr[2]*math.sqrt(self.c1))
             stop = max(cg_tol_abs(g2), self.eta*math.sqrt(g2)); g_ = math.sqrt(g2)
             r = self.CG.solve(A['gz'], delta, stop, self.cg_cap)
             evals += r['K']; st['edge'] += r['EDGE']; st['negative'] += r['NEG']
@@ -2296,20 +2490,25 @@ class MidpointStep:
                 if not delta > 1e-12*delta0:                                          # the region collapsed: no decrease found
                     break
         self.stats = st
+        self.delta_start = delta if delta > 0. else None
         return evals, its, g2
 
     def end(self):
         """the step's end at the accepted midpoint (W's buffers hold its evaluation)"""
         W, A, bl, n = self.W, self.a, self.W.ball, self.W.n
+        ca = 1/self.th
         if W.cap_ul:
-            W.end_ul()
+            W.end_ul(self.th)
         if W.vis is not None:
-            wp.launch(k_mid_visc_bonds, W.nb, inputs=[W.B['bd'], W.B['bth']], outputs=[W.ref['d'], W.ref['th']])
-            wp.launch(k_mid_visc_bodies, n, inputs=[W.B['R'], W.B['F'], W.B['lj']], outputs=[W.ref['P'], W.ref['L']])
+            wp.launch(k_mid_visc_bonds, W.nb, inputs=[W.B['bd'], W.B['bth'], ca, ca-1], outputs=[W.ref['d'], W.ref['th']])
+            wp.launch(k_mid_visc_bodies, n, inputs=[W.B['R'], W.B['F'], W.B['lj'], ca, ca-1], outputs=[W.ref['P'], W.ref['L']])
         if W.cap_eps > 0:
             wp.launch(k_capref, n, inputs=[W.B['G'], W.poff, W.t1, W.t2, W.capeps], outputs=[W.capnr])
         wp.launch(k_mid_lamt, bl['k'], inputs=[W.B['bff'], W.B['bdelta']], outputs=[bl['lamt']])
-        wp.launch(k_mid_end, n, inputs=[A['z'], self.dt, A['m']], outputs=[A['x'], A['v'], A['a'], A['mv']])
+        if self.smooth_pred:
+            self._vp, self._ap = self.tv.clone(), self.ta.clone()
+        self._pre_age -= 1
+        wp.launch(k_mid_end, n, inputs=[A['z'], self.dt, self.th, A['m']], outputs=[A['x'], A['v'], A['a'], A['mv']])
         wp.launch(k_mid_vmax, 1, inputs=[A['mv'], self.mtot], outputs=[self.ps])
 
     def vmax(self):
