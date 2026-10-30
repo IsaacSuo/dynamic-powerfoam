@@ -56,7 +56,7 @@ def main():
     a_.add_argument('--shift', default='displacement', help="ul_model shift: 'displacement' (two-step fit, carried to the centroid) or 'none' (site-level fit)")
     a_.add_argument('--agg', type=float, default=0., help='> 0: cells below this x the median volume take their neighbours\' fit (ul_model agg, 10-29)')
     a_.add_argument('--beta', type=float, default=0., help='Kelvin-Voigt time (s), the DEM\'s: eta = beta mu, zeta = beta (lam + 2 mu / 3) (10-29)')
-    a_.add_argument('--self-contact', default=None, choices=['air', 'compat', 'cap', 'skin', 'bond'], help='contact walls (air: grown in air or out of a contact interface; '
+    a_.add_argument('--self-contact', default=None, choices=['air', 'compat', 'cap', 'skin', 'bond', 'rest'], help='contact walls (air: grown in air or out of a contact interface; '
                     'compat: the pair\'s offset not explained by either side\'s deformation from rest) out of the '
                     'material terms, Hertz across them (ul_model self_contact, 10-29)')
     a_.add_argument('--sc-birth', type=int, default=0, help='1: the self-contact Hertz overlap counted from each contact wall\'s birth')
@@ -64,6 +64,7 @@ def main():
     a_.add_argument('--cut-bonds', type=int, default=0, help='1: the recut over the bond family only (rest walls + pairs within --bond-delta h at rest, '
                     'visible through the rest body); the other overlapping balls are the contact (ul_model cut_bonds, 10-29)')
     a_.add_argument('--bond-delta', type=float, default=4.)
+    a_.add_argument('--bond-floor', type=float, default=0., help='> 0: the rest pairs keep this x their rest jump stiffness at least, also once their wall is gone (ul_model bond_floor, 10-29)')
     a_.add_argument('--bond-eps', type=float, default=.25)
     a_.add_argument('--sc-thr', type=float, default=2.5, help='self-contact compat threshold, x the median cell size')
     a_.add_argument('--jump-n', default='current', choices=['current', 'start'], help='the jump term\'s normal: along the pair now, or at the step\'s cut (ul_model jump_n, 10-29)')
@@ -84,7 +85,7 @@ def main():
         dlt, J0, cnt = cell_moments_grid(X, r, V, args.grid); np.savez(cf, dlt=dlt, J0=J0, cnt=cnt)
     E, nu = args.E/1000, args.nu
     mdl = ULModel(X, r, V, dlt, J0, E, nu, f_mode=args.f_mode, new_ref=args.new_ref, fit_w=args.fit_w, tet_w=args.tet, mass=args.mass, grad=args.grad,
-                  fit_cap=args.fit_cap, carry_cap=args.carry_cap, f_substeps=args.f_substeps, shift=args.shift, agg=args.agg, beta=args.beta, precond=args.precond, jump_n=args.jump_n, self_contact=args.self_contact, sc_thr=args.sc_thr, sc_birth=bool(args.sc_birth), sc_eps=args.sc_eps, cut_bonds=bool(args.cut_bonds), bond_delta=args.bond_delta, bond_eps=args.bond_eps)
+                  fit_cap=args.fit_cap, carry_cap=args.carry_cap, f_substeps=args.f_substeps, shift=args.shift, agg=args.agg, beta=args.beta, precond=args.precond, jump_n=args.jump_n, self_contact=args.self_contact, sc_thr=args.sc_thr, sc_birth=bool(args.sc_birth), sc_eps=args.sc_eps, cut_bonds=bool(args.cut_bonds), bond_delta=args.bond_delta, bond_eps=args.bond_eps, bond_floor=args.bond_floor)
     if args.tet > 0:
         print('site tetrahedra: %d, their volume / the body %.3f, weight %g' % (len(mdl.tets), float(mdl.tet_V.sum()/mdl.V0.sum()), args.tet), flush=True)
     k_ = args.up; e_up = tuple(float(a == k_) for a in range(3))

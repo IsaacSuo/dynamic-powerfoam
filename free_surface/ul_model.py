@@ -126,7 +126,7 @@ def cell_moments_grid(X, r, V, spacing, dev='cuda'):
 
 class ULModel:
     def __init__(self, X0, r0, V0, dlt0, J0, E, nu, rho=1., dev='cuda', jump=True, stab=True, shift='displacement', smooth='centroid',
-                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25):
+                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25, bond_floor=0.):
         t = lambda a: torch.as_tensor(np.asarray(a), dtype=f64, device=dev)
         self.tet_w, self.tet_qmin = tet_w, tet_qmin
         self.wall_w, self.cell_w, self.cellhg_w, self.cellhg_k = wall_w, cell_w, cellhg_w, cellhg_k
@@ -147,6 +147,15 @@ class ULModel:
         self.sc_thr, self.h_med = sc_thr, float(self.V0.median())**(1/3)               # see classify_walls / _sc)
         self.sc_birth = sc_birth                                                       # (the overlap from the wall's birth, see _sc)
         self.sc_eps = sc_eps
+        self.bond_floor = bond_floor                                                   # (10-29: the rest pairs' jump stiffness floor)
+        if bond_floor > 0 or self_contact == 'rest':
+            assert f_mode != 'total' and shift == 'none', 'bond_floor / self_contact rest: f_mode increment, shift none'
+            G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
+            a0, b0 = torch.minimum(G0.i[kp], G0.j[kp]), torch.maximum(G0.i[kp], G0.j[kp])
+            K0 = G0.wall_A.detach()[kp]/(3*(self.X0[b0]-self.X0[a0]).norm(dim=1))
+            o = torch.argsort(a0*self.n+b0)
+            self.rb_i, self.rb_j, self.rb_K = a0[o], b0[o], K0[o]; self.rb_keys = (a0*self.n+b0)[o]
+            self.rb_A = G0.wall_A.detach()[kp][o]
         self.cut_bonds = cut_bonds                                                     # (10-29: the recut over the bond family, see
         if cut_bonds:                                                                  # _bond_family / _contact_pairs)
             t0_ = time.time()
@@ -747,6 +756,26 @@ class ULModel:
             dd_ = x[cj]-x[ci]; rr = geo['r']
             db = geo['sc_db'][geo['contact']] if self.sc_birth else 0.
             ops_['sc'] = (ci, cj, dd_/dd_.norm(dim=1, keepdim=True), rr[ci]+rr[cj]-db, self.E_sc*torch.sqrt(rr[ci]*rr[cj]/(rr[ci]+rr[cj])))
+        if self.sc == 'rest':                                                          # (10-29: the material connection is the rest one:
+            ri, rj, rA = self.rb_i, self.rb_j, self.rb_A                               # the fit and the jump term over every rest pair,
+            dr = x[rj]-x[ri]; Lr = dr.norm(dim=1); wr = rA/Lr                          # rest areas, current offsets; the same as the
+            Mr = torch.zeros(n, 3, 3, dtype=f64, device=self.dev)                      # cut's fit at rest)
+            qr = wr[:, None, None]*dr[:, :, None]*dr[:, None, :]
+            Mr.index_add_(0, ri, qr); Mr.index_add_(0, rj, qr)
+            Mri = torch.linalg.pinv(Mr)
+            ops_.update(KS=torch.cat([ri, rj]), KO=torch.cat([rj, ri]),
+                        R=torch.cat([torch.einsum('fa,fab->fb', wr[:, None]*dr, Mri[ri]), torch.einsum('fa,fab->fb', -wr[:, None]*dr, Mri[rj])]),
+                        i=ri, j=rj, b=self.X0[rj]-self.X0[ri], Kj=rA/(3*Lr))
+        if self.bond_floor > 0:                                                        # (10-29: the rest pairs' jump stiffness floor;
+            kw = torch.minimum(i, j)*n+torch.maximum(i, j)                             # a rest pair without a material wall now joins
+            pos = torch.searchsorted(self.rb_keys, kw).clamp(max=len(self.rb_keys)-1)  # the jump term as a virtual wall)
+            isr = self.rb_keys[pos] == kw
+            Kj2 = Kj.clone(); Kj2[isr] = torch.maximum(Kj[isr], self.bond_floor*self.rb_K[pos[isr]])
+            miss = ~torch.isin(self.rb_keys, kw)
+            ai, aj = self.rb_i[miss], self.rb_j[miss]
+            ops_.update(i=torch.cat([i, ai]), j=torch.cat([j, aj]), Kj=torch.cat([Kj2, self.bond_floor*self.rb_K[miss]]),
+                        b=torch.cat([ops_['b'], self.X0[aj]-self.X0[ai]]))
+            self.floor_stats = dict(floored=int((Kj2 > Kj).sum()), virtual=int(miss.sum()))
         if total and self.grad.startswith('gg_'):                                     # (the divergence-theorem gradient, 10-29)
             ops_.update(KS=self.gg_ops[0], KO=self.gg_ops[1], T=self.gg_ops[2], onestepT=True)
             if self.gg_off is not None:
@@ -844,7 +873,7 @@ class ULModel:
             found = pv['keys'][pos] == key
             contact[found] = pv['contact'][pos[found]]; db[found] = pv['db'][pos[found]]
             born = ~found
-            if self.sc == 'bond':
+            if self.sc in ('bond', 'rest'):
                 pass
             elif self.sc == 'skin':                                                    # (the rest-skin rule: the pair alone decides,
                 pass                                                                   # every wall each step, below)
@@ -885,6 +914,8 @@ class ULModel:
                 air_x = (a != b) & ((((q-Pa)**2).sum(2)-rp[a]**2) > 0)
                 cross = torch.isin(torch.minimum(a, b)*n+torch.maximum(a, b), pv['keys'][pv['contact']]) & (a != b)
                 contact[born] = air.view(-1, K).any(1) | air_x.any(1) | cross.any(1)
+        if self.sc == 'rest':                                                          # (10-29: material iff a rest pair; a function of the pair)
+            contact = ~torch.isin(key, self.rb_keys)
         if self.sc == 'bond':                                                          # (10-29: the bond family with visibility; the new
             sel = born if pv is not None else torch.ones_like(contact)                # walls only, a function of the pair)
             if bool(sel.any()):
