@@ -26,9 +26,10 @@ a_.add_argument('--fine-until', type=float, default=0.)   # a frame every 4 step
 a_.add_argument('--cap', choices=('rim', 'pos', 'wall', 'ul'), default='pos')     # 10-29 user: the one-way cap by default  # pos: the one-way cap; dir: the free direction (set_free_direction)
 a_.add_argument('--lr', type=float, default=64.)          # --cap ul: the preconditioner's low-rank term above this charge on a neighbour's block (0: none)
 a_.add_argument('--pre-every', type=int, default=4)       # --cap ul: the blocks and the low-rank term every so many steps
-a_.add_argument('--smooth-start', type=int, default=-1)   # Newton's start without the step-to-step reversal, the region carried over (-1: with --cap ul)
+a_.add_argument('--smooth-start', type=int, default=1)    # Newton's start without the step-to-step reversal, the region carried over (the old DEM's lion 441 -> 307 s, the same solution)
 a_.add_argument('--theta', type=float, default=.5)        # 1/2: the midpoint; above: damps the modes stiffer than the step (MidpointStep.set_theta)
 a_.add_argument('--cut32', type=int, default=1)           # the cut's clipping in single precision
+a_.add_argument('--log-slow', type=float, default=10.)    # a step's solve slower than this many seconds is written out
 args = a_.parse_args()
 OUT = args.out; E, NU, DT, UP, C0, V0 = 10648.614517785627, .3912951704721983, 1/1200, 2, -.2, (0., 0., -.245)
 cells = np.load(OUT/'dem_exact_single'/'cells.npz'); g = dict(np.load(OUT/'dem_exact_single'/'geometry.npz')); bsk = dict(np.load(OUT/'boundary_skin.npz'))
@@ -74,7 +75,7 @@ else:
     if W.cap_ul:                                           # (none of these changes the solution, 10-31)
         ST.pre_every = args.pre_every
         ST.lr_thr, ST.lr_cap = (args.lr, lr_cap) if lr_cap else (None, 0)
-    ST.smooth_pred = ST.carry_delta = bool(args.smooth_start if args.smooth_start >= 0 else W.cap_ul)
+    ST.smooth_pred = ST.carry_delta = bool(args.smooth_start)
     if args.theta != .5:
         ST.set_theta(args.theta, mass)
 tol = 1e-3*ref
@@ -111,7 +112,11 @@ def floor_report():
     return '; min a %.4f, below the floor %d, of them q < 0: %d' % (float(nt_.norm(dim=1).min()), int((q_ < args.a_floor).sum()), int((q_ < 0).sum()))
 t0 = t_saved = time.time(); nsteps = int(round(args.T/DT))
 for s in range(1, nsteps+1):
+    t_s = time.time()
     prods, its, g2 = ST.step(tol, lambda g2_: .5*tol)
+    if time.time()-t_s > args.log_slow or not math.isfinite(g2) or math.sqrt(g2) > tol:
+        tr_ = ST.stats['trace']
+        print('step %d, t %.4f: %.1f s, products %d, Newton %d, rejected %d, edge %d, negative %d; CG %s; |g|/weight %s; ratio %s; region at the end %s' % (s, s*DT, time.time()-t_s, prods, its, ST.stats['rejected'], ST.stats['edge'], ST.stats['negative'], [a__[0] for a__ in tr_][:30], ['%.3g' % (a__[4]/ref) for a__ in tr_][:30], ['%.2g' % a__[5] for a__ in tr_][:30], ST.delta_start), flush=True)
     if not math.isfinite(g2) or math.sqrt(g2) > tol or (args.cap == "dir" and not ST.dd <= ST.dd_tol):
         print('step %d: the solve did not converge (|grad| / weight %s after %d Newton iterations); stopping' % (s, math.sqrt(g2)/ref if math.isfinite(g2) else g2, its), flush=True)
         zf_ = wp.to_torch(ST.a['z'], requires_grad=False).clone(); W.grad(zf_)     # (the failing midpoint: its F_B, J)

@@ -1947,42 +1947,40 @@ def k_tr_update_nd(d: wp.array(dtype=wp.vec3d), Hd: wp.array(dtype=wp.vec3d), Pi
 
 
 @wp.kernel(enable_backward=False)
-def k_lr_zero(tr: wp.array(dtype=wp.float64), u: wp.array(dtype=wp.float32)):
+def k_lr_zero(tr: wp.array(dtype=wp.float64), u: wp.array(dtype=wp.float64)):
     if tr[TR_DONE] > wp.float64(0.0):
         return
-    u[wp.tid()] = 0.0
+    u[wp.tid()] = wp.float64(0.0)
 
 
 @wp.kernel(enable_backward=False)
-def k_lr_u(kk: wp.array(dtype=int), col: wp.array(dtype=int), W: wp.array(dtype=wp.vec3f), y: wp.array(dtype=wp.vec3d), tr: wp.array(dtype=wp.float64), u: wp.array(dtype=wp.float32)):
+def k_lr_u(kk: wp.array(dtype=int), col: wp.array(dtype=int), W: wp.array(dtype=wp.vec3d), y: wp.array(dtype=wp.vec3d), tr: wp.array(dtype=wp.float64), u: wp.array(dtype=wp.float64)):
     e = wp.tid()
     c = col[e]
     if c < 0 or tr[TR_DONE] > wp.float64(0.0):
         return
-    a = y[kk[e]]
-    wp.atomic_add(u, c, wp.dot(W[e], wp.vec3f(wp.float32(a[0]), wp.float32(a[1]), wp.float32(a[2]))))
+    wp.atomic_add(u, c, wp.dot(W[e], y[kk[e]]))
 
 
 @wp.kernel(enable_backward=False)
-def k_lr_v(u: wp.array(dtype=wp.float32), start: wp.array(dtype=int), size: wp.array(dtype=int), off: wp.array(dtype=int), Si: wp.array(dtype=wp.float32), tr: wp.array(dtype=wp.float64),
-           v: wp.array(dtype=wp.float32)):
+def k_lr_v(u: wp.array(dtype=wp.float64), start: wp.array(dtype=int), size: wp.array(dtype=int), off: wp.array(dtype=int), Si: wp.array(dtype=wp.float64), tr: wp.array(dtype=wp.float64),
+           v: wp.array(dtype=wp.float64)):
     i = wp.tid()
     if tr[TR_DONE] > wp.float64(0.0):
         return
-    s = wp.float32(0.0)
+    s = wp.float64(0.0)
     for q in range(size[i]):
         s = s+Si[off[i]+q]*u[start[i]+q]
     v[i] = s
 
 
 @wp.kernel(enable_backward=False)
-def k_lr_y(kk: wp.array(dtype=int), col: wp.array(dtype=int), DW: wp.array(dtype=wp.vec3f), v: wp.array(dtype=wp.float32), tr: wp.array(dtype=wp.float64), y: wp.array(dtype=wp.vec3d)):
+def k_lr_y(kk: wp.array(dtype=int), col: wp.array(dtype=int), DW: wp.array(dtype=wp.vec3d), v: wp.array(dtype=wp.float64), tr: wp.array(dtype=wp.float64), y: wp.array(dtype=wp.vec3d)):
     e = wp.tid()
     c = col[e]
     if c < 0 or tr[TR_DONE] > wp.float64(0.0):
         return
-    a = v[c]*DW[e]
-    wp.atomic_add(y, kk[e], wp.vec3d(-wp.float64(a[0]), -wp.float64(a[1]), -wp.float64(a[2])))
+    wp.atomic_add(y, kk[e], -v[c]*DW[e])     # (double: y is a small difference once r lies in the stiff directions; single precision made r . y negative near convergence, free_clean foam, 10-31)
 
 
 @wp.kernel(enable_backward=False)
@@ -2006,7 +2004,7 @@ def k_tr_beta(tr: wp.array(dtype=wp.float64)):
     if tr[TR_DONE0] == wp.float64(0.0):
         tr[TR_PMP] = tr[TR_NPMP]
         if tr[TR_DONE] == wp.float64(0.0):
-            if wp.sqrt(wp.max(tr[TR_RR], wp.float64(0.0))) <= tr[TR_STOP] or tr[TR_K] >= tr[TR_CAP]:
+            if wp.sqrt(wp.max(tr[TR_RR], wp.float64(0.0))) <= tr[TR_STOP] or tr[TR_K] >= tr[TR_CAP] or not (tr[TR_RZN] > wp.float64(0.0)):   # (r . y <= 0: at the preconditioner's rounding)
                 tr[TR_DONE] = wp.float64(1.0)
             else:
                 be = tr[TR_RZN]/wp.max(tr[TR_RZ], wp.float64(1e-300))
@@ -2049,9 +2047,9 @@ class TrustCG:
         self.lr = None
         if lr_cols:                                                                 # (the preconditioner's low-rank term, set_lr; lr_cols its capacity)
             zi = lambda k_: wp.zeros(k_, dtype=int, device=dev)
-            self.lr = dict(E=30*lr_cols, M=lr_cols, kk=zi(30*lr_cols), col=zi(30*lr_cols), W=wp.zeros(30*lr_cols, dtype=wp.vec3f, device=dev), DW=wp.zeros(30*lr_cols, dtype=wp.vec3f, device=dev),
-                           u=wp.zeros(lr_cols, dtype=wp.float32, device=dev), v=wp.zeros(lr_cols, dtype=wp.float32, device=dev), start=zi(lr_cols), size=zi(lr_cols), off=zi(lr_cols),
-                           Si=wp.zeros(lr_cols*lr_cols, dtype=wp.float32, device=dev))
+            self.lr = dict(E=30*lr_cols, M=lr_cols, kk=zi(30*lr_cols), col=zi(30*lr_cols), W=wp.zeros(30*lr_cols, dtype=wp.vec3d, device=dev), DW=wp.zeros(30*lr_cols, dtype=wp.vec3d, device=dev),
+                           u=wp.zeros(lr_cols, dtype=wp.float64, device=dev), v=wp.zeros(lr_cols, dtype=wp.float64, device=dev), start=zi(lr_cols), size=zi(lr_cols), off=zi(lr_cols),
+                           Si=wp.zeros(lr_cols*lr_cols, dtype=wp.float64, device=dev))
             self.tl = {k_: wp.to_torch(a_, requires_grad=False) for k_, a_ in self.lr.items() if k_ not in ('E', 'M')}
             self.tl['col'].fill_(-1)
         z = lambda dt_: wp.zeros(n, dtype=dt_, device=dev)
@@ -2131,10 +2129,10 @@ class TrustCG:
             q = idx[ca] >= 0; Sb = torch.zeros(len(cs_), k_, k_, dtype=f64, device=dev)
             Sb[idx[ca[q]], a2[q]-st_[ca[q]], b2[q]-st_[ca[q]]] = sv[q]
             Sb = Sb+torch.eye(k_, dtype=f64, device=dev)
-            T['Si'][int(fl[cs_[0]]):int(fl[cs_[-1]+1])] = torch.linalg.inv(.5*(Sb+Sb.transpose(1, 2))).reshape(-1).to(torch.float32)
+            T['Si'][int(fl[cs_[0]]):int(fl[cs_[-1]+1])] = torch.linalg.inv(.5*(Sb+Sb.transpose(1, 2))).reshape(-1)
         cc_ = torch.repeat_interleave(torch.arange(nc, device=dev), sizes)
         T['start'][:m] = st_[cc_].to(torch.int32); T['size'][:m] = sizes[cc_].to(torch.int32); T['off'][:m] = (fl[cc_]+sizes[cc_]*(torch.arange(m, device=dev)-st_[cc_])).to(torch.int32)
-        T['kk'][:E] = kk.to(torch.int32); T['col'][:E] = new[col].to(torch.int32); T['W'][:E] = w.to(torch.float32); T['DW'][:E] = dw.to(torch.float32)
+        T['kk'][:E] = kk.to(torch.int32); T['col'][:E] = new[col].to(torch.int32); T['W'][:E] = w; T['DW'][:E] = dw
         return dict(columns=m, clusters=nc, largest=int(sizes.max()), dense=int(fl[-1]))
 
     def solve(self, g, delta, stop, cap):
