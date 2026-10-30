@@ -1169,8 +1169,10 @@ class ClosureWarp(SkinWarp):
         the lion's states). delta F_s = delta x_k (x) c_sk, c_sk = F_n^T rho_sk, rho_sk = dG_s/dx_k; the spin Om_sk = E [c]x R^T, E = (tr U I - U)^-1; delta (R r) = T delta x,
         T = -R [r]x Om. Gauss-Newton on the bonds: k J^T J, J = +-I + T_j - T_i (kn = ks), and Th^T (kb (I - n n^T) + kt n n^T) Th, Th = Om_j - Om_i; the volume
         V lam (1 - ln J) rho rho^T; the variance 2 wv (rho_i - rho_j)(rho_i - rho_j)^T; the outer layer 2 mu r R Q R^T, Q = 1/4 [c (N c)^T + (N c) c^T + |c|^2 N + (c^T N c) I]"""
-        st, t, F = self.st, self.tul, self._Fn; n, nb, dev = self.n, self.nb, st.X.device; I3 = torch.eye(3, dtype=f64, device=dev)
-        m = st.model; ke, ri, rj, n0 = self._kb_t, m.ri.to(f64), m.rj.to(f64), m.n0.to(f64); bi, bj = st.i.long(), st.j.long()
+        f32 = torch.float32                                                         # (a preconditioner: single precision; R the last evaluation's)
+        st, t = self.st, self.tul; F, Rot = self._Fn.to(f32), self.tR.to(f32); n, nb, dev = self.n, self.nb, st.X.device; I3 = torch.eye(3, dtype=f32, device=dev)
+        m = st.model; ke, ri, rj, n0 = self._kb_t.to(f32), m.ri.to(f32), m.rj.to(f32), m.n0.to(f32); bi, bj = st.i.long(), st.j.long()
+        V, wv = st.V.to(f32), self._wv_t.to(f32)
         zero = torch.zeros(1, dtype=torch.long, device=dev)
 
         def spread(key):                                                            # (entries sorted by key: their order, count and first index per key)
@@ -1182,32 +1184,29 @@ class ClosureWarp(SkinWarp):
             return w, torch.arange(int(rep.sum()), device=dev)-torch.cat([zero, torch.cumsum(rep, 0)[:-1]])[w]+first[ends][w]
 
         def cross(v):
-            z_ = torch.zeros(v.shape[:-1], dtype=f64, device=dev)
+            z_ = torch.zeros(v.shape[:-1], dtype=f32, device=dev)
             return torch.stack([torch.stack([z_, -v[..., 2], v[..., 1]], -1), torch.stack([v[..., 2], z_, -v[..., 0]], -1), torch.stack([-v[..., 1], v[..., 0], z_], -1)], -2)
 
         # the map's entries (s, k, rho_sk): a wall's R at k = O and -R at k = S; the tiny cells take their neighbours' mean; coalesced
-        kp = t['R'].norm(dim=1) > 0; S, O, R_ = t['S'][kp].long(), t['O'][kp].long(), t['R'][kp]
+        kp = t['R'].norm(dim=1) > 0; S, O, R_ = t['S'][kp].long(), t['O'][kp].long(), t['R'][kp].to(f32)
         s0, k0, r0 = torch.cat([S, S]), torch.cat([O, S]), torch.cat([R_, -R_])
-        kA = t['Aw'] > 0; As, Ao, Aw = t['As'][kA].long(), t['Ao'][kA].long(), t['Aw'][kA]
+        kA = t['Aw'] > 0; As, Ao, Aw = t['As'][kA].long(), t['Ao'][kA].long(), t['Aw'][kA].to(f32)
         o, cnt, first = spread(s0); so, ko, ro = s0[o], k0[o], r0[o]
         w, pos = expand(cnt, first, Ao)
         keep = ~t['used'].bool()[s0]
         u, inv = torch.unique(torch.cat([s0[keep], As[w]])*n+torch.cat([k0[keep], ko[pos]]), return_inverse=True)
-        rho = torch.zeros(len(u), 3, dtype=f64, device=dev).index_add(0, inv, torch.cat([r0[keep], Aw[w, None]*ro[pos]]))
+        rho = torch.zeros(len(u), 3, dtype=f32, device=dev).index_add(0, inv, torch.cat([r0[keep], Aw[w, None]*ro[pos]]))
         s, k = u//n, u % n
-        # the rotation of F_n, Higham's iteration
-        Rot = F.clone()
-        for _ in range(14):
-            Yi = torch.linalg.inv(Rot); c_ = ((Yi*Yi).sum((1, 2))/(Rot*Rot).sum((1, 2)))**.25
-            Rot = .5*(c_[:, None, None]*Rot+Yi.transpose(1, 2)/c_[:, None, None])
         U = Rot.transpose(1, 2)@F; U = .5*(U+U.transpose(1, 2))
-        E = torch.linalg.inv(U.diagonal(dim1=1, dim2=2).sum(1)[:, None, None]*I3-U)
+        A_ = U.diagonal(dim1=1, dim2=2).sum(1)[:, None, None]*I3-U; a0, a1, a2 = A_[:, :, 0], A_[:, :, 1], A_[:, :, 2]
+        c0, c1, c2 = torch.linalg.cross(a1, a2), torch.linalg.cross(a2, a0), torch.linalg.cross(a0, a1)
+        E = torch.stack([c0, c1, c2], 1)/(a0*c0).sum(1)[:, None, None]                 # ((tr U I - U)^-1 by its cofactors)
         c = torch.einsum('sba,sb->sa', F[s], rho)
         Om = E[s]@cross(c)@Rot[s].transpose(1, 2)
-        K = torch.zeros(n, 3, 3, dtype=f64, device=dev)
-        L = torch.log(torch.linalg.det(F).clamp(min=1e-3))
-        K.index_add_(0, k, (st.V[s]*self.lam*(1-L[s]))[:, None, None]*rho[:, :, None]*rho[:, None, :])
-        Nf = torch.zeros_like(K); rc = torch.zeros(n, dtype=f64, device=dev); Nf[st.c_body] = st.c_N; rc[st.c_body] = st.c_r
+        K = torch.zeros(n, 3, 3, dtype=f32, device=dev)
+        L = torch.log((F[:, :, 0]*torch.linalg.cross(F[:, :, 1], F[:, :, 2])).sum(1).clamp(min=1e-3))
+        K.index_add_(0, k, (V[s]*self.lam*(1-L[s]))[:, None, None]*rho[:, :, None]*rho[:, None, :])
+        Nf = torch.zeros_like(K); rc = torch.zeros(n, dtype=f32, device=dev); Nf[st.c_body] = st.c_N.to(f32); rc[st.c_body] = st.c_r.to(f32)
         Nc = torch.einsum('sab,sb->sa', Nf[s], c); cc = (c*c).sum(1); cNc = (c*Nc).sum(1)
         Q = .25*(c[:, :, None]*Nc[:, None, :]+Nc[:, :, None]*c[:, None, :]+cc[:, None, None]*Nf[s]+cNc[:, None, None]*I3)
         K.index_add_(0, k, (2*self.mu*rc[s])[:, None, None]*(Rot[s]@Q@Rot[s].transpose(1, 2)))
@@ -1220,14 +1219,14 @@ class ClosureWarp(SkinWarp):
         bI, kI, TI, OI, GI = side(bi, ri, -1.); bJ, kJ, TJ, OJ, GJ = side(bj, rj, 1.)
         ab = torch.arange(nb, device=dev)
         u, inv = torch.unique(torch.cat([bI, bJ, ab, ab])*n+torch.cat([kI, kJ, bj, bi]), return_inverse=True); b2, k2 = u//n, u % n
-        Jd = torch.zeros(len(u), 3, 3, dtype=f64, device=dev).index_add(0, inv, torch.cat([TI, TJ, I3.expand(nb, 3, 3), -I3.expand(nb, 3, 3)]))
-        Jt = torch.zeros(len(u), 3, 3, dtype=f64, device=dev).index_add(0, inv, torch.cat([OI, OJ, torch.zeros(2*nb, 3, 3, dtype=f64, device=dev)]))
-        Jg = torch.zeros(len(u), 3, dtype=f64, device=dev).index_add(0, inv, torch.cat([GI, GJ, torch.zeros(2*nb, 3, dtype=f64, device=dev)]))
+        Jd = torch.zeros(len(u), 3, 3, dtype=f32, device=dev).index_add(0, inv, torch.cat([TI, TJ, I3.expand(nb, 3, 3), -I3.expand(nb, 3, 3)]))
+        Jt = torch.zeros(len(u), 3, 3, dtype=f32, device=dev).index_add(0, inv, torch.cat([OI, OJ, torch.zeros(2*nb, 3, 3, dtype=f32, device=dev)]))
+        Jg = torch.zeros(len(u), 3, dtype=f32, device=dev).index_add(0, inv, torch.cat([GI, GJ, torch.zeros(2*nb, 3, dtype=f32, device=dev)]))
         nn = n0[b2, :, None]*n0[b2, None, :]
         K.index_add_(0, k2, ke[b2, 0, None, None]*(Jd.transpose(1, 2)@Jd))
         K.index_add_(0, k2, Jt.transpose(1, 2)@(ke[b2, 2, None, None]*(I3-nn)+ke[b2, 3, None, None]*nn)@Jt)
-        K.index_add_(0, k2, (2*self._wv_t[b2])[:, None, None]*Jg[:, :, None]*Jg[:, None, :])
-        return .5*(K+K.transpose(1, 2))
+        K.index_add_(0, k2, (2*wv[b2])[:, None, None]*Jg[:, :, None]*Jg[:, None, :])
+        return .5*(K+K.transpose(1, 2)).to(f64)
 
     def set_cap_floor(self, eps):
         """the floor on the one-way cap's normal (floored_nt), after set_cap_positions; 0: none, comp_a itself. The reference normal starts at the rest
