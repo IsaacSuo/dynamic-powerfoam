@@ -38,6 +38,8 @@ upt = tuple(1. if k == UP else 0. for k in range(3))
 W.set_ball(cbody, Rb, upt, C0, 0.)
 if args.self_contact:
     W.set_self_contact(torch.as_tensor(cells['radii'], dtype=f64, device=dev), K=args.sc_cap, sigma=args.sc_sigma)
+    if args.self_contact == 2:                             # (2: only the cut for --cap ul, no contact force)
+        W.selfc = None
 if args.cap == 'ul':                                       # (UL's F, no fitted skin; needs --self-contact 1 --sc-sigma > 0)
     W.set_cap_ul()
 if args.cap == 'pos':
@@ -121,7 +123,7 @@ for s in range(1, nsteps+1):
             ang = torch.rad2deg(torch.acos((W._dw*W.st.mA).sum(1).clamp(-1, 1)))[W.st.cap]
             dirs = '; d off m: max %.1f deg, median %.2f deg; direction decrease / its tolerance %.2f' % (float(ang.max()), float(ang.median()), ST.dd/ST.dd_tol)
         print('t %.4f s (%.0f s): com up %.5f m; min J %.3f; products %d, Newton %d%s%s%s' % (s*DT, time.time()-t0, float(com@up), math.exp(float(W.tlj.min())), prods, its,
-              self_report() if W.selfc is not None else '', dirs, floor_report() if args.a_floor > 0 else ''), flush=True)
+              self_report() if W.selfc is not None else ('; UL walls %d, radii iterations %d, radii failures %d, J floored %d' % tuple(W.ul_stats[k_] for k_ in ('walls', 'radii_it', 'radii_fail', 'floored')) if W.cap_ul else ''), dirs, floor_report() if args.a_floor > 0 else ''), flush=True)
         if s % 20 == 0:
             save()
 save()

@@ -1123,7 +1123,8 @@ class ClosureWarp(SkinWarp):
         i, j, A = G.i[kp].long(), G.j[kp].long(), G.wall_A.detach()[kp]
         a, b = torch.minimum(i, j), torch.maximum(i, j)
         s = torch.ones(len(i), dtype=f64, device=x.device); nw = ~torch.isin(a*n+b, self._rest_keys)
-        s[nw] = self._color_sim(a[nw], b[nw])
+        if self._col_Q is not None:                                                 # (no colours: every wall counts in full)
+            s[nw] = self._color_sim(a[nw], b[nw])
         d = x[j]-x[i]; w = A*s/d.norm(dim=1)
         q = w[:, None, None]*d[:, :, None]*d[:, None, :]
         M = torch.zeros(n, 3, 3, dtype=f64, device=x.device).index_add(0, i, q).index_add(0, j, q)
