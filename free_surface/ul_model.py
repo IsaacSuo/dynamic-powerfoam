@@ -126,7 +126,7 @@ def cell_moments_grid(X, r, V, spacing, dev='cuda'):
 
 class ULModel:
     def __init__(self, X0, r0, V0, dlt0, J0, E, nu, rho=1., dev='cuda', jump=True, stab=True, shift='displacement', smooth='centroid',
-                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25, bond_floor=0.):
+                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25, bond_floor=0., sc_memory=False):
         t = lambda a: torch.as_tensor(np.asarray(a), dtype=f64, device=dev)
         self.tet_w, self.tet_qmin = tet_w, tet_qmin
         self.wall_w, self.cell_w, self.cellhg_w, self.cellhg_k = wall_w, cell_w, cellhg_w, cellhg_k
@@ -147,6 +147,13 @@ class ULModel:
         self.sc_thr, self.h_med = sc_thr, float(self.V0.median())**(1/3)               # see classify_walls / _sc)
         self.sc_birth = sc_birth                                                       # (the overlap from the wall's birth, see _sc)
         self.sc_eps = sc_eps
+        self.sc_memory = sc_memory                                                     # (10-30: the pairs ever material, see classify_walls)
+        if self_contact == 'arc':                                                      # (the rest pairs: always material)
+            G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
+            self.arc_rest = torch.minimum(G0.i[kp], G0.j[kp])*self.n+torch.maximum(G0.i[kp], G0.j[kp])
+        if sc_memory:
+            G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
+            self.sc_mat = torch.unique(torch.minimum(G0.i[kp], G0.j[kp])*self.n+torch.maximum(G0.i[kp], G0.j[kp]))
         self.bond_floor = bond_floor                                                   # (10-29: the rest pairs' jump stiffness floor)
         if bond_floor > 0 or self_contact == 'rest':
             assert f_mode != 'total' and shift == 'none', 'bond_floor / self_contact rest: f_mode increment, shift none'
@@ -598,8 +605,9 @@ class ULModel:
         G, S = self.recut.geometry(x, r) if GS is None else GS
         keep = G.wall_A.detach() > 0
         P = G.P[keep]
+        arc = torch.zeros(len(G.P), dtype=torch.bool, device=P.device); arc[G.arc_pair] = True   # (the walls with an exposed edge)
         return dict(i=P[:, 0], j=P[:, 1], A=G.wall_A.detach()[keep], c=G.wall_c.detach()[keep], V=G.V.detach(),
-                    capA=G.patch_A.detach(), hidden=S['hidden'], r=r)
+                    capA=G.patch_A.detach(), hidden=S['hidden'], r=r, arc=arc[keep])
 
     def cut_centroids(self, x, geo):
         """each cell's centroid offset from its site, from its cut alone: cones from the site, the walls as pyramids
@@ -913,7 +921,10 @@ class ULModel:
                 q = P+torch.where(c1.abs() > 0, -c0_/c1, sv)[..., None]*D
                 air_x = (a != b) & ((((q-Pa)**2).sum(2)-rp[a]**2) > 0)
                 cross = torch.isin(torch.minimum(a, b)*n+torch.maximum(a, b), pv['keys'][pv['contact']]) & (a != b)
-                contact[born] = air.view(-1, K).any(1) | air_x.any(1) | cross.any(1)
+                if self.sc == 'arc':                                                   # (10-30: outside a cap is air: a new wall born with
+                    contact[born] = (geo['arc'][born] | cross.any(1)) & ~torch.isin(key[born], self.arc_rest)   # an exposed arc is two caps
+                else:                                                                  # met; across a contact wall the interface grew)
+                    contact[born] = air.view(-1, K).any(1) | air_x.any(1) | cross.any(1)
         if self.sc == 'rest':                                                          # (10-29: material iff a rest pair; a function of the pair)
             contact = ~torch.isin(key, self.rb_keys)
         if self.sc == 'bond':                                                          # (10-29: the bond family with visibility; the new
@@ -925,6 +936,9 @@ class ULModel:
                 contact[sel] = (far | hid) & ~torch.isin(key[sel], self.sc_rest)
         if self.sc == 'skin':                                                          # (10-29, the user's rest-surface rule: contact
             contact = self.sc_skin[i] & self.sc_skin[j] & ~torch.isin(key, self.sc_near)   # = two pieces of the rest skin >= 3 steps
+        if self.sc_memory:                                                             # (10-30: a pair ever material is material again when
+            contact = contact & ~(born & torch.isin(key, self.sc_mat))                 # its wall comes back; only that pair's own history)
+            self.sc_mat = torch.unique(torch.cat([self.sc_mat, key[~contact]]))
         o = torch.argsort(key)                                                         # apart on it came together)
         nb = born & contact
         if bool(nb.any()):
