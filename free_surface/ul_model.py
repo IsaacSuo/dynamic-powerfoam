@@ -126,7 +126,7 @@ def cell_moments_grid(X, r, V, spacing, dev='cuda'):
 
 class ULModel:
     def __init__(self, X0, r0, V0, dlt0, J0, E, nu, rho=1., dev='cuda', jump=True, stab=True, shift='displacement', smooth='centroid',
-                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25, bond_floor=0., sc_memory=False, sc_sigma=0.):
+                 centroid='cut', site_w='A/l', f_mode='total', new_ref='rest', fit_w='rest', tet_w=0., tet_qmin=.1, wall_w=0., cell_w=1., cellhg_w=0., cellhg_k=1, mass='diag', grad='fit', fit_cap=None, carry_cap=None, f_substeps=1, agg=0., beta=0., precond='scalar', jump_n='current', self_contact=None, sc_thr=2.5, sc_birth=False, sc_eps=.25, cut_bonds=False, bond_delta=4., bond_eps=.25, bond_floor=0., sc_memory=False, sc_sigma=0., wall_mat=False):
         t = lambda a: torch.as_tensor(np.asarray(a), dtype=f64, device=dev)
         self.tet_w, self.tet_qmin = tet_w, tet_qmin
         self.wall_w, self.cell_w, self.cellhg_w, self.cellhg_k = wall_w, cell_w, cellhg_w, cellhg_k
@@ -147,6 +147,8 @@ class ULModel:
         self.sc_thr, self.h_med = sc_thr, float(self.V0.median())**(1/3)               # see classify_walls / _sc)
         self.sc_birth = sc_birth                                                       # (the overlap from the wall's birth, see _sc)
         self.sc_eps = sc_eps
+        self.wall_mat, self.wm_prev, self.wm_stats = wall_mat, None, {}                # (10-30: each wall's material area, see _wall_material)
+        assert not wall_mat or f_mode != 'total', 'wall_mat: f_mode increment'
         self.sc_memory = sc_memory                                                     # (10-30: the pairs ever material, see classify_walls)
         if self_contact == 'arc':                                                      # (the rest pairs: always material)
             G0, _ = self.recut.geometry(self.X0, self.r0); kp = G0.wall_A > 0
@@ -675,6 +677,8 @@ class ULModel:
         """the step's linear maps, built at the step start (x^n, F^n, geometry); f_mode 'total': the fits' levers are the
         walls' material reference vectors D (pair_refs; at rest the rest offsets) and F = kin(x) itself (section 20)"""
         i, j, A, c = geo['i'], geo['j'], geo['A'], geo['c']
+        if 'A_w' in geo:                                                               # (10-30: the material area, see _wall_material)
+            A = geo['A_w']
         sim = None
         if self.sc == 'color':                                                         # (10-30: every wall, its area scaled by the colour
             sim = self._color_sim(i, j); A = A*sim                                     # similarity, see _color_code; the centroids from all)
@@ -965,6 +969,32 @@ class ULModel:
         self.sc_prev = dict(x=x.clone(), r=r.clone(), keys=key[o], contact=contact[o], db=db[o])
         self.sc_stats = dict(walls=len(i), contact=int(contact.sum()), born=int(born.sum()), born_contact=int((contact & born).sum()))
         return contact
+
+    def _wall_material(self, x, F, geo):
+        """wall_mat (10-30, the user: the farther apart, the more force): a wall's area in the material terms. A wall of the cut is a
+        geometric face, not a section of the material: on the lion's neck it is down to 0.04 of its rest area at stretch 1.5, where the
+        section of the material has about 0.73, and the pull goes as its square (the fit reads the stretch through it and gives the force
+        back through it): 0.002 body weights where a bar of the material pulls 0.077. So each wall carries a material area from the last
+        cut by Nanson's formula under the mean increment of its two cells, a = J |F^-T n| a_last with n the pair's direction on the last
+        cut, and takes the larger of it and its geometric area: flips still grow walls from zero, and a wall shrinking in the cut keeps
+        the area of the section it stands for. Uses the last step alone, no rest state; no parameter. The fit stays exact for affine
+        motion under any weights, and at rest nothing changes. A wall gone from the cut is gone"""
+        n = self.n
+        i, j, A = geo['i'], geo['j'], geo['A']
+        key = torch.minimum(i, j)*n+torch.maximum(i, j)
+        d = x[j]-x[i]; nrm = d/d.norm(dim=1, keepdim=True)
+        Aw = A.clone(); pv = self.wm_prev
+        if pv is not None:
+            pos = torch.searchsorted(pv['keys'], key).clamp(max=len(pv['keys'])-1)
+            found = pv['keys'][pos] == key
+            Fi = F@torch.linalg.inv(pv['F'])
+            Fw = .5*(Fi[i[found]]+Fi[j[found]])
+            q = mv(torch.linalg.inv(Fw).transpose(1, 2), pv['nrm'][pos[found]])
+            Aw[found] = torch.maximum(A[found], pv['Aw'][pos[found]]*torch.linalg.det(Fw).abs()*q.norm(dim=1))
+        o = torch.argsort(key)
+        self.wm_prev = dict(keys=key[o], Aw=Aw[o], nrm=nrm[o], F=F.clone())
+        self.wm_stats = dict(ratio=float(Aw.sum()/A.sum()), above=int((Aw > A).sum()))
+        return Aw
 
     def _color_code(self):
         """self_contact 'color' (10-30, the user's idea): a static colour per cell, and no contact / material label: a wall's
@@ -1415,6 +1445,8 @@ class ULModel:
         geo = self.geometry(x, r, GS)
         if self.sc:
             geo['contact'] = self.classify_walls(x, r, geo, F)
+        if self.wall_mat:
+            geo['A_w'] = self._wall_material(x, F, geo)
         ops = self.operators(x, F, geo, self.pair_refs(x, F, r, geo) if self.f_mode == 'total' else None)
         if self.beta > 0:
             ops['visc'] = dict(dt=dt, Vn=self.V0*torch.linalg.det(F), Fn=F, Fni=torch.linalg.inv(F))
@@ -1559,6 +1591,8 @@ class ULModel:
                 ci, cj, n0, rs, c_ = ops['sc']
                 dl_ = (rs-((y[cj]-y[ci])*n0).sum(1)).clamp(min=0.)
                 rep['sc'].update(overlap=float((dl_/torch.minimum(r[ci], r[cj])).max()), energy=float((8/15*c_*dl_**2.5).sum()))
+        if self.wall_mat:
+            rep['wm'] = self.wm_stats
         if tet_min is not None:
             rep['tet_minJ'] = tet_min
         if wall_min is not None:

@@ -68,6 +68,7 @@ def main():
     a_.add_argument('--bond-eps', type=float, default=.25)
     a_.add_argument('--sc-memory', type=int, default=0, help='1: a pair ever material (rest walls included) is material again when its wall comes back (ul_model sc_memory, 10-30)')
     a_.add_argument('--sc-sigma', type=float, default=0., help='self-contact color: > 0, skin colours change gradually over this many steps on the rest skin (ul_model _color_code, 10-30)')
+    a_.add_argument('--wall-mat', type=int, default=0, help='1: each wall carries a material area by Nanson\'s formula, its weight in the material terms the larger of it and the cut\'s area (ul_model _wall_material, 10-30)')
     a_.add_argument('--sc-thr', type=float, default=2.5, help='self-contact compat threshold, x the median cell size')
     a_.add_argument('--jump-n', default='current', choices=['current', 'start'], help='the jump term\'s normal: along the pair now, or at the step\'s cut (ul_model jump_n, 10-29)')
     a_.add_argument('--precond', default='scalar', choices=['scalar', 'visc', 'block'], help='the CG\'s preconditioner (ul_model, 10-29)')
@@ -87,7 +88,7 @@ def main():
         dlt, J0, cnt = cell_moments_grid(X, r, V, args.grid); np.savez(cf, dlt=dlt, J0=J0, cnt=cnt)
     E, nu = args.E/1000, args.nu
     mdl = ULModel(X, r, V, dlt, J0, E, nu, f_mode=args.f_mode, new_ref=args.new_ref, fit_w=args.fit_w, tet_w=args.tet, mass=args.mass, grad=args.grad,
-                  fit_cap=args.fit_cap, carry_cap=args.carry_cap, f_substeps=args.f_substeps, shift=args.shift, agg=args.agg, beta=args.beta, precond=args.precond, jump_n=args.jump_n, self_contact=args.self_contact, sc_thr=args.sc_thr, sc_birth=bool(args.sc_birth), sc_eps=args.sc_eps, cut_bonds=bool(args.cut_bonds), bond_delta=args.bond_delta, bond_eps=args.bond_eps, bond_floor=args.bond_floor, sc_memory=bool(args.sc_memory), sc_sigma=args.sc_sigma)
+                  fit_cap=args.fit_cap, carry_cap=args.carry_cap, f_substeps=args.f_substeps, shift=args.shift, agg=args.agg, beta=args.beta, precond=args.precond, jump_n=args.jump_n, self_contact=args.self_contact, sc_thr=args.sc_thr, sc_birth=bool(args.sc_birth), sc_eps=args.sc_eps, cut_bonds=bool(args.cut_bonds), bond_delta=args.bond_delta, bond_eps=args.bond_eps, bond_floor=args.bond_floor, sc_memory=bool(args.sc_memory), sc_sigma=args.sc_sigma, wall_mat=bool(args.wall_mat))
     if args.tet > 0:
         print('site tetrahedra: %d, their volume / the body %.3f, weight %g' % (len(mdl.tets), float(mdl.tet_V.sum()/mdl.V0.sum()), args.tet), flush=True)
     k_ = args.up; e_up = tuple(float(a == k_) for a in range(3))
