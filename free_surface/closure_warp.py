@@ -1153,6 +1153,71 @@ class ClosureWarp(SkinWarp):
         """after the step: F_n+1 = 2 F(z) - F_n, F linear in x and the buffers at the accepted midpoint z"""
         self._Fn = 2*self.tF-self._Fn
 
+    def ul_blocks(self):
+        """the elastic diagonal blocks on UL's F at the step's start, after update_ul (10-30; against blocks probed by differences 1.000 at rest, 0.95-1.05 at the 1-99 % on
+        the lion's states). delta F_s = delta x_k (x) c_sk, c_sk = F_n^T rho_sk, rho_sk = dG_s/dx_k; the spin Om_sk = E [c]x R^T, E = (tr U I - U)^-1; delta (R r) = T delta x,
+        T = -R [r]x Om. Gauss-Newton on the bonds: k J^T J, J = +-I + T_j - T_i (kn = ks), and Th^T (kb (I - n n^T) + kt n n^T) Th, Th = Om_j - Om_i; the volume
+        V lam (1 - ln J) rho rho^T; the variance 2 wv (rho_i - rho_j)(rho_i - rho_j)^T; the outer layer 2 mu r R Q R^T, Q = 1/4 [c (N c)^T + (N c) c^T + |c|^2 N + (c^T N c) I]"""
+        st, t, F = self.st, self.tul, self._Fn; n, nb, dev = self.n, self.nb, st.X.device; I3 = torch.eye(3, dtype=f64, device=dev)
+        m = st.model; ke, ri, rj, n0 = self._kb_t, m.ri.to(f64), m.rj.to(f64), m.n0.to(f64); bi, bj = st.i.long(), st.j.long()
+        zero = torch.zeros(1, dtype=torch.long, device=dev)
+
+        def spread(key):                                                            # (entries sorted by key: their order, count and first index per key)
+            o = torch.argsort(key, stable=True); cnt = torch.bincount(key, minlength=n)
+            return o, cnt, torch.cat([zero, torch.cumsum(cnt, 0)[:-1]])
+
+        def expand(cnt, first, ends):                                               # (for each e in ends the entries of e: which end, which entry)
+            rep = cnt[ends]; w = torch.repeat_interleave(torch.arange(len(ends), device=dev), rep)
+            return w, torch.arange(int(rep.sum()), device=dev)-torch.cat([zero, torch.cumsum(rep, 0)[:-1]])[w]+first[ends][w]
+
+        def cross(v):
+            z_ = torch.zeros(v.shape[:-1], dtype=f64, device=dev)
+            return torch.stack([torch.stack([z_, -v[..., 2], v[..., 1]], -1), torch.stack([v[..., 2], z_, -v[..., 0]], -1), torch.stack([-v[..., 1], v[..., 0], z_], -1)], -2)
+
+        # the map's entries (s, k, rho_sk): a wall's R at k = O and -R at k = S; the tiny cells take their neighbours' mean; coalesced
+        kp = t['R'].norm(dim=1) > 0; S, O, R_ = t['S'][kp].long(), t['O'][kp].long(), t['R'][kp]
+        s0, k0, r0 = torch.cat([S, S]), torch.cat([O, S]), torch.cat([R_, -R_])
+        kA = t['Aw'] > 0; As, Ao, Aw = t['As'][kA].long(), t['Ao'][kA].long(), t['Aw'][kA]
+        o, cnt, first = spread(s0); so, ko, ro = s0[o], k0[o], r0[o]
+        w, pos = expand(cnt, first, Ao)
+        keep = ~t['used'].bool()[s0]
+        u, inv = torch.unique(torch.cat([s0[keep], As[w]])*n+torch.cat([k0[keep], ko[pos]]), return_inverse=True)
+        rho = torch.zeros(len(u), 3, dtype=f64, device=dev).index_add(0, inv, torch.cat([r0[keep], Aw[w, None]*ro[pos]]))
+        s, k = u//n, u % n
+        # the rotation of F_n, Higham's iteration
+        Rot = F.clone()
+        for _ in range(14):
+            Yi = torch.linalg.inv(Rot); c_ = ((Yi*Yi).sum((1, 2))/(Rot*Rot).sum((1, 2)))**.25
+            Rot = .5*(c_[:, None, None]*Rot+Yi.transpose(1, 2)/c_[:, None, None])
+        U = Rot.transpose(1, 2)@F; U = .5*(U+U.transpose(1, 2))
+        E = torch.linalg.inv(U.diagonal(dim1=1, dim2=2).sum(1)[:, None, None]*I3-U)
+        c = torch.einsum('sba,sb->sa', F[s], rho)
+        Om = E[s]@cross(c)@Rot[s].transpose(1, 2)
+        K = torch.zeros(n, 3, 3, dtype=f64, device=dev)
+        L = torch.log(torch.linalg.det(F).clamp(min=1e-3))
+        K.index_add_(0, k, (st.V[s]*self.lam*(1-L[s]))[:, None, None]*rho[:, :, None]*rho[:, None, :])
+        Nf = torch.zeros_like(K); rc = torch.zeros(n, dtype=f64, device=dev); Nf[st.c_body] = st.c_N; rc[st.c_body] = st.c_r
+        Nc = torch.einsum('sab,sb->sa', Nf[s], c); cc = (c*c).sum(1); cNc = (c*Nc).sum(1)
+        Q = .25*(c[:, :, None]*Nc[:, None, :]+Nc[:, :, None]*c[:, None, :]+cc[:, None, None]*Nf[s]+cNc[:, None, None]*I3)
+        K.index_add_(0, k, (2*self.mu*rc[s])[:, None, None]*(Rot[s]@Q@Rot[s].transpose(1, 2)))
+        # the bonds' entries (b, k) from each end's stencil, coalesced per (b, k)
+        o, cnt, first = spread(s); so, ko, Omo, rhoo = s[o], k[o], Om[o], rho[o]
+
+        def side(ends, lever, sgn):
+            b_, pos = expand(cnt, first, ends)
+            return b_, ko[pos], -sgn*Rot[so[pos]]@cross(lever[b_])@Omo[pos], sgn*Omo[pos], sgn*rhoo[pos]
+        bI, kI, TI, OI, GI = side(bi, ri, -1.); bJ, kJ, TJ, OJ, GJ = side(bj, rj, 1.)
+        ab = torch.arange(nb, device=dev)
+        u, inv = torch.unique(torch.cat([bI, bJ, ab, ab])*n+torch.cat([kI, kJ, bj, bi]), return_inverse=True); b2, k2 = u//n, u % n
+        Jd = torch.zeros(len(u), 3, 3, dtype=f64, device=dev).index_add(0, inv, torch.cat([TI, TJ, I3.expand(nb, 3, 3), -I3.expand(nb, 3, 3)]))
+        Jt = torch.zeros(len(u), 3, 3, dtype=f64, device=dev).index_add(0, inv, torch.cat([OI, OJ, torch.zeros(2*nb, 3, 3, dtype=f64, device=dev)]))
+        Jg = torch.zeros(len(u), 3, dtype=f64, device=dev).index_add(0, inv, torch.cat([GI, GJ, torch.zeros(2*nb, 3, dtype=f64, device=dev)]))
+        nn = n0[b2, :, None]*n0[b2, None, :]
+        K.index_add_(0, k2, ke[b2, 0, None, None]*(Jd.transpose(1, 2)@Jd))
+        K.index_add_(0, k2, Jt.transpose(1, 2)@(ke[b2, 2, None, None]*(I3-nn)+ke[b2, 3, None, None]*nn)@Jt)
+        K.index_add_(0, k2, (2*self._wv_t[b2])[:, None, None]*Jg[:, :, None]*Jg[:, None, :])
+        return .5*(K+K.transpose(1, 2))
+
     def set_cap_floor(self, eps):
         """the floor on the one-way cap's normal (floored_nt), after set_cap_positions; 0: none, comp_a itself. The reference normal starts at the rest
         normal and MidpointStep.end() moves it to each accepted midpoint's"""
@@ -2018,6 +2083,24 @@ def k_mid_pre_ball(cbody: wp.array(dtype=int), R: wp.array(dtype=wp.float64), de
 
 
 @wp.kernel(enable_backward=False)
+def k_mid_pre_self(z: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: wp.array(dtype=int), sk: wp.array(dtype=int), Rs: wp.array(dtype=wp.float64),
+                   d0: wp.array(dtype=wp.float64), Reff: wp.array(dtype=wp.float64), e4: wp.float64, P: wp.array(dtype=wp.mat33d)):
+    """the self contacts' 4 E* (R_eff delta)^1/2 n n^T at both ends, delta at the step-end centres 2 z - x_n as k_self (e4 = 4 E*; the negative -F / L (I - n n^T) left out)"""
+    c = wp.tid()
+    i, k = si[c], sk[c]
+    if i == k:
+        return
+    two = wp.float64(2.0)
+    dv = (two*z[k]-xn[k])-(two*z[i]-xn[i])
+    L = wp.length(dv)
+    dl = Rs[c]-L-d0[c]
+    if dl > wp.float64(0.0):
+        M = (e4*wp.sqrt(Reff[c]*dl))*wp.outer(dv, dv)/(L*L)
+        wp.atomic_add(P, i, M)
+        wp.atomic_add(P, k, M)
+
+
+@wp.kernel(enable_backward=False)
 def k_mid_inv(P: wp.array(dtype=wp.mat33d), Pinv: wp.array(dtype=wp.mat33d)):
     b = wp.tid()
     Pinv[b] = wp.inverse(P[b])
@@ -2084,6 +2167,7 @@ class MidpointStep:
     def __init__(self, W, CG, mass, Kbb, fg, dt, muf, eval_iters=12, eta=.01, cg_cap=300, newton_max=50):
         self.W, self.CG, self.dt = W, CG, float(dt)
         self.eta, self.cg_cap, self.newton_max = float(eta), int(cg_cap), int(newton_max)
+        self.pre_ul = self.pre_self = False
         n = W.n; dev = 'cuda'
         z = lambda dt_, k=n: wp.zeros(k, dtype=dt_, device=dev)
         A = CG.a
@@ -2137,28 +2221,44 @@ class MidpointStep:
         wp.launch(k_mid_accept, self.W.n, inputs=[self.W.xw, self.ps], outputs=[self.a['z']])
         self.CG.save()
 
-    def step(self, tol_abs, cg_tol_abs):
-        W, A, bl, n = self.W, self.a, self.W.ball, self.W.n
+    def begin(self):
+        """the step's start: radii, cut and fit, the self contact list"""
+        W = self.W
         if W.cap_ul:
             W.update_ul(self.tx)                                                   # (radii, cut, the fit at the step's start)
         if W.selfc is not None:
             W.update_self(self.tx)                                                 # (the self contact list at the step's start)
+
+    def step(self, tol_abs, cg_tol_abs):
+        self.begin()
+        return self.solve(tol_abs, cg_tol_abs)
+
+    def solve(self, tol_abs, cg_tol_abs):
+        """the step's Newton iterations from the predictor, after begin(); repeatable until end(). pre_ul: the blocks of W.ul_blocks at the step's start in the bodies' frames
+        in place of the rest blocks; pre_self: the self contacts in them. stats' trace: per Newton iteration (products, edge, negative, CG stop, |g|, ratio, taken)"""
+        W, A, bl, n = self.W, self.a, self.W.ball, self.W.n
         wp.launch(k_mid_begin, n, inputs=[A['x'], A['v'], A['a'], self.dt], outputs=[A['xt'], A['z']])
         wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
         g2 = self._eval(0.)[PS_GQ2]
         self._accept()
         evals, its = 1, 0
-        st = dict(rejected=0, edge=0, negative=0)
+        st = dict(rejected=0, edge=0, negative=0, trace=[])
         delta, delta0 = -1., None
         while its < self.newton_max:
             if math.sqrt(g2) <= tol_abs:
                 break
             its += 1
+            if its == 1 and self.pre_ul:
+                self.tK.copy_(W.tR.transpose(1, 2)@W.ul_blocks()@W.tR)
             wp.launch(k_mid_pre, n, inputs=[W.B['R'], A['K'], self.c1, A['cm']], outputs=[A['P']])
             wp.launch(k_mid_pre_ball, bl['k'], inputs=[bl['body'], bl['R'], W.B['bdelta'], bl['ng'], self.e4, bl['kt'], bl['bound'], self.muf],
                       outputs=[A['P']])
+            if self.pre_self and W.selfc is not None:
+                sc = W.selfc
+                wp.launch(k_mid_pre_self, sc['K'], inputs=[A['z'], sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['d0'], sc['Reff'], .5*self.e4], outputs=[A['P']])
             wp.launch(k_mid_inv, n, inputs=[A['P']], outputs=[A['Pinv']])
-            r = self.CG.solve(A['gz'], delta, max(cg_tol_abs(g2), self.eta*math.sqrt(g2)), self.cg_cap)
+            stop = max(cg_tol_abs(g2), self.eta*math.sqrt(g2)); g_ = math.sqrt(g2)
+            r = self.CG.solve(A['gz'], delta, stop, self.cg_cap)
             evals += r['K']; st['edge'] += r['EDGE']; st['negative'] += r['NEG']
             delta = r['DELTA']
             if delta0 is None:
@@ -2175,6 +2275,7 @@ class MidpointStep:
                 delta = .25*pM
             elif rho > .75 and r['EDGE']:
                 delta = 2*delta
+            st['trace'].append((r['K'], r['EDGE'], r['NEG'], stop, g_, rho, ok and rho > 1e-4))
             if ok and rho > 1e-4:
                 self._accept()
                 g2 = s[PS_GQ2]
