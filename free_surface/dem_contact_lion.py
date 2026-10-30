@@ -23,7 +23,7 @@ a_.add_argument('--a-floor', type=float, default=0.)      # set_cap_floor: the f
 a_.add_argument('--watch', default='')                     # cells to log at every step from --watch-from on
 a_.add_argument('--watch-from', type=int, default=400)
 a_.add_argument('--fine-until', type=float, default=0.)   # a frame every 4 steps up to this time
-a_.add_argument('--cap', choices=('rim', 'pos', 'wall'), default='pos')     # 10-29 user: the one-way cap by default  # pos: the one-way cap; dir: the free direction (set_free_direction)
+a_.add_argument('--cap', choices=('rim', 'pos', 'wall', 'ul'), default='pos')     # 10-29 user: the one-way cap by default  # pos: the one-way cap; dir: the free direction (set_free_direction)
 args = a_.parse_args()
 OUT = args.out; E, NU, DT, UP, C0, V0 = 10648.614517785627, .3912951704721983, 1/1200, 2, -.2, (0., 0., -.245)
 cells = np.load(OUT/'dem_exact_single'/'cells.npz'); g = dict(np.load(OUT/'dem_exact_single'/'geometry.npz')); bsk = dict(np.load(OUT/'boundary_skin.npz'))
@@ -38,6 +38,8 @@ upt = tuple(1. if k == UP else 0. for k in range(3))
 W.set_ball(cbody, Rb, upt, C0, 0.)
 if args.self_contact:
     W.set_self_contact(torch.as_tensor(cells['radii'], dtype=f64, device=dev), K=args.sc_cap, sigma=args.sc_sigma)
+if args.cap == 'ul':                                       # (UL's F, no fitted skin; needs --self-contact 1 --sc-sigma > 0)
+    W.set_cap_ul()
 if args.cap == 'pos':
     W.set_cap_positions()
     W.set_cap_floor(args.a_floor)
@@ -49,6 +51,8 @@ W.prepare()
 n = W.n; X = st.X; mass = m.mass.to(f64); M3 = mass[:, None]
 up = torch.tensor(upt, dtype=f64, device=dev); fg = -9.8*M3*up; ref = float(fg.norm())
 x = X.clone(); v = torch.tensor(V0, dtype=f64, device=dev).expand_as(x).clone()
+if W.cap_ul:
+    W.update_ul(x)                                         # (the map at rest, for the blocks below)
 Kbb = probe_blocks(W, x, colouring(st.i.cpu().numpy(), st.j.cpu().numpy(), n))
 W.visc_ref(x)
 W.tball[0], W.tball[1] = 2., .5
@@ -70,6 +74,8 @@ def self_report():
     P_ = W._pairs.cpu().numpy(); sp.append(np.c_[np.full(len(P_), len(ts)-1), P_])
     out = '; self contact pairs %d (born %d, left %d, cut failures %d); cluster cells in a pair %d' % (
         W.self_stats['pairs'], W.self_stats['born'], W.self_stats['left'], W.self_stats['cut_fail'], int(np.isin(CL, P_).sum()))
+    if W.cap_ul:
+        out += '; UL walls %d, radii iterations %d, radii failures %d, J floored %d' % (W.ul_stats['walls'], W.ul_stats['radii_it'], W.ul_stats['radii_fail'], W.ul_stats['floored'])
     if B_:
         B_ = torch.cat(B_).numpy(); rr = cells['radii']
         rd = B_[:, 4]/h; d0r = B_[:, 3]/(rr[B_[:, 1].astype(int)]+rr[B_[:, 2].astype(int)]); fc = np.minimum(B_[:, 5], -B_[:, 6])

@@ -894,6 +894,58 @@ def k_closP_adj(poff: wp.array(dtype=int), pk: wp.array(dtype=int), pdX: wp.arra
         wp.atomic_add(x_bar, b, -tot)
 
 
+# UL's F in place of the fitted skin (10-30, the user: the bonds carry the force, UL's F needs no skin): within a step, on the step-start cut, F_b = (I + G_b(x - x_n)) F_n with G_b = sum_e (dx_O - dx_S) (x) R_e
+# UL's least-squares fit on the cut's walls (R_e = w d^T M_S^+), a tiny cell's G the V0-weighted mean of its non-tiny wall neighbours' (agg). Padding entries have R = 0, Aw = 0
+@wp.kernel(enable_backward=False)
+def k_Gul(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), S: wp.array(dtype=int), O: wp.array(dtype=int), Rw: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d)):
+    e = wp.tid()
+    s, o = S[e], O[e]
+    wp.atomic_add(G, s, wp.outer((x[o]-xn[o])-(x[s]-xn[s]), Rw[e]))
+
+
+@wp.kernel(enable_backward=False)
+def k_Aul(G: wp.array(dtype=wp.mat33d), As: wp.array(dtype=int), Ao: wp.array(dtype=int), Aw: wp.array(dtype=wp.float64), Ga: wp.array(dtype=wp.mat33d)):
+    e = wp.tid()
+    wp.atomic_add(Ga, As[e], G[Ao[e]]*Aw[e])
+
+
+@wp.kernel(enable_backward=False)
+def k_Ful(G: wp.array(dtype=wp.mat33d), Ga: wp.array(dtype=wp.mat33d), used: wp.array(dtype=int), F0: wp.array(dtype=wp.mat33d), Fc: wp.array(dtype=wp.mat33d)):
+    b = wp.tid()
+    Gb = G[b]
+    if used[b] != 0:
+        Gb = Ga[b]
+    Fc[b] = F0[b]+Gb@F0[b]
+
+
+@wp.kernel(enable_backward=False)
+def k_Ful_adj(Fb: wp.array(dtype=wp.mat33d), used: wp.array(dtype=int), F0: wp.array(dtype=wp.mat33d), Gb: wp.array(dtype=wp.mat33d)):
+    """dE = Fb : (dG F0) = (Fb F0^T) : dG; a tiny cell's goes to its neighbours (k_Aul_adj)"""
+    b = wp.tid()
+    Gb[b] = wp.mat33d()
+    if used[b] == 0:
+        Gb[b] = Fb[b]@wp.transpose(F0[b])
+
+
+@wp.kernel(enable_backward=False)
+def k_Aul_adj(Fb: wp.array(dtype=wp.mat33d), F0: wp.array(dtype=wp.mat33d), As: wp.array(dtype=int), Ao: wp.array(dtype=int), Aw: wp.array(dtype=wp.float64), Gb: wp.array(dtype=wp.mat33d)):
+    e = wp.tid()
+    s = As[e]
+    wp.atomic_add(Gb, Ao[e], (Fb[s]@wp.transpose(F0[s]))*Aw[e])
+
+
+@wp.kernel(enable_backward=False)
+def k_Gul_adj(Gb: wp.array(dtype=wp.mat33d), S: wp.array(dtype=int), O: wp.array(dtype=int), Rw: wp.array(dtype=wp.vec3d), x_bar: wp.array(dtype=wp.vec3d)):
+    e = wp.tid()
+    v = Gb[S[e]]@Rw[e]
+    wp.atomic_add(x_bar, O[e], v)
+    wp.atomic_add(x_bar, S[e], -v)
+
+
+def st_V(W):
+    return W.st.V
+
+
 class ClosureWarp(SkinWarp):
     """built from a ClosureTerms st; grad(x) -> (loss, dE/dx), torch (prepare() first). Viscosity, contact and friction as
     SkinWarp's (set_viscosity, set_contact), the contact made the cap's series spring and the glue the cap's shear"""
@@ -947,6 +999,7 @@ class ClosureWarp(SkinWarp):
         self.cap_pos = False                                                        # (set_cap_positions: the one-way cap)
         self.cap_eps = 0.                                                           # (set_cap_floor: the floor on its normal)
         self.cap_wall = False                                                       # (set_cap_walls: the walls' cap)
+        self.cap_ul = False                                                         # (set_cap_ul: UL's F, no cap)
         self._only0, self._only1 = wp.zeros(1, dtype=int, device=dev), wp.array([1], dtype=int, device=dev)
         z = lambda n_, dt_: wp.zeros(n_, dtype=dt_, device=dev)
         self.eta = self.lamv = self.smu = self.slam = 0.
@@ -1039,6 +1092,66 @@ class ClosureWarp(SkinWarp):
         self.capnr, self.capeps = T(P['nr'], wp.vec3d), wp.array([0.], dtype=wp.float64, device='cuda')
         self.cap_pos = True
 
+    def set_cap_ul(self, agg=.1, Kw=80000, Ka=20000, vol_tol=1e-5):
+        """UL's F instead of the fitted skin, after set_self_contact (its colours and cut), before prepare(): each step re-solves the radii for V0 det F_n and re-cuts (update_ul), the fit on the cut's walls
+        with areas scaled by the colour similarity, F within the step k_Gul / k_Aul / k_Ful; the volume term on det F alone (no k_walls). Not for plasticity: the bonds are the rest bonds. Kw, Ka: capacities"""
+        dev = 'cuda'; n = self.n
+        self.cap_ul = True; self._ul_agg = agg; self._ul_tol = vol_tol
+        self._rr0 = self._rr.clone(); self._ulr = self._rr.clone(); self._ulG = None
+        self._Fn = torch.eye(3, dtype=f64, device=dev).repeat(n, 1, 1)
+        self.ul_stats = dict(radii_fail=0, floored=0, walls=0, radii_it=0)
+        z = lambda k, dt_: wp.zeros(k, dtype=dt_, device=dev)
+        self.ul = dict(K=2*Kw, Ka=Ka, Kw=Kw, xn=z(n, wp.vec3d), S=z(2*Kw, wp.int32), O=z(2*Kw, wp.int32), R=z(2*Kw, wp.vec3d), As=z(Ka, wp.int32), Ao=z(Ka, wp.int32), Aw=z(Ka, wp.float64),
+                       used=z(n, wp.int32), F0=z(n, wp.mat33d))
+        tt = lambda a_: wp.to_torch(a_, requires_grad=False)
+        self.tul = {k_: tt(self.ul[k_]) for k_ in ('xn', 'S', 'O', 'R', 'As', 'Ao', 'Aw', 'used', 'F0')}
+        self.tul['xn'].copy_(self.st.X); self.tul['F0'].copy_(self._Fn)
+        self.Vdet = wp.from_torch(self.st.V.contiguous(), dtype=wp.float64)
+
+    def update_ul(self, x):
+        """the step's start at x: radii for V0 det F_n (their failure keeps the last radii: they only shape the cut), the cut, the fit's entries R_e, the aggregation, x_n, F_n"""
+        n = self.n; x = x.detach(); st = self.ul_stats
+        J = torch.linalg.det(self._Fn); st['floored'] = int((J < .02).sum())
+        try:
+            r, G, S_, it, nrep = self._recut.solve_radii(x, self._ulr, st_V(self)*J.clamp(min=.02), tol=self._ul_tol, r_base=self._rr0)
+            st['radii_it'] = it
+        except RuntimeError:
+            st['radii_fail'] += 1
+            r = self._ulr; G, S_ = self._recut.geometry(x, r)
+        self._ulr, self._rr, self._ulG = r, r, G
+        kp = G.wall_A.detach() > 0
+        i, j, A = G.i[kp].long(), G.j[kp].long(), G.wall_A.detach()[kp]
+        a, b = torch.minimum(i, j), torch.maximum(i, j)
+        s = torch.ones(len(i), dtype=f64, device=x.device); nw = ~torch.isin(a*n+b, self._rest_keys)
+        s[nw] = self._color_sim(a[nw], b[nw])
+        d = x[j]-x[i]; w = A*s/d.norm(dim=1)
+        q = w[:, None, None]*d[:, :, None]*d[:, None, :]
+        M = torch.zeros(n, 3, 3, dtype=f64, device=x.device).index_add(0, i, q).index_add(0, j, q)
+        Mi = torch.linalg.pinv(M)
+        vd = w[:, None]*d
+        Ri = torch.einsum('fa,fab->fb', vd, Mi[i]); Rj = torch.einsum('fa,fab->fb', -vd, Mi[j])
+        m = len(i); U = self.ul; t = self.tul
+        if m > U['Kw']:
+            raise RuntimeError('update_ul: %d walls over the capacity %d' % (m, U['Kw']))
+        st['walls'] = m
+        t['S'].zero_(); t['O'].zero_(); t['R'].zero_()
+        t['S'][:2*m] = torch.cat([i, j]).to(torch.int32); t['O'][:2*m] = torch.cat([j, i]).to(torch.int32); t['R'][:2*m] = torch.cat([Ri, Rj])
+        V0 = st_V(self); tiny = V0 < self._ul_agg*V0.median()
+        m1, m2 = tiny[i] & ~tiny[j], tiny[j] & ~tiny[i]
+        as_, ao_ = torch.cat([i[m1], j[m2]]), torch.cat([j[m1], i[m2]])
+        va = V0[ao_]*torch.cat([s[m1], s[m2]]); ka = va > 0; as_, ao_, va = as_[ka], ao_[ka], va[ka]
+        den = torch.zeros(n, dtype=f64, device=x.device).index_add(0, as_, va)
+        if len(as_) > U['Ka']:
+            raise RuntimeError('update_ul: %d aggregation entries over the capacity %d' % (len(as_), U['Ka']))
+        t['As'].zero_(); t['Ao'].zero_(); t['Aw'].zero_()
+        k_ = len(as_); t['As'][:k_] = as_.to(torch.int32); t['Ao'][:k_] = ao_.to(torch.int32); t['Aw'][:k_] = va/den[as_]
+        t['used'].copy_((tiny & (den > 0)).to(torch.int32))
+        t['xn'].copy_(x); t['F0'].copy_(self._Fn)
+
+    def end_ul(self):
+        """after the step: F_n+1 = 2 F(z) - F_n, F linear in x and the buffers at the accepted midpoint z"""
+        self._Fn = 2*self.tF-self._Fn
+
     def set_cap_floor(self, eps):
         """the floor on the one-way cap's normal (floored_nt), after set_cap_positions; 0: none, comp_a itself. The reference normal starts at the rest
         normal and MidpointStep.end() moves it to each accepted midpoint's"""
@@ -1100,7 +1213,7 @@ class ClosureWarp(SkinWarp):
             self._pairs, self._pd0 = P[stay], self._pd0[stay]
             self._pw = self._pw[stay]
         try:
-            G, _ = self._recut.geometry(x, self._rr)
+            G = self._ulG if self.cap_ul else self._recut.geometry(x, self._rr)[0]   # (cap_ul: the step's own cut, update_ul)
         except RuntimeError:
             self.self_stats['cut_fail'] += 1
             G = None
@@ -1179,7 +1292,7 @@ class ClosureWarp(SkinWarp):
         zz = lambda dt_: wp.zeros(n, dtype=dt_, device='cuda')
         B = dict(S=z(n, wp.mat33d), Fc=z(n, wp.mat33d), J=wp.zeros(n, dtype=mat99, device='cuda'), Jr=wp.zeros(n, dtype=mat99, device='cuda'),
                  C=zz(mat99), Fx=zz(wp.mat33d), y0=zz(wp.mat33d), y1=zz(wp.mat33d), dS=zz(wp.mat33d), G=zz(wp.mat33d),
-                 Fw=zz(wp.mat33d), Gbar=zz(wp.mat33d),
+                 Fw=zz(wp.mat33d), Gbar=zz(wp.mat33d), Ga=zz(wp.mat33d),
                  cstep=wp.zeros(n, dtype=wp.float64, device='cuda'),
                  perm=wp.zeros(n, dtype=vec9, device='cuda'),
                  F=z(n, wp.mat33d), R=z(n, wp.mat33d), q=z(n, wp.vec4d), Vd=z(n, wp.float64), lj=z(n, wp.float64), bd=z(self.nb, wp.vec3d),
@@ -1196,8 +1309,22 @@ class ClosureWarp(SkinWarp):
         only = self._only0 if only is None else only
         n = self.n
         rf, pl = self.ref, self.plas
-        wp.launch(k_S_bonds, self.nb, inputs=[x, self.bi, self.bj, self.A, self.nrm], outputs=[B['S']])
-        if self.cap_wall:
+        if self.cap_ul:
+            U = self.ul
+            wp.launch(k_Gul, U['K'], inputs=[x, U['xn'], U['S'], U['O'], U['R']], outputs=[B['S']], record_tape=False)
+            wp.launch(k_Aul, U['Ka'], inputs=[B['S'], U['As'], U['Ao'], U['Aw']], outputs=[B['Ga']], record_tape=False)
+            wp.launch(k_Ful, n, inputs=[B['S'], B['Ga'], U['used'], U['F0']], outputs=[B['Fc']], record_tape=False)
+            if tape is not None:
+                def adj_ul():
+                    wp.launch(k_Ful_adj, n, inputs=[B['Fc'].grad, U['used'], U['F0']], outputs=[B['Gbar']])
+                    wp.launch(k_Aul_adj, U['Ka'], inputs=[B['Fc'].grad, U['F0'], U['As'], U['Ao'], U['Aw']], outputs=[B['Gbar']])
+                    wp.launch(k_Gul_adj, U['K'], inputs=[B['Gbar'], U['S'], U['O'], U['R']], outputs=[x.grad])
+                tape.record_func(adj_ul, arrays=[x, B['Fc']])
+        else:
+            wp.launch(k_S_bonds, self.nb, inputs=[x, self.bi, self.bj, self.A, self.nrm], outputs=[B['S']])
+        if self.cap_ul:
+            pass
+        elif self.cap_wall:
             wp.launch(k_Fw, n, inputs=[B['S'], self.Mbi], outputs=[B['Fw']])
             cw = [self.Mti, self.Mc, self.t1, self.t2, self.mA, self.PA, self.kapw]
             wp.launch(k_closW, n, inputs=[B['S'], B['Fw'], self.off, self.ek, self.ew]+cw, outputs=[B['G'], B['Fc']])
@@ -1224,10 +1351,11 @@ class ClosureWarp(SkinWarp):
         else:
             wp.launch(k_bonds, self.nb, inputs=bonds_in, outputs=[B['terms'], B['bd'], B['bth']])
         walls_in = [x, B['F'], B['R'], self.bi, self.bj, self.hi, self.hj, self.L, self.wri, self.wrj, self.wt, self.A, self.nrm, self.wi, self.wj]
-        wp.launch(k_walls, self.nb, inputs=walls_in, outputs=[B['Vd']], record_tape=not hand)
-        if hand:
-            tape.record_func(lambda: wp.launch(k_walls_adj, self.nb, inputs=walls_in+[B['Vd'].grad], outputs=[x.grad, B['F'].grad, B['R'].grad]),
-                             arrays=[x, B['F'], B['R'], B['Vd']])
+        if not self.cap_ul:                                                         # (cap_ul: J = det F, Vdet = V)
+            wp.launch(k_walls, self.nb, inputs=walls_in, outputs=[B['Vd']], record_tape=not hand)
+            if hand:
+                tape.record_func(lambda: wp.launch(k_walls_adj, self.nb, inputs=walls_in+[B['Vd'].grad], outputs=[x.grad, B['F'].grad, B['R'].grad]),
+                                 arrays=[x, B['F'], B['R'], B['Vd']])
         wp.launch(k_patches, self.nc, inputs=[B['F'], B['R'], self.cb, self.cr, self.cN, self.matp, rf['P'], pl['Pp']], outputs=[B['terms']])
         wp.launch(k_volume, n, inputs=[B['F'], B['Vd'], self.Vdet, self.V, self.matp, rf['L'], self.barrier], outputs=[B['lj'], B['terms']])
         wp.launch(k_variance, self.nb, inputs=[B['lj'], rf['L'], self.bi, self.bj, self.wv, self.matp], outputs=[B['terms']])
@@ -1274,7 +1402,7 @@ class ClosureWarp(SkinWarp):
         zz = lambda dt_: wp.zeros(self.n, dtype=dt_, device='cuda')
         self.sv = dict(F=zz(wp.mat33d), S=zz(wp.mat33d), J=zz(mat99), perm=zz(vec9), C=zz(mat99))
         self.cold()
-        if self.cap_pos or self.cap_wall:                                           # (the one-way caps: no sweeps)
+        if self.cap_pos or self.cap_wall or self.cap_ul:                            # (the one-way caps, UL's F: no sweeps)
             self.rho, self.n_lin = 0., 0
         else:
             self.rho = self._rho()
@@ -1290,7 +1418,7 @@ class ClosureWarp(SkinWarp):
             for k_, a in self.B.items():
                 if a.grad is not None:
                     a.grad.zero_()
-                if k_ in ('S', 'Vd', 'terms', 'tsum'):
+                if k_ in ('S', 'Ga', 'Vd', 'terms', 'tsum'):
                     a.zero_()
             self.xw.grad.zero_(); self.yw.grad.zero_()
             with self.tape:
@@ -2010,6 +2138,8 @@ class MidpointStep:
 
     def step(self, tol_abs, cg_tol_abs):
         W, A, bl, n = self.W, self.a, self.W.ball, self.W.n
+        if W.cap_ul:
+            W.update_ul(self.tx)                                                   # (radii, cut, the fit at the step's start)
         if W.selfc is not None:
             W.update_self(self.tx)                                                 # (the self contact list at the step's start)
         wp.launch(k_mid_begin, n, inputs=[A['x'], A['v'], A['a'], self.dt], outputs=[A['xt'], A['z']])
@@ -2059,6 +2189,8 @@ class MidpointStep:
     def end(self):
         """the step's end at the accepted midpoint (W's buffers hold its evaluation)"""
         W, A, bl, n = self.W, self.a, self.W.ball, self.W.n
+        if W.cap_ul:
+            W.end_ul()
         if W.vis is not None:
             wp.launch(k_mid_visc_bonds, W.nb, inputs=[W.B['bd'], W.B['bth']], outputs=[W.ref['d'], W.ref['th']])
             wp.launch(k_mid_visc_bodies, n, inputs=[W.B['R'], W.B['F'], W.B['lj']], outputs=[W.ref['P'], W.ref['L']])
