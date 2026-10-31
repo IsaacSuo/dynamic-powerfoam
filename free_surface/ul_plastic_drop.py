@@ -30,7 +30,8 @@ a_.add_argument('--tag', default='drop')
 a_.add_argument('--frames', type=int, default=15)
 a_.add_argument('--dt', type=float, default=1/1200)
 a_.add_argument('--tol', type=float, default=1e-3)
-a_.add_argument('--mu', type=float, default=10., help="the ground's friction: large for the MPM's sticky ground")
+a_.add_argument('--mu', type=float, default=10., help="the ground's friction: large for the MPM's sticky ground; with --stick shear it only turns the glue on")
+a_.add_argument('--stick', choices=('coulomb', 'shear'), default='coulomb', help="the glue's limit: mu F_n, or the material's shear yield on the cell's footprint (PlasticUL.set_stick)")
 a_.add_argument('--grad', default='gg')
 a_.add_argument('--every', type=int, default=10)
 a_.add_argument('--pre-every', type=int, default=4)
@@ -68,6 +69,8 @@ def chamfer(a, b, chunk=1024):
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
 W = PlasticUL(X0, r0, V0, E, nu, ys, grad=args.grad)
 W.set_ball((0., 1., 0.), -.05, args.mu)
+if args.stick == 'shear':
+    W.set_stick()
 W.update_ul(W.X)
 W.prepare()
 up = torch.tensor([0., 1., 0.], dtype=f64, device=dev)
@@ -134,6 +137,9 @@ for s in range(1, nsteps+1):
         i_, j_, Lw, _, _, m = W._w
         ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum())
         bd = W.B['bdelta'].numpy()
+        if W.stick:
+            lim_ = W.tbbound; ff_ = wp_t(W.B['bff']).norm(dim=1); on_ = lim_ > 0
+            print('  the ground: limits on %d cells, footprint %.4f m2; of them at the limit %d; tangential force / limit median %.3f; sum of tangential forces / weight unit %.2f' % (int(on_.sum()), float(lim_.sum())/W.tau_y, int((ff_[on_] >= .999*lim_[on_]).sum()), float((ff_[on_]/lim_[on_]).median()) if bool(on_.any()) else 0., float(ff_.sum())/wref), flush=True)
         Es_ = float(((M3*(ST.tx-ST.tx.mean(0)))[:, 1]*(ST.tx[:, 1]-(M3*ST.tx).sum(0)[1]/M)).sum())
         print('  integrated mean strain yy %.4f xx %.4f zz %.4f; cells\' share of W_p %.3f; site height std / rest %.4f, its log %.4f; mean |ep| %.3f; frozen beta error mean %.3f max %.3f; memory |delta| / L median %.4f, 99 %% %.4f, max %.4f' % (float(W.Hsum[1, 1]), float(W.Hsum[0, 0]), float(W.Hsum[2, 2]), W.Wp_cell/max(W.Wp, 1e-300), (Es_/Y2)**.5, .5*math.log(Es_/Y2), float((mass*W.ep.flatten(1).norm(dim=1)).sum())/M, *W.ul_stats['beta_err'], *W.ul_stats['delta_L']), flush=True)
         print('t %.4f (%.0f s): KE %.3e dev %.3e vol %.3e jump %.3e var %.3e W_p %.3e; com y %.4f; yielding %d cells, %d of %d walls; J %.3f..%.3f, |eps_p| median %.3f max %.3f; touching %d, ground/weight %.2f; min wall L / h %.3f, max r / h %.2f, radii %d (fails %d), flips %d; products %d, Newton %d, rejected %d, negative %d; %.2f s' % (

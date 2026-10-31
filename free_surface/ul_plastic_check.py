@@ -119,6 +119,42 @@ nr = W.tul['en'].flatten(1).norm(dim=1)
 print('check 6: %d cells over the limit before; after the return |s| / s_y max %.6f; traceless %.1e; symmetric %.1e; walls with beta < 1 %d; memory / (beta |delta_tr|) %.4f..%.4f (<= 1: the mean of two rotations); plastic work %.3e (cells %.3e)' % (
     over0, float((2*W.mu*nr/W.sy).max()), float(W.tul['en'].diagonal(dim1=1, dim2=2).sum(1).abs().max()), float((W.tul['en']-W.tul['en'].transpose(1, 2)).abs().max()), W.ul_stats['wall_yielding'],
     float((W._mem_d.norm(dim=1)/(wb0[o_]*dl0[o_].norm(dim=1))).min()), float((W._mem_d.norm(dim=1)/(wb0[o_]*dl0[o_].norm(dim=1))).max()), W.Wp, W.Wp_cell), flush=True)
+# 8. the footprint: two equal discs against the union's exact area, half each; a third, disjoint disc of its own; 9. the glue in the gradient, sticking and sliding
+import math
+W = model('gg')
+yp = float(W.tball[2]); Ra, Da = .02, .03
+xs = W.X[:, :0].new_zeros((n, 3)); xs[:, 1] = yp+10.
+xs[0] = torch.tensor([0., yp, 0.], dtype=f64); xs[1] = torch.tensor([Da, yp, 0.], dtype=f64); xs[2] = torch.tensor([.2, yp, 0.], dtype=f64)
+rs = torch.full((n,), 1e-3, dtype=f64, device=dev); rs[:3] = Ra
+lens = 2*Ra*Ra*math.acos(Da/(2*Ra))-.5*Da*math.sqrt(4*Ra*Ra-Da*Da)
+ex = (math.pi*Ra*Ra-.5*lens, math.pi*Ra*Ra)
+for gs in (h/4, h/16):
+    Af = W.footprint(xs, rs, g=gs)
+    print('check 8: the footprint, raster %.2f mm: discs 1, 2 of the overlapping pair %.4e, %.4e against %.4e; the third %.4e against %.4e; others %.1e' % (1e3*gs, float(Af[0]), float(Af[1]), ex[0], float(Af[2]), ex[1], float(Af[3:].sum())), flush=True)
+W.set_stick()
+x9 = X_+.02*h*torch.randn(n, 3, dtype=f64, device=dev)
+tb = {k_: __import__('warp').to_torch(W.ball[k_], requires_grad=False) for k_ in ('xn', 'kt', 'bound', 'lamt')}
+W.tball[4] = 1.
+W.tball[2] = float((x9[:, 1]-W.tbR.clamp(min=0)).min())+.8*h
+d9 = W.tbR-(x9[:, 1]-float(W.tball[2]))
+tb['xn'].copy_(x9-.01*h*torch.randn(n, 3, dtype=f64, device=dev)); tb['kt'].copy_(8*W.Gs*torch.sqrt((W.tbR*d9).clamp(min=0)))
+Af9 = W.footprint(x9, W._ulr)
+tb['bound'].copy_(torch.where(W.tbR > 0, W.tau_y*Af9, torch.zeros_like(Af9)))
+tb['lamt'].copy_(.3*tb['bound'][:, None]*torch.randn(n, 3, dtype=f64, device=dev)*torch.tensor([1., 0., 1.], dtype=f64, device=dev))
+W.tul['wb'][:W._w[5]] = 1.
+E0, g9 = W.grad(x9)
+on = tb['bound'] > 0
+s9 = (x9-tb['xn']); s9[:, 1] = 0.; q9 = tb['lamt']-tb['kt'][:, None]*s9
+slide = int(((q9.norm(dim=1) > tb['bound']) & on).sum())
+print('state for the glue: %d cells with a limit, %d of them over it (sliding), %d sticking; friction energy %.3e, limits sum %.3e' % (int(on.sum()), slide, int(on.sum())-slide, float(W.tsum[8]), float(tb['bound'].sum())), flush=True)
+worst = 0.
+for k in range(4):
+    d = torch.randn(n, 3, dtype=f64, device=dev)*(on[:, None].to(f64) if k % 2 else 1.)
+    d = d/d.norm(dim=1).max(); eps = 1e-6*h
+    Ep, _ = W.grad(x9+eps*d); Em, _ = W.grad(x9-eps*d)
+    fd = float(Ep-Em)/(2*eps); an = float((g9*d).sum()); worst = max(worst, abs(an-fd)/max(abs(fd), 1e-300))
+    print('  direction %d: analytic %.8e, differences %.8e' % (k, an, fd), flush=True)
+print('check 9: the glue in the gradient: largest relative difference %.2e' % worst, flush=True)
 # 7. an elastic cell's wall keeps its memory: no yield, no motion: the energy is 1/2 k |delta|^2 and the force k delta, in the sum
 W = PlasticUL(X, r, V0, args.E, args.nu, float('inf'), grad='gg')
 W.update_ul(W.X); W.prepare()

@@ -210,6 +210,8 @@ class PlasticUL:
         self.mu, self.lam = E/(2*(1+nu)), E*nu/((1+nu)*(1-2*nu))
         self.kap = self.lam+2*self.mu/3
         self.sy = math.sqrt(2/3)*sigma_y
+        self.tau_y = sigma_y/math.sqrt(3)
+        self.stick = False                                                          # (set_stick: the glue's limit from the material's shear yield)
         self._ul_agg, self._ul_tol = agg, vol_tol
         self._recut = Recut(n, dev); self._recut.A.f32 = True
         G, _ = self._recut.geometry(self.X, self._ulr)
@@ -245,8 +247,37 @@ class PlasticUL:
                          ng=wp.vec3d(*[float(a_) for a_ in normal]), par=wp.array(np.array([1., 1., float(c0), self.Es, float(mu)]), dtype=wp.float64, device=dev),
                          xn=z(wp.vec3d), kt=z(wp.float64), bound=z(wp.float64), lamt=z(wp.vec3d))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
-        self.tball, self.tbR = tt(self.ball['par']), tt(self.ball['R'])
+        self.tball, self.tbR, self.tbbound = tt(self.ball['par']), tt(self.ball['R']), tt(self.ball['bound'])
         self.tbR.fill_(-1.)
+
+    def set_stick(self):
+        """the ground no-slip for this material, after set_ball: a no-slip wall under a perfectly plastic material shears in a layer far thinner than a cell (the MPM: zero velocity at
+        the ground, the lowest particles a few mm above it, moving), so the wall's traction is tau_y, von Mises friction m = 1, whatever the pressure. So the glue's limit is tau_y A_c, A_c the
+        cell's own footprint (footprint), in place of mu F_n. The step's friction switch tball[4] (> 0) only turns the glue on; its stiffness stays Mindlin's"""
+        self.stick = True
+
+    def footprint(self, x, r, g=None):
+        """each cell's area on the ground plane: a point y of the plane has power |y - p|^2 + d^2 - r^2 (p the site's projection, d its height), so the plane is cut by the 2-d power diagram of the
+        circles a^2 = r^2 - d^2; the areas add up to the union of the discs, nothing counted twice. On a raster of spacing g (default a quarter of the median cell size)"""
+        A = torch.zeros(self.n, dtype=f64, device=x.device); ng = torch.tensor([self.ball['ng'][k_] for k_ in range(3)], dtype=f64, device=x.device)
+        d = x@ng-float(self.tball[2]); a2 = r*r-d*d
+        c = torch.nonzero((d < r) & (a2 > 0)).flatten()
+        if len(c) == 0:
+            return A
+        k0 = int(torch.argmin(ng.abs())); e0 = torch.zeros(3, dtype=f64, device=x.device); e0[k0] = 1.
+        u = torch.linalg.cross(ng, e0); u = u/u.norm(); v = torch.linalg.cross(ng, u)
+        P = torch.stack([x[c]@u, x[c]@v], 1); ac = a2[c]; rc = ac.sqrt()
+        g = float(self.V0.median())**(1/3)/4 if g is None else g
+        lo, hi = (P-rc[:, None]).min(0).values, (P+rc[:, None]).max(0).values
+        gx = torch.arange(float(lo[0])+g/2, float(hi[0]), g, dtype=f64, device=x.device); gy = torch.arange(float(lo[1])+g/2, float(hi[1]), g, dtype=f64, device=x.device)
+        Y = torch.stack(torch.meshgrid(gx, gy, indexing='ij'), -1).reshape(-1, 2)
+        cnt = torch.zeros(len(c), dtype=f64, device=x.device)
+        for s in range(0, len(Y), 8192):
+            pw = torch.cdist(Y[s:s+8192].float(), P.float())**2-ac.float()[None]
+            mn, k = pw.min(1)
+            cnt.index_add_(0, k[mn <= 0], torch.ones(int((mn <= 0).sum()), dtype=f64, device=x.device))
+        A[c] = cnt*g*g
+        return A
 
     def prepare(self):
         n, dev = self.n, self.dev
@@ -466,5 +497,8 @@ class PlasticStep(MidpointStep):
     def _eval(self, t):
         if getattr(self, '_fresh', False):
             self._fresh = False
-            self.W.set_rotation(self.tz)
+            W = self.W
+            W.set_rotation(self.tz)
+            if W.stick:                                                             # (after k_mid_ball, which wrote mu F_n there; at the step's start as it does)
+                W.tbbound.copy_(torch.where(W.tbR > 0, W.tau_y*W.footprint(self.tx, W._ulr), torch.zeros_like(W.tbR)))
         return super()._eval(t)
