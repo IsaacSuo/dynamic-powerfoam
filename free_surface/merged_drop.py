@@ -41,6 +41,8 @@ a_.add_argument('--theta', type=float, default=.5)
 a_.add_argument('--kshare', type=float, default=1.)
 a_.add_argument('--log-mem', type=int, default=10**9)
 a_.add_argument('--probe-from', type=int, default=10**9, help="every step from this one on, at its first point: the springs' part of |g|, the levers F T, the neighbours' relative rotation (logging only)")
+a_.add_argument('--budget-from', type=int, default=10**9, help="every step from this one on: the energy account by channel, each one's stored change minus its forces' work over the step (logging only)")
+a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
 args = a_.parse_args()
 gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())['0']
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
@@ -147,18 +149,82 @@ def probe(ST_):
         s, s*args.dt, n_all, n_no, n_sp, top, float(gn[top])/wref, float(W.V0[top]/med), float(sg.min()), q_(sg, .001), q_(sg, .01), q_(lev, .5), q_(lev, .99), q_(lev, .999), float(lev.max()), int((lev > 3).sum()), int((lev > 10).sum()), int((lev > 100).sum()), float((T.norm(dim=1)/dl).max()),
         q_(ang, .5), q_(ang, .99), q_(ang, .999), float(ang.max()), int((ang > 90).sum()), int((ang > 150).sum()), float((r_.norm(dim=1)/dl).max()), c1, c2, float(lev[e_]), float(sg[e_]), float(ang[e_]), float(r_[e_].norm()/dl[e_]), float((W.tG[c1]-W.tG[c2]).norm()), float(k_[e_]), float(b_[e_]), float(W.V0[c1]/med), float(W.V0[c2]/med), int(bool((ring == top).any()))), flush=True)
     probes.append((s, s*args.dt, n_all, n_no, n_sp, float(sg.min()), q_(lev, .999), float(lev.max()), q_(ang, .999), float(ang.max()), float((r_.norm(dim=1)/dl).max()), float(lev[e_]), float(sg[e_]), int(bool((ring == top).any()))))
+    # the first |g| by what the cells put on their walls: pressure and variance, shape; the ground's largest ball
+    Lb_, Fb_ = wp_t(W.B['Lb']), wp_t(W.B['Fb'])
+    ic_, jc_, m2_ = W._w[0], W._w[1], W._w[5]; wa_ = W.tul['wa'][:m2_]
+    Am = torch.zeros(W.n, dtype=f64, device=dev); Am.index_reduce_(0, ic_, wa_, 'amax'); Am.index_reduce_(0, jc_, wa_, 'amax')
+    pr, sh = Lb_.abs()*Vi*Am*3**.5/wref, (Fb_@F0.transpose(1, 2)).flatten(1).norm(dim=1)*Vi*Am/wref
+    fb_ = torch.as_tensor(W.B['bfn'].numpy(), device=dev).abs()/wref
+
+    def cell(c_):
+        sv_, sf_ = torch.linalg.svdvals((W.I3+W.tG[c_]).cpu()), torch.linalg.svdvals(F0[c_].cpu())
+        return '%d: V0/med %.2f, V / (V0 J) %.3f, J %.3f, L(z) %.3f, beta %.3f, e_i / e_y %.1f, I + G %.3f %.3f, F %.3f %.3f, y/h %.1f' % (c_, float(W.V0[c_]/med), float(1/(Vi[c_]*W.V0[c_]*torch.exp(W.tul['Ln'][c_]))), float(torch.exp(W.tul['Ln'][c_])), float(W.tL[c_]), float(W.tbe[c_]), float(W.tei[c_])/W.ey, float(sv_[2]), float(sv_[0]), float(sf_[2]), float(sf_[0]), float(ST_.tz[c_, 1]+.05)/h)
+    cp_, cs_ = int(pr.argmax()), int(sh.argmax())
+    print('  channels step %d: pressure |dE/dL| A / V max %.3g at %s; shape max %.3g at %s; ground largest ball %.3g at %d' % (s, float(pr[cp_]), cell(cp_), float(sh[cs_]), cell(cs_), float(fb_.max()), int(fb_.argmax())), flush=True)
+
+
+budgets = []
+bud = dict(prev=None, cum=np.zeros(6))
+
+
+def energies():
+    """stored shape and volume after the last end, kinetic, gravity's, the plastic work (cells, springs) of the state now"""
+    E_s, E_v = W.stored()
+    return dict(s=E_s, v=E_v, k=.5*float((M3*ST.tv**2).sum()), g=float((-fg*ST.tx).sum()), wc=float(getattr(W, 'Wp_cell', 0.)), ws=float(getattr(W, 'Wp_spring', 0.)))
+
+
+def budget_mid():
+    """at the accepted z, before the step's end: the forces' work over the step by channel, gradient . dx with dx = (z - x_n) / th, G linear in x"""
+    th, G, Q, F0 = W.th, W.tG, W.tul['Q'], W.tsp['F0']
+    s_, m_ = W.tsp, W._m_s
+    k_, b_, r_, dn_ = s_['sk'][:m_], s_['sb'][:m_], s_['sr'][:m_], s_['sdn'][:m_]
+    f_ = k_[:, None]*((1-th)*dn_+th*b_[:, None]*r_)
+    t_, mw = W.tul, W._w[5]
+    A_ = G/th
+    return dict(WL=wp_t(W.B['Lb'])*(Q*G).sum((1, 2))/th, Ws=float((wp_t(W.B['Fb'])*(G@F0)).sum())/th, Wsp=float((f_*(r_-dn_)).sum()), Wt=float((W.tgx*(ST.tz-ST.tx)).sum())/th, Ln0=t_['Ln'].clone(), Lz=W.tL.clone(), A=A_.clone(),
+                Esp0=float((.5*k_*(dn_*dn_).sum(1)).sum()), wv=t_['wv'][:mw].clone(), wi=t_['wi'][:mw].long().clone(), wj=t_['wj'][:mw].long().clone(), Q=Q.clone(), G=G.clone())
+
+
+def budget_end(e0, m):
+    """after the step's end: each channel's stored change minus its work; what is left of the balance is the ground's work"""
+    th, kap, V0_ = W.th, W.kap, W.V0
+    e1 = energies()
+    Ln1 = W.tul['Ln']; Ln0, Lz = m['Ln0'], m['Lz']
+    Evar0, Evar1 = float((m['wv']*(Ln0[m['wi']]-Ln0[m['wj']])**2).sum()), float((m['wv']*(Ln1[m['wi']]-Ln1[m['wj']])**2).sum())
+    Esp1 = W.spring_store
+    WL = float(m['WL'].sum())
+    D_L = (e1['v']-e0['v'])+(Evar1-Evar0)-WL
+    D_s = (e1['s']-e0['s'])+(e1['wc']-e0['wc'])-m['Ws']
+    D_sp = (Esp1-m['Esp0'])+(e1['ws']-e0['ws'])-m['Wsp']
+    W_c = m['Wt']-WL-m['Ws']-m['Wsp']
+    pv = bud['prev']
+    jk, jv = (m['Esp0']-pv['Esp'], Evar0-pv['Evar']) if pv is not None else (0., 0.)
+    bud['prev'] = dict(Esp=Esp1, Evar=Evar1)
+    bud['cum'] += np.array([D_L, D_s, D_sp, jk, jv, -W_c])/H0
+    Dc = .5*V0_*kap*(Ln1**2-Ln0**2)-V0_*kap*Lz*(m['Q']*m['G']).sum((1, 2))/th
+    A_ = m['A']; tr2 = (A_*A_.transpose(1, 2)).sum((1, 2))
+    form = -V0_*kap*Lz*.5*tr2
+    na = A_.flatten(1).norm(dim=1)
+    c_ = int(Dc.argmax())
+    sv_ = torch.linalg.svdvals((W.I3+A_[c_]).cpu())
+    left = 1-(e1['k']+e1['g']+e1['s']+e1['v']+Evar1+Esp1+W.Wp)/H0
+    print('  budget step %d t %.4f: left %.4f; cumulative / H0: pressure and variance %.5f, shape %.5f, springs %.5f, the springs\' jump at the cut %.5f, variance\'s jump %.5f, into the ground %.5f; this step / H0: pressure %.3e (formula kap V0 L(z) (-1/2 tr A^2) %.3e; cells above 0 %.3e, below 0 %.3e); kinetic + gravity + work %.2e; top cell %d: %.3e, L(z) %.3f, J %.3f -> %.3f, tr A^2 %.3f, I + A %.3f %.3f, V0/med %.2f, y/h %.1f; cells with |A| above 0.3: %d, 1: %d' % (
+        s, s*args.dt, left, *bud['cum'].tolist(), float(Dc.sum())/H0, float(form.sum())/H0, float(Dc[Dc > 0].sum())/H0, float(Dc[Dc < 0].sum())/H0, (e1['k']-e0['k']+e1['g']-e0['g']+m['Wt'])/H0, c_, float(Dc[c_])/H0, float(Lz[c_]), float(torch.exp(Ln0[c_])), float(torch.exp(Ln1[c_])), float(tr2[c_]), float(sv_[2]), float(sv_[0]), float(V0_[c_]/V0_.median()), float(ST.tx[c_, 1]+.05)/h, int((na > .3).sum()), int((na > 1).sum())), flush=True)
+    budgets.append((s, s*args.dt, left, *bud['cum'].tolist(), float(Dc.sum())/H0, float(form.sum())/H0, float(Dc[Dc > 0].sum())/H0, float(Dc[Dc < 0].sum())/H0, c_, float(Dc[c_])/H0))
+    np.save(args.save/('budget_%s.npy' % args.tag), np.array(budgets))
 
 
 t0 = t_saved = time.time()
 Y2 = float((mass*(W.X[:, 1]-(M3*W.X).sum(0)[1]/M)**2).sum())
 nit, npr = [], []
-nf = int(round(1/(24*args.dt))); nsteps = args.frames*nf
+nf = int(round(1/(24*args.dt))); nsteps = args.steps or args.frames*nf
 H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
 for s in range(1, nsteps+1):
     t_s = time.time()
     R_prev = W.tbR.clone()
     yb_ = W._yld.clone()
     ST.probe = probe if s >= args.probe_from else None
+    bud_e0 = energies() if s >= args.budget_from else None
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
     if s >= args.log_from:
         tr_ = ST.stats['trace']; bd = torch.as_tensor(W.B['bdelta'].numpy(), device=dev); R_ = W.tbR; tc = bd > 0
@@ -181,7 +247,10 @@ for s in range(1, nsteps+1):
     if s >= args.log_mem:
         ov_ = len(W._recut.A.ov[0]) if hasattr(W._recut.A, 'ov') else 0
         print('  mem step %d t %.4f: torch allocated %.2f GB, reserved %.2f GB, peak allocated %.2f GB; overlap pairs %d; walls %d; yielded %d; r / r0 max %.2f; J min %.3f; Newton %d, products %d' % (s, s*args.dt, torch.cuda.memory_allocated()/2**30, torch.cuda.memory_reserved()/2**30, torch.cuda.max_memory_allocated()/2**30, ov_, W.ul_stats['walls'], int(W._yld.sum()), float((W._ulr/W._rr0).max()), float(torch.exp(W.tul['Ln']).min()), its, e_), flush=True)
+    bud_m = budget_mid() if s >= args.budget_from else None
     ST.end()
+    if s >= args.budget_from:
+        budget_end(bud_e0, bud_m)
     nit.append(its); npr.append(e_)
     if s % args.every == 0:
         xs.append(ST.tx.cpu().numpy()); rs.append(W._ulr.cpu().numpy()); Ls.append(W.tul['Ln'].cpu().numpy()); ys_.append(W._yld.cpu().numpy()); eps.append(W.ep.cpu().numpy()); ts.append(s*args.dt)
