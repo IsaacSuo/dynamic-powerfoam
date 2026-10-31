@@ -383,6 +383,8 @@ class MergedStep(MidpointStep):
             h_ = self.th*self.dt
             self.tz.copy_(self.tx+.5*h_*(self.tv+self._vp)+.5*(.5*h_*self.dt+h_*h_)*(self.ta+self._ap))
         wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
+        if W.stick:                                                                 # (the glue's limit: mu F_n as k_mid_ball wrote it, up to the material's shear yield on the cell's plan view)
+            W.tbbound.copy_(torch.minimum(W.tbbound, W.tau_y*W.footprint(self.tx, W._ulr)))
         self._eval(0.)
         W.reread(beta=True)
         g2 = self._eval(0.)[PS_GQ2]
