@@ -18,7 +18,7 @@ import numpy as np
 import torch
 import warp as wp
 
-from free_surface.closure_warp import MidpointStep, PS_GQ2, PS_PQ, PS_PZ, k_Aul, k_F8, k_Gul, k_Gul_adj, k_ball_adj, k_mid_ball, k_mid_begin, k_mid_inv, k_mid_pre, k_mid_pre_ball
+from free_surface.closure_warp import MidpointStep, PS_GQ2, PS_PQ, PS_PZ, k_Aul, k_F8, k_Gul, k_Gul_adj, k_ball, k_ball_adj, k_mid_ball, k_mid_begin, k_mid_inv, k_mid_pre, k_mid_pre_ball
 from free_surface.skin_warp import NSLOT, NT, k_total, k_total_loss
 from free_surface.spring_plastic import k_Fs, k_Fs_adj
 from free_surface.ul_plastic import PlasticUL, k_Aul_adj2, k_Ge, k_Ge_adj, k_Lb, k_gg_cell, k_gg_cell_adj, k_gg_wall, k_gg_wall_adj, k_var, polar_batch
@@ -89,73 +89,6 @@ def k_spring(x: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), si: wp.a
     wp.atomic_add(Gb, j, PG)
 
 
-@wp.kernel(enable_backward=False)
-def k_anchor(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), ai: wp.array(dtype=int), aj: wp.array(dtype=int), aw: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64), D: wp.array(dtype=wp.vec3d)):
-    """each anchor's displacement to the step's end, alpha times the layer above's; padding w = 0"""
-    e = wp.tid()
-    w = aw[e]
-    if w == wp.float64(0.0):
-        return
-    wp.atomic_add(D, ai[e], (bpar[0]*w)*(x[aj[e]]-xn[aj[e]]))
-
-
-@wp.kernel(enable_backward=False)
-def k_ball_a(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.array(dtype=wp.float64), xn: wp.array(dtype=wp.vec3d), ng: wp.vec3d, bpar: wp.array(dtype=wp.float64), kt: wp.array(dtype=wp.float64), bound: wp.array(dtype=wp.float64),
-             lamt: wp.array(dtype=wp.vec3d), D: wp.array(dtype=wp.vec3d), delta: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), ff: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
-    """closure_warp.k_ball with the glue against the anchor: bpar = (cs, wt, c0, E*, mu)"""
-    c = wp.tid()
-    B = cbody[c]
-    cs, wt, c0, Es, mu = bpar[0], bpar[1], bpar[2], bpar[3], bpar[4]
-    xe = cs*x[B]-(cs-wp.float64(1.0))*xn[c]
-    d = R[c]-(wp.dot(ng, xe)-c0)
-    delta[c] = d
-    F = wp.float64(0.0)
-    if d > wp.float64(0.0):
-        sq = wp.sqrt(R[c]*d)
-        F = wp.float64(4.0)/wp.float64(3.0)*Es*sq*d
-        wp.atomic_add(terms, 6, c % NSLOT, wt*wp.float64(8.0)/wp.float64(15.0)*Es*sq*d*d)
-    fn[c] = F
-    f = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
-    if mu > wp.float64(0.0) and bound[c] > wp.float64(0.0):
-        dx = xe-xn[c]-D[c]
-        s = dx-wp.dot(dx, ng)*ng
-        k = kt[c]
-        lt = lamt[c]
-        q = lt-k*s
-        qn = wp.length(q)
-        Rb = bound[c]
-        phi = wp.float64(0.0)
-        if qn <= Rb:
-            f = q
-            phi = (wp.dot(q, q)-wp.dot(lt, lt))/(wp.float64(2.0)*k)
-        else:
-            f = (Rb/qn)*q
-            phi = (Rb*qn-wp.float64(0.5)*Rb*Rb-wp.float64(0.5)*wp.dot(lt, lt))/k
-        wp.atomic_add(terms, 8, c % NSLOT, wt*phi)
-    ff[c] = f
-
-
-@wp.kernel(enable_backward=False)
-def k_anchor_adj(ai: wp.array(dtype=int), aj: wp.array(dtype=int), aw: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64), ff: wp.array(dtype=wp.vec3d), terms_adj: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d)):
-    """dE/dx_j = cs wt w f: the layer above bears its share of the glue's force"""
-    e = wp.tid()
-    w = aw[e]
-    if w == wp.float64(0.0):
-        return
-    c = ai[e]
-    wp.atomic_add(x_adj, aj[e], (bpar[0]*bpar[1]*w*terms_adj[8, c % NSLOT])*ff[c])
-
-
-@wp.kernel(enable_backward=False)
-def k_anchor_pre(ai: wp.array(dtype=int), aj: wp.array(dtype=int), aw: wp.array(dtype=wp.float64), kt: wp.array(dtype=wp.float64), bound: wp.array(dtype=wp.float64), ng: wp.vec3d, c: wp.float64, P: wp.array(dtype=wp.mat33d)):
-    """the layer above's share in the blocks, c w^2 k_t (I - n n^T), c = cs^2 wt"""
-    e = wp.tid()
-    w = aw[e]
-    if w == wp.float64(0.0) or bound[ai[e]] <= wp.float64(0.0):
-        return
-    wp.atomic_add(P, aj[e], (c*w*w*kt[ai[e]])*(wp.identity(n=3, dtype=wp.float64)-wp.outer(ng, ng)))
-
-
 class MergedUL(PlasticUL):
     """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density (inf: never yields); theta as the step's set_theta. kshare scales the springs' k. Through MergedStep."""
 
@@ -182,11 +115,7 @@ class MergedUL(PlasticUL):
         self.B = dict(G0=z(n, wp.mat33d), Ga=z(n, wp.mat33d), Ge=z(n, wp.mat33d), Sg=z(n, wp.mat33d), G=z(n, wp.mat33d), Gb=z(n, wp.mat33d), Gs=z(n, wp.mat33d), Gbe=z(n, wp.mat33d), Gb0=z(n, wp.mat33d),
                       L=z(n, wp.float64), Lb=z(n, wp.float64), ei=z(n, wp.float64), be=z(n, wp.float64), er=z(n, wp.mat33d), Fc=z(n, wp.mat33d), Fb=z(n, wp.mat33d), R=z(n, wp.mat33d),
                       Fp=z(n, wp.mat33d), Rp=z(n, wp.mat33d), qp=z(n, wp.vec4d), terms=wp.zeros((NT, 256), dtype=wp.float64, device=dev), tsum=wp.zeros(NT, dtype=wp.float64, device=dev),
-                      loss=wp.zeros(1, dtype=wp.float64, device=dev), bdelta=z(n, wp.float64), bfn=z(n, wp.float64), bff=z(n, wp.vec3d), aD=z(n, wp.vec3d))
-        Ka = 8*n
-        self.an = dict(K=Ka, ai=z(Ka, wp.int32), aj=z(Ka, wp.int32), aw=z(Ka, wp.float64))
-        self.tan = {k_: tt(a_) for k_, a_ in self.an.items() if k_ != 'K'}
-        self.anchor = False
+                      loss=wp.zeros(1, dtype=wp.float64, device=dev), bdelta=z(n, wp.float64), bfn=z(n, wp.float64), bff=z(n, wp.vec3d))
         self.tFc, self.tRp, self.tG, self.tL, self.tei, self.tbe, self.ter, self.tR = (tt(self.B[k_]) for k_ in ('Fc', 'Rp', 'G', 'L', 'ei', 'be', 'er', 'R'))
         self.tbe.fill_(1.); self.tR.copy_(self.I3.expand(n, 3, 3))
         self._Fe = self.I3.expand(n, 3, 3).clone()
@@ -210,7 +139,7 @@ class MergedUL(PlasticUL):
         """E and dE/dx at xw: the gradient, F, the cells, the springs, then the chain back through F and G"""
         B, U, S, n, Kw = self.B, self.ul, self.sp, self.n, self.ul['Kw']
         x, g = self.xw, self.xw.grad
-        for k_ in ('G0', 'Ga', 'Sg', 'Lb', 'Gbe', 'Gb0', 'terms', 'tsum', 'aD'):
+        for k_ in ('G0', 'Ga', 'Sg', 'Lb', 'Gbe', 'Gb0', 'terms', 'tsum'):
             B[k_].zero_()
         g.zero_()
         kap, mu, sy, th_ = wp.float64(self.kap), wp.float64(self.mu), wp.float64(self.sy), wp.float64(self.th)
@@ -229,11 +158,8 @@ class MergedUL(PlasticUL):
         wp.launch(k_Lb, n, inputs=[B['Lb'], U['Q']], outputs=[B['Gb']])
         bl = self.ball
         if bl is not None:
-            An = self.an
-            wp.launch(k_anchor, An['K'], inputs=[x, bl['xn'], An['ai'], An['aj'], An['aw'], bl['par']], outputs=[B['aD']])
-            wp.launch(k_ball_a, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt'], B['aD']], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
+            wp.launch(k_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt']], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
             wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], self.tones], outputs=[g])
-            wp.launch(k_anchor_adj, An['K'], inputs=[An['ai'], An['aj'], An['aw'], bl['par'], B['bff'], self.tones], outputs=[g])
         wp.launch(k_gg_cell_adj, n, inputs=[B['Gb'], U['a'], U['Mc'], U['Vi']], outputs=[g, B['Gs'], B['Gbe']])
         wp.launch(k_gg_wall_adj, Kw, inputs=wall+[B['Gs']], outputs=[g, B['Gbe']])
         wp.launch(k_Ge_adj, n, inputs=[B['Gbe'], U['used']], outputs=[B['Gb0']])
@@ -349,33 +275,6 @@ class MergedUL(PlasticUL):
         A_ = self.tRp.transpose(1, 2)@Fe; e_ = .5*(A_+A_.transpose(1, 2))-self.I3
         s['en'].copy_(e_-(e_.diagonal(dim1=1, dim2=2).sum(1)/3)[:, None, None]*self.I3)
 
-    def set_anchor(self):
-        """the ground no-slip at the ground, not at the sites: a site stands a ball radius above it, and the MPM's horizontal speed rises smoothly from the ground over about 50 mm, speed at 15 mm / at 50 mm 0.35-0.5 at frames 6-8 (10-31; pinned sites
-        0.03-0.05, 20 mm dead, the shear packed above; the limit tau_y A 0.8-1, the column sliding as one). So each touching site's glue holds it to an anchor moving at alpha times the layer above, alpha = its height / that layer's: linear through 0 at the ground"""
-        self.anchor = True
-
-    def read_anchor(self, x):
-        """at the step's start, for the sites whose glue is on (k_mid_ball: bound > 0): the layer above = the wall neighbours above, weighted by wall area x the wall's upward cosine; none above: alpha 0, pinned. Frozen for the step, so linear in x"""
-        t, a_, dev, n = self.tul, self.tan, self.dev, self.n
-        ic, jc, m = self._w[0], self._w[1], self._w[5]
-        ng = torch.tensor([self.ball['ng'][k_] for k_ in range(3)], dtype=f64, device=dev)
-        H = x@ng-float(self.tball[2])
-        ny = t['wn'][:m]@ng; wa = t['wa'][:m]
-        up, dn = ny > 0, ny < 0
-        s_, o_, w_ = torch.cat([ic[up], jc[dn]]), torch.cat([jc[up], ic[dn]]), torch.cat([(wa*ny)[up], -(wa*ny)[dn]])
-        q = self.tbbound[s_] > 0
-        s_, o_, w_ = s_[q], o_[q], w_[q]
-        sw = torch.zeros(n, dtype=f64, device=dev).index_add(0, s_, w_)
-        yb = torch.zeros(n, dtype=f64, device=dev).index_add(0, s_, w_*H[o_])/sw.clamp(min=1e-300)
-        al = (H/yb.clamp(min=1e-300)).clamp(0., .95)
-        k3 = len(s_)
-        if k3 > self.an['K']:
-            raise RuntimeError('read_anchor: %d entries over the capacity %d' % (k3, self.an['K']))
-        for k_ in ('ai', 'aj', 'aw'):
-            a_[k_].zero_()
-        a_['ai'][:k3] = s_.to(torch.int32); a_['aj'][:k3] = o_.to(torch.int32); a_['aw'][:k3] = al[s_]*w_/sw[s_]
-        self.ul_stats['alpha_med'] = float(al[s_].median()) if k3 else 0.
-
     def reread(self, beta=False):
         """after an evaluation at the point the solve stands on: R and Q read there, frozen for the next solve; beta: the springs' beta too, once per step at Newton's start (10-31: read at every accepted point it moved
         the target: each solve's ratio 1, |g| after the re-read jumping between 0.2 and 3 weights, no trend, on 300 Newton iterations)"""
@@ -486,8 +385,6 @@ class MergedStep(MidpointStep):
         wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
         if W.stick:                                                                 # (the glue's limit: mu F_n as k_mid_ball wrote it, up to the material's shear yield on the cell's plan view)
             W.tbbound.copy_(torch.minimum(W.tbbound, W.tau_y*W.footprint(self.tx, W._ulr)))
-        if W.anchor:
-            W.read_anchor(self.tx)
         self._eval(0.)
         W.reread(beta=True)
         g2 = self._eval(0.)[PS_GQ2]
@@ -506,8 +403,6 @@ class MergedStep(MidpointStep):
                 self.tK.copy_(W.ul_blocks())
             wp.launch(k_mid_pre, n, inputs=[W.B['R'], A['K'], self.c1, A['cm']], outputs=[A['P']])
             wp.launch(k_mid_pre_ball, bl['k'], inputs=[bl['body'], bl['R'], W.B['bdelta'], bl['ng'], self.e4, bl['kt'], bl['bound'], self.muf], outputs=[A['P']])
-            if W.anchor:
-                wp.launch(k_anchor_pre, W.an['K'], inputs=[W.an['ai'], W.an['aj'], W.an['aw'], bl['kt'], bl['bound'], bl['ng'], 1/self.th], outputs=[A['P']])
             wp.launch(k_mid_inv, n, inputs=[A['P']], outputs=[A['Pinv']])
             stop = max(cg_tol_abs(g2), self.eta*math.sqrt(g2)); g_ = math.sqrt(g2)
             r = self.CG.solve(A['gz'], delta, stop, self.cg_cap)

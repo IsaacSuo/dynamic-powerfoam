@@ -31,7 +31,7 @@ a_.add_argument('--frames', type=int, default=15)
 a_.add_argument('--dt', type=float, default=1/1200)
 a_.add_argument('--tol', type=float, default=1e-3)
 a_.add_argument('--mu', type=float, default=10., help="the ground's friction: large for the MPM's sticky ground; with --stick shear it only turns the glue on")
-a_.add_argument('--stick', choices=('coulomb', 'shear', 'anchor'), default='coulomb', help="the glue: at the site, limit mu F_n; with the limit also the material's shear yield on the cell's footprint (PlasticUL.set_stick); or against an anchor, no-slip at the ground (MergedUL.set_anchor)")
+a_.add_argument('--stick', choices=('coulomb', 'shear'), default='coulomb', help="the glue's limit: mu F_n, or the material's shear yield on the cell's footprint (PlasticUL.set_stick)")
 a_.add_argument('--grad', default='gg')
 a_.add_argument('--every', type=int, default=10)
 a_.add_argument('--pre-every', type=int, default=4)
@@ -77,8 +77,6 @@ W = MergedUL(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, ys, theta
 W.set_ball((0., 1., 0.), -.05, args.mu)
 if args.stick == 'shear':
     W.set_stick()
-elif args.stick == 'anchor':
-    W.set_anchor()
 W.update_ul(W.X)
 W.prepare()
 up = torch.tensor([0., 1., 0.], dtype=f64, device=dev)
