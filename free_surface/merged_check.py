@@ -17,6 +17,7 @@ a_.add_argument('--E', type=float, default=23.00838)
 a_.add_argument('--nu', type=float, default=.3008)
 a_.add_argument('--ey', type=float, default=.01)
 a_.add_argument('--theta', type=float, default=.5)
+a_.add_argument('--beta', type=float, default=0.)
 args = a_.parse_args()
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
 X0, r0, V0 = g['points'], cl['radii'], g['masses']; n = len(X0); th = args.theta
@@ -25,6 +26,8 @@ X0, r0, V0 = g['points'], cl['radii'], g['masses']; n = len(X0); th = args.theta
 def model(sigma_y):
     W = MergedUL(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], args.E, args.nu, sigma_y, theta=th)
     W.set_ball((0., 1., 0.), -100., 0.)
+    if args.beta > 0.:
+        W.set_viscosity(args.beta, 1/1200)
     W.update_ul(W.X)
     W.prepare()
     return W

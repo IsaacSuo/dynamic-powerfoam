@@ -66,8 +66,8 @@ def k_cell_shape(Fc: wp.array(dtype=wp.mat33d), Rh: wp.array(dtype=wp.mat33d), e
 
 @wp.kernel(enable_backward=False)
 def k_spring(x: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), si: wp.array(dtype=int), sj: wp.array(dtype=int), sP: wp.array(dtype=wp.vec3d), sdn: wp.array(dtype=wp.vec3d), sk: wp.array(dtype=wp.float64),
-             sb: wp.array(dtype=wp.float64), th_: wp.float64, sr: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d), Gb: wp.array(dtype=wp.mat33d)):
-    """the remainder at z, at the step's end into sr, and its force"""
+             sb: wp.array(dtype=wp.float64), th_: wp.float64, cv: wp.float64, sr: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d), Gb: wp.array(dtype=wp.mat33d)):
+    """the remainder at z, at the step's end into sr, and its force; cv = beta / (th dt), the viscous part k beta dr/dt"""
     e = wp.tid()
     i, j = si[e], sj[e]
     if i == j:
@@ -82,11 +82,27 @@ def k_spring(x: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), si: wp.a
     k, b = sk[e], sb[e]
     wp.atomic_add(terms, 5, e % NSLOT, th_*th_*half*k*b*wp.dot(r, r)+ca*k*wp.dot(dn, d-dn)+(wp.float64(1.0)-th_*th_)*half*k*wp.dot(dn, dn))
     f = k*(ca*dn+(th_*b)*r)
+    if cv > wp.float64(0.0):
+        dv = d-dn
+        wp.atomic_add(terms, 7, e % NSLOT, half*k*cv*wp.dot(dv, dv))
+        f = f+(k*cv)*dv
     wp.atomic_add(x_adj, j, f)
     wp.atomic_add(x_adj, i, -f)
     PG = -half*wp.outer(f, p)
     wp.atomic_add(Gb, i, PG)
     wp.atomic_add(Gb, j, PG)
+
+
+@wp.kernel(enable_backward=False)
+def k_cell_visc(G: wp.array(dtype=wp.mat33d), V0: wp.array(dtype=wp.float64), emu: wp.float64, ekap: wp.float64, terms: wp.array2d(dtype=wp.float64), Gb: wp.array(dtype=wp.mat33d)):
+    """Kelvin-Voigt on the step's gradient, sym G / (th dt) the rate: emu = beta mu / (th dt), ekap = beta kap / (th dt); term 7; into Gb"""
+    b = wp.tid()
+    I = wp.identity(n=3, dtype=wp.float64)
+    s = wp.float64(0.5)*(G[b]+wp.transpose(G[b]))
+    tr = wp.trace(s)
+    e = s-(tr/wp.float64(3.0))*I
+    wp.atomic_add(terms, 7, b % NSLOT, V0[b]*(emu*wp.ddot(e, e)+wp.float64(0.5)*ekap*tr*tr))
+    Gb[b] = Gb[b]+V0[b]*((wp.float64(2.0)*emu)*e+(ekap*tr)*I)
 
 
 class MergedUL(PlasticUL):
@@ -121,6 +137,11 @@ class MergedUL(PlasticUL):
         self._Fe = self.I3.expand(n, 3, 3).clone()
         self._yld = torch.zeros(n, dtype=torch.bool, device=dev)
         self.ul_stats.update(rows=0, born=0, closed=0, D_min=0., ghost=0, open_walls=0)
+        self.cv = 0.; self.Wv = 0.
+
+    def set_viscosity(self, beta, dt):
+        """Kelvin-Voigt with the elastic moduli times beta on the cells' shape and volume and on the springs, before prepare() and before the step is built (its preconditioner's factor 1 + beta / (th dt) follows smu). For a body that rings: at rest it adds no stress"""
+        self.smu = float(beta); self.cv = float(beta)/(self.th*float(dt))
 
     def prepare(self):
         n, dev = self.n, self.dev
@@ -154,7 +175,9 @@ class MergedUL(PlasticUL):
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         wp.launch(k_cell_shape, n, inputs=[B['Fc'], S['Rh'], S['en'], U['V0'], mu, sy, th_], outputs=[B['ei'], B['be'], B['er'], B['Fb'], B['terms']])
         wp.launch(k_Fs_adj, n, inputs=[B['Fb'], S['F0']], outputs=[B['Gb']])
-        wp.launch(k_spring, S['K'], inputs=[x, B['G'], S['si'], S['sj'], S['sP'], S['sdn'], S['sk'], S['sb'], th_], outputs=[S['sr'], B['terms'], g, B['Gb']])
+        wp.launch(k_spring, S['K'], inputs=[x, B['G'], S['si'], S['sj'], S['sP'], S['sdn'], S['sk'], S['sb'], th_, wp.float64(self.cv)], outputs=[S['sr'], B['terms'], g, B['Gb']])
+        if self.cv > 0.:
+            wp.launch(k_cell_visc, n, inputs=[B['G'], U['V0'], wp.float64(self.cv*self.mu), wp.float64(self.cv*self.kap)], outputs=[B['terms'], B['Gb']])
         wp.launch(k_Lb, n, inputs=[B['Lb'], U['Q']], outputs=[B['Gb']])
         bl = self.ball
         if bl is not None:
@@ -304,6 +327,10 @@ class MergedUL(PlasticUL):
             wsp = .5*sk*(1-sb)*((sr*sdn).sum(1)+sb*rr)
         self.Wp_spring = getattr(self, 'Wp_spring', 0.)+float(wsp.sum())
         self.Wp += float(wsp.sum())
+        if self.cv > 0.:                                                            # (the viscous work over the step: its force . dx)
+            sG = .5*(self.tG+self.tG.transpose(1, 2)); trG = sG.diagonal(dim1=1, dim2=2).sum(1); eG = sG-(trG/3)[:, None, None]*I3
+            self.Wv += float((self.V0*self.cv*(2*self.mu*(eG*eG).sum((1, 2))+self.kap*trG*trG)).sum())/th
+            self.Wv += float((sk*self.cv*((sr-sdn)*(sr-sdn)).sum(1)).sum())*th
         if bool(yn.any()):
             er, en = self.ter, s['en']
             if th == 1.:
