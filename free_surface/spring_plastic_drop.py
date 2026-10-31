@@ -39,6 +39,9 @@ a_.add_argument('--pre-every', type=int, default=4)
 a_.add_argument('--log-from', type=int, default=10**9, help="every step from this one on: the start's |g|, the balls' overlap and radii, the Newton trace")
 a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--theta', type=float, default=.5)
+a_.add_argument('--levers', default='wall')
+a_.add_argument('--bend', default='store')
+a_.add_argument('--rotation', default='live')
 args = a_.parse_args()
 gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())['0']
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
@@ -69,7 +72,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = SpringPlastic(X0, r0, V0, E, nu, ys, theta=args.theta, grad=args.grad)
+W = SpringPlastic(X0, r0, V0, E, nu, ys, theta=args.theta, grad=args.grad, levers=args.levers, bend=args.bend, rotation=args.rotation)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 if args.stick == 'shear':
     W.set_stick()
@@ -119,6 +122,7 @@ H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
 for s in range(1, nsteps+1):
     t_s = time.time()
     R_prev = W.tbR.clone()
+    yb_ = W._yld.clone()
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
     if s >= args.log_from:
         tr_ = ST.stats['trace']; bd = torch.as_tensor(W.B['bdelta'].numpy(), device=dev); R_ = W.tbR; tc = bd > 0
@@ -161,6 +165,8 @@ for s in range(1, nsteps+1):
         bd = W.B['bdelta'].numpy()
         Es_ = float(((M3*(ST.tx-ST.tx.mean(0)))[:, 1]*(ST.tx[:, 1]-(M3*ST.tx).sum(0)[1]/M)).sum())
         print('  integrated mean strain yy %.4f xx %.4f zz %.4f; site height std / rest %.4f, its log %.4f; mean |ep| %.3f; rows %d, new halves %d, closed %d this step; smallest one-cell dissipation / limit store %.2e' % (float(W.Hsum[1, 1]), float(W.Hsum[0, 0]), float(W.Hsum[2, 2]), (Es_/Y2)**.5, .5*math.log(Es_/Y2), float((mass*W.ep.flatten(1).norm(dim=1)).sum())/M, W.ul_stats['rows'], W.ul_stats['born'], W.ul_stats['closed'], W.ul_stats.get('D_min', 0.)), flush=True)
+        fy2_ = W.tbe < 1; sf2_ = torch.linalg.svdvals(W.tF); ln2_ = torch.log(sf2_/sf2_.prod(1, keepdim=True)**(1/3)).norm(dim=1); ok2_ = ln2_ < W.ey
+        print('  cells over the limit %d, with the strain of F below it %d; never yielded before this step: over %d, F below %d' % (int(fy2_.sum()), int((fy2_ & ok2_).sum()), int((fy2_ & ~yb_).sum()), int((fy2_ & ~yb_ & ok2_).sum())), flush=True)
         print('t %.4f (%.0f s): KE %.3e dev %.3e vol %.3e var %.3e W_p %.3e, left %.3f of the start\'s energy; com y %.4f; yielding %d cells, yielded so far %d; walls %d; J %.3f..%.3f, |eps_p| median %.3f max %.3f; touching %d, ground/weight %.2f; min wall L / h %.3f, max r / h %.2f, radii %d (fails %d), flips %d; products %d, Newton %d, rejected %d, negative %d; %.2f s' % (
             s*args.dt, time.time()-t0, ek, ed, ev, float(W.tsum[2]), W.Wp, 1-(ek+ed+ev+float(W.tsum[2])+W.Wp+eg)/H0, float((M3*ST.tx)[:, 1].sum())/M, W.ul_stats['yielding'], W.ul_stats['yielded'], m, float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()),
             float(W.ep.flatten(1).norm(dim=1).median()), float(W.ep.flatten(1).norm(dim=1).max()), int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wref, float(Lw.min())/h, float(W._ulr.max())/h, W.ul_stats['radii_it'], W.ul_stats['radii_fail'], W.ul_stats['flips'], e_, its, ST.stats['rejected'], ST.stats['negative'], time.time()-t_s), flush=True)

@@ -12,7 +12,9 @@
              otherwise nothing here (self contact is not in this file). A cell that has not yielded keeps its rest halves whether or not their walls exist: sigma_y inf never leaves them
   pressure   not limited and not in the halves: V0 kap / 2 L^2, L = L_n + tr(Q^T (I + G)) - 3, Q frozen at Newton's start, exact ln det at the step's end, variance on the current walls; G the divergence-theorem
              gradient of ul_plastic.py, also the one in F = (I + G) F_n
-Not as ClosureWarp at sigma_y inf: the springs' volume part lives on J for every cell, and G is 'gg'."""
+Not as ClosureWarp at sigma_y inf: the springs' volume part lives on J for every cell, and G is 'gg'.
+Switches for the landing's tests (10-31, the cause of the false yields; the defaults are the model above): levers 'central' puts r_i = h_i n, r_j = -h_j n in place of the levers to the wall's centroid, the same on uniform
+strain; bend 'out' keeps bending and torsion out of the store, plain elastic on rest halves, none on current ones; rotation 'frozen' reads the halves on the frames of Newton's start, so no chain through R."""
 import math
 
 import numpy as np
@@ -75,7 +77,7 @@ def k_hframes(q: wp.array(dtype=wp.vec4d), hi: wp.array(dtype=int), hj: wp.array
 @wp.kernel(enable_backward=False)
 def k_hread(x: wp.array(dtype=wp.vec3d), q: wp.array(dtype=wp.vec4d), hi: wp.array(dtype=int), hj: wp.array(dtype=int), ho: wp.array(dtype=int), ri: wp.array(dtype=wp.vec3d), rj: wp.array(dtype=wp.vec3d),
             hn: wp.array(dtype=wp.vec3d), hk: wp.array(dtype=wp.vec4d), dp: wp.array(dtype=wp.vec3d), thp: wp.array(dtype=wp.vec3d), hL: wp.array(dtype=wp.float64), L: wp.array(dtype=wp.float64),
-            Lref: wp.array(dtype=wp.float64), an: wp.array(dtype=wp.vec3d), tn: wp.array(dtype=wp.vec3d), th_: wp.float64, U: wp.array(dtype=wp.float64), de: wp.array(dtype=wp.vec3d), te: wp.array(dtype=wp.vec3d),
+            Lref: wp.array(dtype=wp.float64), an: wp.array(dtype=wp.vec3d), tn: wp.array(dtype=wp.vec3d), th_: wp.float64, bout: wp.float64, U: wp.array(dtype=wp.float64), de: wp.array(dtype=wp.vec3d), te: wp.array(dtype=wp.vec3d),
             re: wp.array(dtype=wp.vec3d), rt: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
     """a half's reading a(z), at the step's end r; r's energy into its owner's store; the potential's part on the start (1 - th) B(a_n, a - a_n), with the constant that makes the whole 1/2 B(a, a) when unyielded"""
     e = wp.tid()
@@ -101,9 +103,16 @@ def k_hread(x: wp.array(dtype=wp.vec3d), q: wp.array(dtype=wp.vec4d), hi: wp.arr
     re[e] = r
     rt[e] = s
     ke = hk[e]
-    wp.atomic_add(U, o, bond_quad(r, s, n, ke))
-    if ca > wp.float64(0.0):
-        wp.atomic_add(terms, 3, e % NSLOT, ca*bond_bi(an[e], tn[e], a-an[e], t-tn[e], n, ke)+(wp.float64(1.0)-th_*th_)*bond_quad(an[e], tn[e], n, ke))
+    if bout > wp.float64(0.0):                                                       # (bending and torsion plain elastic at z, out of the store)
+        z0 = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
+        wp.atomic_add(U, o, bond_quad(r, z0, n, ke))
+        wp.atomic_add(terms, 3, e % NSLOT, bond_quad(z0, t, n, ke))
+        if ca > wp.float64(0.0):
+            wp.atomic_add(terms, 3, e % NSLOT, ca*bond_bi(an[e], z0, a-an[e], z0, n, ke)+(wp.float64(1.0)-th_*th_)*bond_quad(an[e], z0, n, ke))
+    else:
+        wp.atomic_add(U, o, bond_quad(r, s, n, ke))
+        if ca > wp.float64(0.0):
+            wp.atomic_add(terms, 3, e % NSLOT, ca*bond_bi(an[e], tn[e], a-an[e], t-tn[e], n, ke)+(wp.float64(1.0)-th_*th_)*bond_quad(an[e], tn[e], n, ke))
 
 
 @wp.kernel(enable_backward=False)
@@ -145,7 +154,7 @@ def k_cell_store(U: wp.array(dtype=wp.float64), Vr: wp.array(dtype=wp.float64), 
 @wp.kernel(enable_backward=False)
 def k_hforce(x: wp.array(dtype=wp.vec3d), q: wp.array(dtype=wp.vec4d), hi: wp.array(dtype=int), hj: wp.array(dtype=int), ho: wp.array(dtype=int), ri: wp.array(dtype=wp.vec3d), rj: wp.array(dtype=wp.vec3d),
              hn: wp.array(dtype=wp.vec3d), hk: wp.array(dtype=wp.vec4d), hL: wp.array(dtype=wp.float64), an: wp.array(dtype=wp.vec3d), tn: wp.array(dtype=wp.vec3d), re: wp.array(dtype=wp.vec3d), rt: wp.array(dtype=wp.vec3d),
-             th_: wp.float64, be: wp.array(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d), q_adj: wp.array(dtype=wp.vec4d), Lb: wp.array(dtype=wp.float64)):
+             te: wp.array(dtype=wp.vec3d), th_: wp.float64, bout: wp.float64, be: wp.array(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d), q_adj: wp.array(dtype=wp.vec4d), Lb: wp.array(dtype=wp.float64)):
     """k_bonds_fused's adjoint on the half's force k ((1 - th) a_n + th beta r), beta its owner's; d(reading)/dL_o = - L_h / 3 n into Lb"""
     e = wp.tid()
     i, j = hi[e], hj[e]
@@ -168,6 +177,8 @@ def k_hforce(x: wp.array(dtype=wp.vec3d), q: wp.array(dtype=wp.vec4d), hi: wp.ar
     o = ho[e]
     ca, cb = wp.float64(1.0)-th_, th_*be[o]
     a, t = ca*an[e]+cb*re[e], ca*tn[e]+cb*rt[e]
+    if bout > wp.float64(0.0):
+        t = te[e]
     a_n, t_n = wp.dot(a, n), wp.dot(t, n)
     ke = hk[e]
     fd = ke[0]*a_n*n+ke[1]*(a-a_n*n)
@@ -207,18 +218,19 @@ def k_oforce(F: wp.array(dtype=wp.mat33d), R: wp.array(dtype=wp.mat33d), orr: wp
 class SpringPlastic(PlasticUL):
     """X, r, V0, E, nu, sigma_y as PlasticUL (sigma_y inf: no cell ever yields); the interface of MidpointStep and TrustCG through PlasticStep, whose set_theta takes the same theta. Kh: the rows' capacity (default twice the walls')"""
 
-    def __init__(self, X, r, V0, E, nu, sigma_y, theta=.5, grad='gg', agg=.1, vol_tol=1e-5, Kw=None, Kh=None, dev='cuda'):
+    def __init__(self, X, r, V0, E, nu, sigma_y, theta=.5, grad='gg', agg=.1, vol_tol=1e-5, Kw=None, Kh=None, dev='cuda', levers='wall', bend='store', rotation='live'):
         super().__init__(X, r, V0, E, nu, sigma_y, grad, agg, vol_tol, Kw, dev)
         assert theta in (.5, 1.), 'the plastic work is written for the midpoint and for backward Euler'
         n = self.n; X_ = self.X
         self.th = float(theta); self.graph = None
+        self.levers, self.bend, self.rotation = levers, bend, rotation
         self.ey = self.sy/(2*self.mu)
         G0, _ = self._recut.geometry(X_, self._rr0)
         kp = G0.wall_A.detach() > 0
         i, j, A, c = G0.i[kp].long(), G0.j[kp].long(), G0.wall_A.detach()[kp], G0.wall_c.detach()[kp]
         lo, hi = torch.minimum(i, j), torch.maximum(i, j)
         every = torch.ones_like(A, dtype=torch.bool)
-        self._rest = tuple(torch.cat([a_, b_]) for a_, b_ in zip(self._halves(X_, lo, hi, A, c, lo, every), self._halves(X_, lo, hi, A, c, hi, every)))
+        self._rest = tuple(torch.cat([a_, b_]) for a_, b_ in zip(self._halves(X_, lo, hi, A, c, lo, every, False), self._halves(X_, lo, hi, A, c, hi, every, False)))
         cap0 = G0.patch_A.detach() > 0
         self._or0 = torch.where(cap0, self._rr0, torch.zeros_like(self._rr0)); self._oN0 = torch.where(cap0[:, None, None], G0.patch_nn.detach(), torch.zeros(n, 3, 3, dtype=f64, device=dev))
         Kh = 2*self.ul['Kw'] if Kh is None else Kh
@@ -230,16 +242,17 @@ class SpringPlastic(PlasticUL):
         self.tsp = {k_: tt(a_) for k_, a_ in self.sp.items() if k_ != 'Kh'}
         self.B = dict(G0=z(n, wp.mat33d), Ga=z(n, wp.mat33d), Ge=z(n, wp.mat33d), Sg=z(n, wp.mat33d), G=z(n, wp.mat33d), Gb=z(n, wp.mat33d), Gs=z(n, wp.mat33d), Gbe=z(n, wp.mat33d), Gb0=z(n, wp.mat33d),
                       L=z(n, wp.float64), Lb=z(n, wp.float64), U=z(n, wp.float64), ei=z(n, wp.float64), be=z(n, wp.float64), Fc=z(n, wp.mat33d), F=z(n, wp.mat33d), R=z(n, wp.mat33d), q=z(n, wp.vec4d),
-                      Fcb=z(n, wp.mat33d), Fb=z(n, wp.mat33d), Rb=z(n, wp.mat33d), qb=z(n, wp.vec4d), terms=wp.zeros((NT, 256), dtype=wp.float64, device=dev), tsum=wp.zeros(NT, dtype=wp.float64, device=dev),
+                      Fcb=z(n, wp.mat33d), Fb=z(n, wp.mat33d), Rb=z(n, wp.mat33d), qb=z(n, wp.vec4d), qf=z(n, wp.vec4d), qd=z(n, wp.vec4d), terms=wp.zeros((NT, 256), dtype=wp.float64, device=dev), tsum=wp.zeros(NT, dtype=wp.float64, device=dev),
                       loss=wp.zeros(1, dtype=wp.float64, device=dev), bdelta=z(n, wp.float64), bfn=z(n, wp.float64), bff=z(n, wp.vec3d))
         self.tF, self.tR, self.tq, self.tG, self.tL, self.tei, self.tbe, self.tU = (tt(self.B[k_]) for k_ in ('F', 'R', 'q', 'G', 'L', 'ei', 'be', 'U'))
         self.tbe.fill_(1.)
+        self.tqf = tt(self.B['qf'])
         self._Fe = self.I3.expand(n, 3, 3).clone()
         self._yld = torch.zeros(n, dtype=torch.bool, device=dev)
         self._mkey = torch.zeros(0, dtype=torch.long, device=dev); self._mg = torch.zeros(0, 3, dtype=f64, device=dev); self._mt = torch.zeros(0, 3, dtype=f64, device=dev)
         self.ul_stats.update(rows=0, born=0, closed=0)
 
-    def _halves(self, x, lo, hi, A, c, own, keep):
+    def _halves(self, x, lo, hi, A, c, own, keep, current=True):
         """the rows of the walls (lo, hi) for the owners own where keep: (lo, hi, own, levers r_lo, r_hi as seen from x, normal, k (n, 4), L). The stiffnesses as the DEM's build at alpha = 1"""
         lo, hi, A, c, own = lo[keep], hi[keep], A[keep], c[keep], own[keep]
         d = x[hi]-x[lo]; L = d.norm(dim=1); nh = d/L[:, None]
@@ -247,6 +260,11 @@ class SpringPlastic(PlasticUL):
         s = torch.where(own == lo, hl, hh)/(hl+hh)
         sec = A*A/(4*math.pi)
         k = (2*self.mu*s/L)[:, None]*torch.stack([A, A, sec, 2*sec], 1)
+        if self.bend == 'out' and current:
+            k[:, 2:] = 0.
+        if self.levers == 'central':
+            h_ = ((c-x[lo])*nh).sum(1)
+            return lo, hi, own, h_[:, None]*nh, -(L-h_)[:, None]*nh, nh, k, L
         return lo, hi, own, c-x[lo], c-x[hi], nh, k, L
 
     def prepare(self):
@@ -267,10 +285,12 @@ class SpringPlastic(PlasticUL):
         """E and dE/dx at xw: forward, the cells' stores and betas, the forces, then the chain through F and G"""
         B, U, S, n, Kw, Kh = self.B, self.ul, self.sp, self.n, self.ul['Kw'], self.sp['Kh']
         x, g = self.xw, self.xw.grad
-        for k_ in ('G0', 'Ga', 'Sg', 'Lb', 'U', 'Gbe', 'Gb0', 'Fcb', 'Fb', 'Rb', 'qb', 'terms', 'tsum'):
+        for k_ in ('G0', 'Ga', 'Sg', 'Lb', 'U', 'Gbe', 'Gb0', 'Fcb', 'Fb', 'Rb', 'qb', 'qd', 'terms', 'tsum'):
             B[k_].zero_()
         g.zero_()
         kap, mu, sy, th_ = wp.float64(self.kap), wp.float64(self.mu), wp.float64(self.sy), wp.float64(self.th)
+        bout = wp.float64(1. if self.bend == 'out' else 0.)
+        qh, qa = (B['qf'], B['qd']) if self.rotation == 'frozen' else (B['q'], B['qb'])   # (the halves' frames and where their adjoint goes)
         wp.launch(k_Gul, 2*Kw, inputs=[x, U['xn'], U['S'], U['O'], U['R']], outputs=[B['G0']])
         wp.launch(k_Aul, Kw, inputs=[B['G0'], U['As'], U['Ao'], U['Aw']], outputs=[B['Ga']])
         wp.launch(k_Ge, n, inputs=[B['G0'], B['Ga'], U['used']], outputs=[B['Ge']])
@@ -282,10 +302,10 @@ class SpringPlastic(PlasticUL):
         wp.launch(k_L, n, inputs=[B['G'], U['Q'], U['Ln'], U['V0'], kap], outputs=[B['L'], B['Lb'], B['terms']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         rows = [S['hi'], S['hj'], S['ho'], S['ri'], S['rj'], S['hn'], S['hk']]
-        wp.launch(k_hread, Kh, inputs=[x, B['q']]+rows+[S['dp'], S['thp'], S['hL'], B['L'], S['Lref'], S['an'], S['tn'], th_], outputs=[B['U'], S['de'], S['te'], S['re'], S['rt'], B['terms']])
+        wp.launch(k_hread, Kh, inputs=[x, qh]+rows+[S['dp'], S['thp'], S['hL'], B['L'], S['Lref'], S['an'], S['tn'], th_, bout], outputs=[B['U'], S['de'], S['te'], S['re'], S['rt'], B['terms']])
         wp.launch(k_oread, n, inputs=[B['F'], B['R'], S['orr'], S['oN'], mu, S['oen'], th_], outputs=[B['U'], S['oe'], S['ore'], B['terms']])
         wp.launch(k_cell_store, n, inputs=[B['U'], S['Vr'], mu, sy, th_], outputs=[B['ei'], B['be'], B['terms']])
-        wp.launch(k_hforce, Kh, inputs=[x, B['q']]+rows+[S['hL'], S['an'], S['tn'], S['re'], S['rt'], th_, B['be']], outputs=[g, B['qb'], B['Lb']])
+        wp.launch(k_hforce, Kh, inputs=[x, qh]+rows+[S['hL'], S['an'], S['tn'], S['re'], S['rt'], S['te'], th_, bout, B['be']], outputs=[g, qa, B['Lb']])
         wp.launch(k_oforce, n, inputs=[B['F'], B['R'], S['orr'], S['oN'], mu, B['be'], S['oen'], S['ore'], th_], outputs=[B['Fb'], B['Rb']])
         wp.launch(k_F8, n, inputs=[B['Fc']], outputs=[B['F'], B['R'], B['q']], adj_inputs=[B['Fcb']], adj_outputs=[B['Fb'], B['Rb'], B['qb']], adjoint=True)
         wp.launch(k_Fs_adj, n, inputs=[B['Fcb'], S['F0']], outputs=[B['Gb']])
@@ -308,6 +328,7 @@ class SpringPlastic(PlasticUL):
         x = x.detach(); n, dev, s = self.n, self.dev, self.tsp; yld = self._yld; G = self._ulG; st = self.ul_stats
         s['F0'].copy_(self._Fe)
         wp.launch(k_F8, n, inputs=[self.sp['F0']], outputs=[self.B['F'], self.B['R'], self.B['q']])
+        self.tqf.copy_(self.tq)
         lo0, hi0, own0, ri0, rj0, nh0, k0, L0 = self._rest
         keep0 = ~yld[own0]
         m0 = int(keep0.sum())
@@ -361,6 +382,8 @@ class SpringPlastic(PlasticUL):
         """the step's frozen rotation of L's linear reading, at Newton's start z (Q = I for that evaluation)"""
         self.grad(z)
         self.tul['Q'].copy_(polar_batch(self.I3+self.tG))
+        if self.rotation == 'frozen':
+            self.tqf.copy_(self.tq)
 
     def end_ul(self, th=1.):
         """after the step (the buffers at the accepted z, G linear in x, so G / th is the step's whole gradient): the cells' returns, the halves' memories, F_n+1, L_n+1, the plastic work"""
@@ -377,7 +400,9 @@ class SpringPlastic(PlasticUL):
             else:                                                                   # ((1 - beta) (1/2 B(a_n, r) + beta U), the halves' and the outer layer's B)
                 an, tn, re, rt, nn, ke = s['an'][:m], s['tn'][:m], s['re'][:m], s['rt'][:m], s['hn'][:m], s['hk'][:m]
                 dn, tnn = (an*nn).sum(1), (tn*nn).sum(1); rn, rtn = (re*nn).sum(1), (rt*nn).sum(1)
-                bar = ke[:, 0]*dn*rn+ke[:, 1]*((an*re).sum(1)-dn*rn)+ke[:, 2]*((tn*rt).sum(1)-tnn*rtn)+ke[:, 3]*tnn*rtn
+                bar = ke[:, 0]*dn*rn+ke[:, 1]*((an*re).sum(1)-dn*rn)
+                if self.bend != 'out':
+                    bar = bar+ke[:, 2]*((tn*rt).sum(1)-tnn*rtn)+ke[:, 3]*tnn*rtn
                 B = torch.zeros(n, dtype=f64, device=self.dev).index_add(0, own, bar)
                 B = B+2*self.mu*s['orr']*torch.einsum('nab,nbc,nca->n', s['oen'], s['oN'], s['ore'])
                 wc = ((1-be)*(.5*B+be*self.tU))[yn]
