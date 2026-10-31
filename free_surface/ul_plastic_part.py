@@ -86,6 +86,7 @@ for dt in args.dts:
                     float(torch.exp(W.tul['Ln']).max()), e_, its, W.ul_stats['radii_it'], W.ul_stats['radii_fail'], W.ul_stats['flips'], W.ul_stats['walls']))
         if s % every == 0 or s == steps:
             q = rec[-1]
+            print('  integrated mean strain xx %.5f yy %.5f zz %.5f; cells\' share of W_p %.3f; mean e + ep xx %.5f' % (float(W.Hsum[0, 0]), float(W.Hsum[1, 1]), float(W.Hsum[2, 2]), W.Wp_cell/max(W.Wp, 1e-300), float(ep[0, 0]+((mass[:, None, None]*W.tul['en']).sum(0)/M)[0, 0])), flush=True)
             print('dt 1/%d t %.4f (%.0f s): KE %.3e dev %.3e vol %.3e var+jump %.3e W_p %.3e, left %.3f of H0; mean plastic xx %.5f, total xx %.5f; yielding cells %d, walls %d of %d; max |eps_p| %.3f, J %.3f..%.3f; products %d, Newton %d, radii %d, fails %d, flips %d' % (
                 round(1/dt), q[0], time.time()-t0, q[1], q[2], q[3], q[4], q[5], 1-(q[1]+q[2]+q[3]+q[4]+q[5])/H0, q[6], q[7], q[8], q[9], q[18], q[10], q[11], q[12], q[13], q[14], q[15], q[16], q[17]), flush=True)
     r_ = np.array(rec)

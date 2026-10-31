@@ -16,9 +16,11 @@ A step from n to n + 1, backward Euler (MidpointStep at theta = 1):
             2 mu |e| = s_y, then s_y |e| - s_y^2 / (4 mu), s_y = (2 / 3)^1/2 sigma_y (as PAC-NeRF's return). Each term is convex
             in x, so the step's only non-convexity is the ground's: the geometry's nonlinearity lives in the re-cut
   variance  kap A L / 24 (L_i - L_j)^2 on the current walls (the J field's variation inside the cells)
-  jump      the sites' relative motion the gradients do not explain: delta_tr = delta_n + (u_j - u_i) - 1/2 (G_i + G_j)(x_j - x_i), energy
-            of the same form as W: k = mu A / (3 L), force limit tau_y A, tau_y = sigma_y / 3^1/2 (von Mises' shear yield). delta is the
-            wall's own memory: a new wall starts at 0, a wall gone takes it along (its area is 0 by then)
+  jump      the sites' relative motion the gradients do not explain: delta_tr = delta_n + (u_j - u_i) - 1/2 (G_i + G_j)(x_j - x_i), the sub-cell shear
+            strain gamma = delta / L over the wall's volume A L / 3, with the von Mises law in shear: density mu gamma^2 / 2 up to tau_y = sigma_y / 3^1/2, then
+            tau_y gamma - tau_y^2 / (2 mu). So k = mu A / (3 L) and the force limit tau_y A / 3 (the walls' largest stored energy, sum (A L / 3) tau_y^2 / (2 mu)
+            = V sigma_y^2 / (6 mu), is then the cells', s_y^2 V / (4 mu)). delta is the wall's own memory: a new wall starts at 0, a wall gone takes it
+            along (its area is 0 by then)
   update    at x^n+1: e, delta returned to their limits and turned by Q, L_n+1 = L_n + ln det(I + G) (exact, not the step's linear tr H)
 Not here: the stabilisation S-NSNI, the normal part of UL's jump (lam + mu), rendering's F, flow's other materials."""
 import math
@@ -228,7 +230,8 @@ class PlasticUL:
         self.tul['xn'].copy_(self.X); self.tul['Q'].copy_(self.I3.expand(n, 3, 3))
         self.par = wp.array(np.array([self.mu, self.kap, self.sy]), dtype=wp.float64, device=dev)
         self.ep = torch.zeros(n, 3, 3, dtype=f64, device=dev)                       # (the accumulated plastic strain, a passive record)
-        self.Wp = 0.                                                                # (the plastic work so far, cells + walls)
+        self.Wp = self.Wp_cell = 0.                                                 # (the plastic work so far: all, and the cells' share)
+        self.Hsum = torch.zeros(3, 3, dtype=f64, device=dev)
         self.ul_stats = dict(radii_fail=0, floored=0, walls=0, radii_it=0, yielding=0, wall_yielding=0, flips=0)
         self._mem_key = torch.zeros(0, dtype=torch.long, device=dev); self._mem_d = torch.zeros(0, 3, dtype=f64, device=dev)
         self._ball_moduli(E, nu)
@@ -368,7 +371,7 @@ class PlasticUL:
             t[k2].zero_()
         t['wi'][:m] = i.to(torch.int32); t['wj'][:m] = j.to(torch.int32); t['wa'][:m] = wa; t['wn'][:m] = nn; t['wt'][:m] = tw
         t['wtau'][:m] = c-(x[i]+tw[:, None]*d); t['wd'][:m] = d
-        t['wk'][:m] = self.mu*A/(3*Lw); t['wfy'][:m] = self.tauy*A; t['wv'][:m] = self.kap*A*Lw/24
+        t['wk'][:m] = self.mu*A/(3*Lw); t['wfy'][:m] = self.tauy*A/3; t['wv'][:m] = self.kap*A*Lw/24
         lo, hi = torch.minimum(i, j), torch.maximum(i, j); key = lo*n+hi; sg = torch.where(i < j, 1., -1.).to(f64)[:, None]
         if len(self._mem_key):
             pos = torch.searchsorted(self._mem_key, key).clamp(max=len(self._mem_key)-1)
@@ -397,7 +400,9 @@ class PlasticUL:
         sc = torch.minimum(torch.ones_like(nr), self.sy/(2*self.mu*nr).clamp(min=1e-300))
         er = sc[:, None, None]*e
         dep = e-er
-        self.Wp += float((self.V0*self.sy*dep.flatten(1).norm(dim=1)).sum()) if math.isfinite(self.sy) else 0.
+        wc = float((self.V0*self.sy*dep.flatten(1).norm(dim=1)).sum()) if math.isfinite(self.sy) else 0.
+        self.Wp += wc; self.Wp_cell += wc
+        self.Hsum += (self.V0[:, None, None]*H).sum(0)/self.V0.sum()                # (the volume mean of the step's strain, in the world's frame: passive)
         Qt = Q.transpose(1, 2)
         t['en'].copy_(Q@er@Qt)
         self.ep = Q@(self.ep+dep)@Qt
