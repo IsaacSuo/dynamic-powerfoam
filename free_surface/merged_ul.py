@@ -3,7 +3,7 @@ A spring's reading splits: x_j - x_i - R T = (F - R) T + (x_j - x_i - F T), the 
   state      each cell F (elastic: its stretch is what the limit holds), each spring p, what its rest offset T has become. x -> F is linear within a step, F = (I + G(x)) F_n, G the divergence-theorem gradient of ul_plastic.py over the connected walls
   cell       e = dev sym(R^T F): R frozen for the step, read at Newton's start, so the step is convex; R is the rotation nearest F, so its error costs nothing to first order, and the state is F alone. V0 W(e), W von Mises: mu e^2 up to e_y = s_y / (2 mu), then s_y e - s_y^2 / (4 mu). Pressure: V0 kap / 2 L^2, L = L_n + tr(C^T G) within the step, L_n + tr(C^T G) / th at its end, C = (I + G / (2 th))^-T frozen as R: at th = 1/2 its work is its store, a rotation reads 0, ln J is read to third order
              (10-31: tr(Q^T (I + G)) - 3 within the step with ln det at its end made 8.3 % of the start's energy by 0.27 s of the landing, everything else 0.03 %, as a cell flattened in one step reads little within it and a lot at its end). Variance as ul_plastic.py
-  spring     r = x_j - x_i - p_n - 1/2 (G_i + G_j) p_n, linear in x and needing no rotation of its own, energy 1/2 k beta r^2, beta the mean of the two cells' return factors, frozen as R. k = 2 mu A / L as the DEM's bond, of the rest wall while
+  spring     r = x_j - x_i - p_n - 1/2 (G_i + G_j) p_n, linear in x and needing no rotation of its own, energy 1/2 k beta r^2, beta the mean of the two cells' return factors, frozen as R. k = mu A / 3 L, 1/6 of the DEM's bond 2 mu A / L, which carries all the shear: here the uniform part is the cell's and the spring holds only the sub-cell strain r / L over the two pyramids, volume A L / 3 (kshare; 1 gave 27 % of the plastic work to the springs and spread y +14 % against the MPM, 1/6 +5.6 %), of the rest wall while
              a cell of the pair has not yielded, of the current wall when both have. The lever is p, not each cell's F T (10-31, 1/2 (F_i + F_j) T with T = Fbar^-1 (d - r): in flow F is about a rotation and neighbours differ by up to a half turn,
              so Fbar went singular, smallest sigma 1e-5, lever 81631 L, the step's first |g| 5.85e7 weights, 99.6 % of it on the springs; without them 25-32)
   step       theta method, forces at z. The return belongs to the step's end: e_e = e_n + (e(z) - e_n) / th, its force (1 - th) 2 mu e_n + th beta 2 mu e_e, potential (1 - th) B(e_n, e - e_n) + th^2 W(e_e); the same on r. Unyielded it is the
@@ -92,7 +92,7 @@ def k_spring(x: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), si: wp.a
 class MergedUL(PlasticUL):
     """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density (inf: never yields); theta as the step's set_theta. kshare scales the springs' k. Through MergedStep."""
 
-    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kshare=1., grad='gg', agg=.1, vol_tol=1e-5, Kw=None, dev='cuda'):
+    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kshare=1/6, grad='gg', agg=.1, vol_tol=1e-5, Kw=None, dev='cuda'):
         super().__init__(X, r, V0, E, nu, sigma_y, grad, agg, vol_tol, Kw, dev)
         assert theta in (.5, 1.), 'the plastic work is written for the midpoint and for backward Euler'
         n = self.n; X_ = self.X
