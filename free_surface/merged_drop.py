@@ -16,8 +16,9 @@ import torch
 import warp as wp
 from plyfile import PlyData
 
-from free_surface.closure_warp import TrustCG
+from free_surface.closure_warp import TrustCG, k_Gul_adj
 from free_surface.merged_ul import MergedStep, MergedUL
+from free_surface.ul_plastic import k_Aul_adj2, k_Ge_adj, k_gg_cell_adj, k_gg_wall_adj
 
 f64, dev = torch.float64, 'cuda'
 wp_t = lambda a_: wp.to_torch(a_, requires_grad=False)
@@ -43,6 +44,8 @@ a_.add_argument('--log-mem', type=int, default=10**9)
 a_.add_argument('--probe-from', type=int, default=10**9, help="every step from this one on, at its first point: the springs' part of |g|, the levers F T, the neighbours' relative rotation (logging only)")
 a_.add_argument('--budget-from', type=int, default=10**9, help="every step from this one on: the energy account by channel, each one's stored change minus its forces' work over the step (logging only)")
 a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
+a_.add_argument('--hold-from', type=int, default=10**9, help="every --hold-every steps from this one on: each touching cell's ground force against tau_y A, and what pushes it: pressure, shape, springs (logging only)")
+a_.add_argument('--hold-every', type=int, default=5)
 args = a_.parse_args()
 gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())['0']
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
@@ -163,6 +166,62 @@ def probe(ST_):
     print('  channels step %d: pressure |dE/dL| A / V max %.3g at %s; shape max %.3g at %s; ground largest ball %.3g at %d' % (s, float(pr[cp_]), cell(cp_), float(sh[cs_]), cell(cs_), float(fb_.max()), int(fb_.argmax())), flush=True)
 
 
+holds = []
+ht_ = {k_: wp.zeros(n, dtype=wp.mat33d, device=dev) for k_ in ('Gb', 'Gs', 'Gbe', 'Gb0')}; ht_['g'] = wp.zeros(n, dtype=wp.vec3d, device=dev)
+
+
+def chain(Gb_):
+    """the sites' force from dE/dG = Gb_, through the same kernels as MergedUL.run, on arrays of its own"""
+    U, Kw = W.ul, W.ul['Kw']
+    wall = [U['wi'], U['wj'], U['wa'], U['wn'], U['wt'], U['wtau']]
+    wp_t(ht_['Gb']).copy_(Gb_)
+    for k_ in ('Gbe', 'Gb0', 'g'):
+        ht_[k_].zero_()
+    wp.launch(k_gg_cell_adj, n, inputs=[ht_['Gb'], U['a'], U['Mc'], U['Vi']], outputs=[ht_['g'], ht_['Gs'], ht_['Gbe']])
+    wp.launch(k_gg_wall_adj, Kw, inputs=wall+[ht_['Gs']], outputs=[ht_['g'], ht_['Gbe']])
+    wp.launch(k_Ge_adj, n, inputs=[ht_['Gbe'], U['used']], outputs=[ht_['Gb0']])
+    wp.launch(k_Aul_adj2, Kw, inputs=[ht_['Gbe'], U['As'], U['Ao'], U['Aw']], outputs=[ht_['Gb0']])
+    wp.launch(k_Gul_adj, 2*Kw, inputs=[ht_['Gb0'], U['S'], U['O'], U['R']], outputs=[ht_['g']])
+    return -wp_t(ht_['g']).clone()
+
+
+def hold():
+    """at the accepted z: for each touching cell with a plan area, the glue's force f against tau_y A, and the horizontal forces on its site: pressure with variance, shape, springs. Logging only"""
+    th, s_, m_, lo, hi = W.th, W.tsp, W._m_s, W.tlo, W.thi
+    x, zz = ST.tx, ST.tz
+    A = W.footprint(x, W._ulr)
+    f = wp_t(W.B['bff'])
+    q = (W.tbbound > 0) & (A > 0)
+    if not bool(q.any()):
+        return
+    B_, Lb_, Fb_, C_, F0_ = wp_t(W.B['Gb']).clone(), wp_t(W.B['Lb']).clone(), wp_t(W.B['Fb']).clone(), W.tul['Q'], s_['F0']
+    Gp, Gs_ = Lb_[:, None, None]*C_, Fb_@F0_.transpose(1, 2)
+    Fp, Fs, Fc_ = chain(Gp), chain(Gs_), chain(B_-Gp-Gs_)
+    k_, b_, r_, dn_ = s_['sk'][:m_], s_['sb'][:m_], s_['sr'][:m_], s_['sdn'][:m_]
+    fs = k_[:, None]*((1-th)*dn_+th*b_[:, None]*r_)
+    Fd = torch.zeros_like(x).index_add(0, hi, -fs).index_add(0, lo, fs)
+    Fsp = Fc_+Fd
+    bn = torch.as_tensor(W.B['bfn'].numpy(), device=dev)
+    # the check: these with the ball's force are all of the internal force
+    res = -W.tgx-(Fp+Fs+Fsp+f+bn[:, None]*up)
+    hz = torch.tensor([1., 0., 1.], dtype=f64, device=dev)
+    c = (x[q]*hz).mean(0)
+    d = (x-c)*hz; R = d.norm(dim=1); er = d/R.clamp(min=1e-12)[:, None]
+    lim = W.tau_y*A
+    fh = (f*hz).norm(dim=1)
+    rt = (fh/lim.clamp(min=1e-300))[q]
+    Rb = torch.quantile(R[q], .95)
+    ring = [R[q] < .5*Rb, (R[q] >= .5*Rb) & (R[q] < .8*Rb), R[q] >= .8*Rb]
+    ou = lambda F_: (((F_*er).sum(1))/lim.clamp(min=1e-300))[q]
+    md = lambda a__: float(a__.median()) if len(a__) else 0.
+    qt = lambda a__, p_: float(torch.quantile(a__, p_))
+    atb = (fh[q] >= .999*W.tbbound[q]).float().mean()
+    out = [s, s*args.dt, int(q.sum()), float(A[q].sum()), qt(rt, .25), qt(rt, .5), qt(rt, .75), qt(rt, .9), float((rt > 1).float().mean()), float((rt > 2).float().mean()), float((rt > 3).float().mean()), float(fh[q].sum()/lim[q].sum()), md(rt[ring[0]]), md(rt[ring[1]]), md(rt[ring[2]]), md(-ou(f)), md(ou(Fp)), md(ou(Fs)), md(ou(Fsp)), md(ou(Fp)[ring[2]]), md(ou(Fs)[ring[2]]), md(ou(Fsp)[ring[2]]), float(atb), float(res[q].norm(dim=1).max()/lim[q].max())]
+    print('  hold step %d t %.4f: touching with area %d, plan area %.3f; |f| / tau_y A: 25 %% %.2f, median %.2f, 75 %% %.2f, 90 %% %.2f; above 1 %.2f, 2 %.2f, 3 %.2f; sum f / sum limit %.2f; rings inner %.2f, middle %.2f, edge %.2f; outward, all: ground holds %.2f, pressure %.2f, shape %.2f, springs %.2f; edge: pressure %.2f, shape %.2f, springs %.2f; at the glue\'s bound %.2f; balance error / largest limit %.1e' % tuple(out), flush=True)
+    holds.append(out)
+    np.save(args.save/('hold_%s.npy' % args.tag), np.array(holds))
+
+
 budgets = []
 bud = dict(prev=None, cum=np.zeros(6))
 
@@ -248,6 +307,8 @@ for s in range(1, nsteps+1):
         ov_ = len(W._recut.A.ov[0]) if hasattr(W._recut.A, 'ov') else 0
         print('  mem step %d t %.4f: torch allocated %.2f GB, reserved %.2f GB, peak allocated %.2f GB; overlap pairs %d; walls %d; yielded %d; r / r0 max %.2f; J min %.3f; Newton %d, products %d' % (s, s*args.dt, torch.cuda.memory_allocated()/2**30, torch.cuda.memory_reserved()/2**30, torch.cuda.max_memory_allocated()/2**30, ov_, W.ul_stats['walls'], int(W._yld.sum()), float((W._ulr/W._rr0).max()), float(torch.exp(W.tul['Ln']).min()), its, e_), flush=True)
     bud_m = budget_mid() if s >= args.budget_from else None
+    if s >= args.hold_from and s % args.hold_every == 0:
+        hold()
     ST.end()
     if s >= args.budget_from:
         budget_end(bud_e0, bud_m)
