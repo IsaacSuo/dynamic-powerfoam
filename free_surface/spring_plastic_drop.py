@@ -129,6 +129,26 @@ for s in range(1, nsteps+1):
             ' '.join('%d: %.2f (delta/h %.3f, V0/med %.2f)' % (c_, float(gz[c_])/wref, float(bd[c_])/h, float(W.V0[c_]/W.V0.median())) for c_ in top.tolist())), flush=True)
     if not math.isfinite(g2) or math.sqrt(g2) > tol:
         tr_ = ST.stats['trace']
+        g_ = wp_t(ST.a['gz']).norm(dim=1); top = torch.argsort(g_, descending=True)[:8]; I3_ = W.I3
+        Gz = W.tG; sv = torch.linalg.svdvals(I3_+Gz); sf = torch.linalg.svdvals(W.tF); dt_ = torch.linalg.det(I3_+Gz)
+        print('  at the failure: I + G(z) smallest singular value 1%% %.3f, min %.3f, cells below 0.2: %d, det <= 0: %d; F(z) smallest singular value min %.3f, largest max %.3f; beta min %.3f; e_i / e_y max %.1f' % (float(torch.quantile(sv[:, 2], .01)), float(sv[:, 2].min()), int((sv[:, 2] < .2).sum()), int((dt_ <= 0).sum()), float(sf[:, 2].min()), float(sf[:, 0].max()), float(W.tbe.min()), float(W.tei.max())/W.ey), flush=True)
+        print('  largest |g| cells (index: |g| / weight; smallest and largest singular value of I + G, of F; beta; yielded; V0 / median; height / h):', flush=True)
+        for c_ in top.tolist():
+            print('    %d: %.2f; %.3f %.3f; %.3f %.3f; beta %.3f; %d; V %.2f; y %.1f' % (c_, float(g_[c_])/wref, float(sv[c_, 2]), float(sv[c_, 0]), float(sf[c_, 2]), float(sf[c_, 0]), float(W.tbe[c_]), int(W._yld[c_]), float(W.V0[c_]/W.V0.median()), float(ST.tz[c_, 1]+.05)/h), flush=True)
+        s_ = W.tsp; own_, lo_, hi_, mr_ = W._rows; re_, rt_, ke_, Lh_ = s_['re'][:mr_], s_['rt'][:mr_], s_['hk'][:mr_], s_['hL'][:mr_]
+        ur_ = .5*ke_[:, 0]*(re_*re_).sum(1); ub_ = .5*ke_[:, 2]*(rt_*rt_).sum(1)
+        lev_ = torch.maximum(s_['ri'][:mr_].norm(dim=1), s_['rj'][:mr_].norm(dim=1))/Lh_
+        Ut_ = float(ur_.sum()+ub_.sum())
+        print('  the stores: all %.4e, in the stretch %.3f, in the bending and torsion %.3f, outer layer %.3f; rows with L < 0.2 h: %d of %d, their share of the stretch %.3f; lever / L: median %.2f, 99%% %.1f, max %.1f; rows with lever / L > 2: %d, share %.3f' % (
+            float(W.tU.sum()), float(ur_.sum())/float(W.tU.sum()), float(ub_.sum())/float(W.tU.sum()), 1-Ut_/float(W.tU.sum()), int((Lh_ < .2*h).sum()), mr_, float(ur_[Lh_ < .2*h].sum()/ur_.sum()), float(lev_.median()), float(torch.quantile(lev_, .99)), float(lev_.max()), int((lev_ > 2).sum()), float(ur_[lev_ > 2].sum()/ur_.sum())), flush=True)
+        for c_ in torch.argsort(W.tei, descending=True)[:5].tolist()+top[:4].tolist():
+            q_ = own_ == c_
+            uc_ = ur_[q_]; ii_ = torch.argmax(uc_)
+            print('    cell %d: e_i / e_y %.1f, V %.2f; its %d halves; the largest takes %.3f of its stretch: L / h %.3f, lever / L %.2f, k / median k %.1f, |r| / L %.3f; relative rotation %.4f rad, times lever / L %.3f; strain of F |dev ln U| %.4f' % (c_, float(W.tei[c_])/W.ey, float(W.V0[c_]/W.V0.median()), int(q_.sum()), float(uc_[ii_]/uc_.sum()), float(Lh_[q_][ii_])/h, float(lev_[q_][ii_]), float(ke_[q_][ii_, 0]/ke_[:, 0].median()), float(re_[q_][ii_].norm()/Lh_[q_][ii_]), float(rt_[q_][ii_].norm()), float(rt_[q_][ii_].norm()*lev_[q_][ii_]), float(torch.log(sf[c_]/sf[c_].prod()**(1/3)).norm())), flush=True)
+        ln_ = torch.log(sf/sf.prod(1, keepdim=True)**(1/3)).norm(dim=1)
+        fy_ = (W.tbe < 1); ok_ = ln_ < W.ey
+        print('  cells over the limit by their springs %d; of them with F\'s strain below the limit %d; among the not yet yielded before this step: over %d, F below the limit %d' % (int(fy_.sum()), int((fy_ & ok_).sum()), int((fy_ & ~W._yld).sum()), int((fy_ & ~W._yld & ok_).sum())), flush=True)
+        np.savez(args.save/('fail_%s.npz' % args.tag), x=ST.tx.cpu().numpy(), v=ST.tv.cpu().numpy(), a=ST.ta.cpu().numpy(), z=ST.tz.cpu().numpy(), step=s, g=wp_t(ST.a['gz']).cpu().numpy())
         print('step %d, t %.4f: the solve did not converge (|g| / weight %s after %d Newton iterations); CG %s; |g| %s; ratio %s' % (s, s*args.dt, math.sqrt(g2)/wref if math.isfinite(g2) else g2, its, [a__[0] for a__ in tr_][:30], ['%.3g' % (a__[4]/wref) for a__ in tr_][:30], ['%.2g' % a__[5] for a__ in tr_][:30]), flush=True)
         break
     ST.end()
