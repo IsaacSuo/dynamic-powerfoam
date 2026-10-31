@@ -377,6 +377,8 @@ class MergedStep(MidpointStep):
         W.reread(beta=True)
         g2 = self._eval(0.)[PS_GQ2]
         self._accept()
+        if getattr(self, 'probe', None) is not None:                                # (logging only: it leaves the last evaluation and accept as here)
+            self.probe(self)
         evals, its = 2, 0
         st = dict(rejected=0, edge=0, negative=0, trace=[])
         delta, delta0 = (self.delta_start if self.carry_delta and self.delta_start else -1.), None

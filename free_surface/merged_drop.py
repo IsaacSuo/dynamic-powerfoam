@@ -40,6 +40,7 @@ a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--theta', type=float, default=.5)
 a_.add_argument('--kshare', type=float, default=1.)
 a_.add_argument('--log-mem', type=int, default=10**9)
+a_.add_argument('--probe-from', type=int, default=10**9, help="every step from this one on, at its first point: the springs' part of |g|, the levers F T, the neighbours' relative rotation (logging only)")
 args = a_.parse_args()
 gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())['0']
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
@@ -110,6 +111,42 @@ xs, rs, Ls, ys_, eps, ts = [], [], [], [], [], []
 
 def save():
     np.savez(args.save/('frames_%s.npz' % args.tag), x=np.array(xs), r=np.array(rs), L=np.array(Ls), yld=np.array(ys_), ep=np.array(eps), t=np.array(ts), rows=np.array(rows))
+    if probes:
+        np.save(args.save/('probe_%s.npy' % args.tag), np.array(probes))
+
+
+probes = []
+
+
+def probe(ST_):
+    """at the step's first point, after the re-read: the springs' part of |g| (their k off for one evaluation, then back), the levers F T of their chain through G, the neighbours' relative rotation. Logging only"""
+    s_, m_, lo, hi = W.tsp, W._m_s, W.tlo, W.thi
+    g_all = wp_t(ST_.a['gz']).clone()
+    sk_ = s_['sk'].clone(); s_['sk'].zero_()
+    ST_._eval(0.); g_no = wp_t(ST_.a['gz']).clone()
+    s_['sk'].copy_(sk_)
+    ST_._eval(0.); ST_._accept()
+    n_all, n_no, n_sp = float(g_all.norm())/wref, float(g_no.norm())/wref, float((g_all-g_no).norm())/wref
+    gn = g_all.norm(dim=1); top = int(gn.argmax())
+    F0, T, k_, b_, r_, dn_ = s_['F0'], s_['sT'][:m_], s_['sk'][:m_], s_['sb'][:m_], s_['sr'][:m_], s_['sdn'][:m_]
+    dl = (ST_.tx[hi]-ST_.tx[lo]).norm(dim=1)
+    ai, aj = torch.einsum('fab,fb->fa', F0[lo], T).norm(dim=1), torch.einsum('fab,fb->fa', F0[hi], T).norm(dim=1)
+    lev = torch.maximum(ai, aj)/dl
+    sg = torch.linalg.svdvals((.5*(F0[lo]+F0[hi])).cpu())[:, 2].to(dev)
+    U, _, Vh = torch.linalg.svd(F0.cpu())
+    U[:, :, 2] *= torch.sign(torch.linalg.det(U@Vh))[:, None]
+    R = (U@Vh).to(dev)
+    ang = torch.rad2deg(torch.acos((((R[lo]*R[hi]).sum((1, 2))-1)/2).clamp(-1, 1)))
+    Vi = W.tul['Vi']
+    f_ = k_*(((1-W.th)*dn_+W.th*b_[:, None]*r_).norm(dim=1))
+    e_ = int((f_*torch.maximum(ai*Vi[lo], aj*Vi[hi])).argmax()); c1, c2 = int(lo[e_]), int(hi[e_])
+    ring = torch.cat([hi[lo == c1], lo[hi == c1], hi[lo == c2], lo[hi == c2], torch.tensor([c1, c2], device=dev)])
+    q_ = lambda a__, p_: float(torch.quantile(a__, p_))
+    med = W.V0.median()
+    print('  lever step %d t %.4f: first |g| %.3g, without the springs %.3g, the springs\' part %.3g; top site %d, |g| %.3g, V0/med %.2f; Fbar smallest sigma: min %.3g, 0.1 %% %.3f, 1 %% %.3f; |F T| / |d|: median %.2f, 99 %% %.2f, 99.9 %% %.2f, max %.3g, above 3: %d, 10: %d, 100: %d; |T| / |d| max %.3g; relative rotation in degrees: median %.1f, 99 %% %.1f, 99.9 %% %.1f, max %.2f, above 90: %d, 150: %d; |r| / |d| at the start max %.3g; the top spring (%d, %d): lever %.3g, sigma %.3g, rotation %.2f, |r| / |d| %.3g, |G_i - G_j| %.3g, k %.3g, beta %.3f, V0/med %.2f %.2f; the top site in its rings: %d' % (
+        s, s*args.dt, n_all, n_no, n_sp, top, float(gn[top])/wref, float(W.V0[top]/med), float(sg.min()), q_(sg, .001), q_(sg, .01), q_(lev, .5), q_(lev, .99), q_(lev, .999), float(lev.max()), int((lev > 3).sum()), int((lev > 10).sum()), int((lev > 100).sum()), float((T.norm(dim=1)/dl).max()),
+        q_(ang, .5), q_(ang, .99), q_(ang, .999), float(ang.max()), int((ang > 90).sum()), int((ang > 150).sum()), float((r_.norm(dim=1)/dl).max()), c1, c2, float(lev[e_]), float(sg[e_]), float(ang[e_]), float(r_[e_].norm()/dl[e_]), float((W.tG[c1]-W.tG[c2]).norm()), float(k_[e_]), float(b_[e_]), float(W.V0[c1]/med), float(W.V0[c2]/med), int(bool((ring == top).any()))), flush=True)
+    probes.append((s, s*args.dt, n_all, n_no, n_sp, float(sg.min()), q_(lev, .999), float(lev.max()), q_(ang, .999), float(ang.max()), float((r_.norm(dim=1)/dl).max()), float(lev[e_]), float(sg[e_]), int(bool((ring == top).any()))))
 
 
 t0 = t_saved = time.time()
@@ -121,6 +158,7 @@ for s in range(1, nsteps+1):
     t_s = time.time()
     R_prev = W.tbR.clone()
     yb_ = W._yld.clone()
+    ST.probe = probe if s >= args.probe_from else None
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
     if s >= args.log_from:
         tr_ = ST.stats['trace']; bd = torch.as_tensor(W.B['bdelta'].numpy(), device=dev); R_ = W.tbR; tc = bd > 0
