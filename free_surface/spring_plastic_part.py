@@ -1,7 +1,7 @@
 """spring_plastic.py on the free part (2026-10-31): plastic_part_check.py's dynamic case, no gravity, no contact, start velocity v = a diag(-1, 1/2, 1/2)(X - Xc), a for an
 elastic peak strain of --peak, yield strain --ey. The reference: the 10-26 skin model with the return within the step, whose mean plastic strain xx converged in dt
-(--ref, plastic_part_check_mid.npz: -0.1193 / -0.1190 / -0.1190 at 1/1200, 1/2400, 1/4800). Per dt: the mean plastic and total strain, the energy's account (backward Euler's
-own dissipation is what is left), the solve's work.
+(--ref, plastic_part_check_mid.npz: -0.1193 / -0.1190 / -0.1190 at 1/1200, 1/2400, 1/4800). Per dt: the mean plastic and total strain, the energy's account (the integrator's own
+dissipation is what is left), the solve's work.
   python free_surface/spring_plastic_part.py --foam <dir with dem_exact_single> --ref <npz> --save <dir>"""
 import argparse
 import math
@@ -28,6 +28,7 @@ a_.add_argument('--E', type=float, default=23.00838)
 a_.add_argument('--nu', type=float, default=.3008)
 a_.add_argument('--tol', type=float, default=1e-3)
 a_.add_argument('--grad', default='gg')
+a_.add_argument('--theta', type=float, default=.5)
 a_.add_argument('--tag', default='spring_part')
 a_.add_argument('--field', action='store_true', help='the last dt\'s end state into <tag>_field.npz')
 args = a_.parse_args()
@@ -58,7 +59,7 @@ def total_strain(x):
 out = {}
 for dt in args.dts:
     t0 = time.time()
-    W = SpringPlastic(X0, r0, V0, args.E, args.nu, args.E*args.ey, grad=args.grad)
+    W = SpringPlastic(X0, r0, V0, args.E, args.nu, args.E*args.ey, theta=args.theta, grad=args.grad)
     W.set_ball((0., 1., 0.), -100., 0.)
     W.update_ul(W.X)
     W.prepare()
@@ -67,7 +68,7 @@ for dt in args.dts:
     CG = TrustCG(W, mass, dt, per=2, product_iters=1)
     ST = PlasticStep(W, CG, mass, W.ul_blocks(), fg, dt, 0.)
     ST.pre_ul = True; ST.pre_every = 4; ST.smooth_pred = ST.carry_delta = True
-    ST.set_theta(1., mass)
+    ST.set_theta(args.theta, mass)
     v = a*Xd@Dg.T
     ST.set_state(X.clone(), v, torch.zeros_like(X))
     tol = args.tol*wref
@@ -89,7 +90,7 @@ for dt in args.dts:
                     float(torch.exp(W.tul['Ln']).max()), e_, its, W.ul_stats['radii_it'], W.ul_stats['radii_fail'], W.ul_stats['flips'], W.ul_stats['walls']))
         if s % every == 0 or s == steps:
             q = rec[-1]
-            print('  integrated mean strain xx %.5f yy %.5f zz %.5f; rows %d, new halves %d, closed %d this step' % (float(W.Hsum[0, 0]), float(W.Hsum[1, 1]), float(W.Hsum[2, 2]), W.ul_stats['rows'], W.ul_stats['born'], W.ul_stats['closed']), flush=True)
+            print('  integrated mean strain xx %.5f yy %.5f zz %.5f; rows %d, new halves %d, closed %d this step; smallest one-cell dissipation / limit store %.2e' % (float(W.Hsum[0, 0]), float(W.Hsum[1, 1]), float(W.Hsum[2, 2]), W.ul_stats['rows'], W.ul_stats['born'], W.ul_stats['closed'], W.ul_stats.get('D_min', 0.)), flush=True)
             print('dt 1/%d t %.4f (%.0f s): KE %.3e dev %.3e vol %.3e var %.3e W_p %.3e, left %.3f of H0; mean plastic xx %.5f, total xx %.5f; yielding cells %d, yielded so far %d, walls %d; max |eps_p| %.3f, J %.3f..%.3f; products %d, Newton %d, radii %d, fails %d, flips %d' % (
                 round(1/dt), q[0], time.time()-t0, q[1], q[2], q[3], q[4], q[5], 1-(q[1]+q[2]+q[3]+q[4]+q[5])/H0, q[6], q[7], q[8], q[9], q[18], q[10], q[11], q[12], q[13], q[14], q[15], q[16], q[17]), flush=True)
     r_ = np.array(rec)
