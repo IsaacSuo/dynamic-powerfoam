@@ -21,39 +21,9 @@ import warp as wp
 from free_surface.closure_warp import MidpointStep, PS_GQ2, PS_PQ, PS_PZ, k_Aul, k_F8, k_Gul, k_Gul_adj, k_ball, k_ball_adj, k_mid_ball, k_mid_begin, k_mid_inv, k_mid_pre, k_mid_pre_ball
 from free_surface.skin_warp import NSLOT, NT, k_total, k_total_loss
 from free_surface.spring_plastic import k_Fs, k_Fs_adj
-from free_surface.ul_plastic import PlasticUL, k_Aul_adj2, k_Ge, k_Ge_adj, k_Lb, k_gg_wall, k_gg_wall_adj, k_var, polar_batch
+from free_surface.ul_plastic import PlasticUL, k_Aul_adj2, k_Ge, k_Ge_adj, k_Lb, k_gg_cell, k_gg_cell_adj, k_gg_wall, k_gg_wall_adj, k_var, polar_batch
 
 f64 = torch.float64
-
-
-@wp.kernel(enable_backward=False)
-def k_gg_cell_w(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), Sg: wp.array(dtype=wp.mat33d), Ge: wp.array(dtype=wp.mat33d), a: wp.array(dtype=wp.vec3d), Mc: wp.array(dtype=wp.mat33d), Vi: wp.array(dtype=wp.float64),
-                Ac: wp.array(dtype=wp.float64), Hw: wp.array(dtype=wp.float64), ng: wp.vec3d, G: wp.array(dtype=wp.mat33d)):
-    """ul_plastic.k_gg_cell, the cap's downward part on a touching cell moving with the wall: the tangential velocity extrapolated to the ground, w, taken out of the cap's flux; 0 for a field linear through the ground, so that field reads exactly"""
-    b = wp.tid()
-    u = x[b]-xn[b]
-    Gc = Sg[b]+wp.outer(u, a[b])+Ge[b]@Mc[b]
-    if Ac[b] > wp.float64(0.0):
-        w = u-Hw[b]*(Ge[b]@ng)
-        w = w-wp.dot(w, ng)*ng
-        Gc = Gc+Ac[b]*wp.outer(w, ng)
-    G[b] = Gc*Vi[b]
-
-
-@wp.kernel(enable_backward=False)
-def k_gg_cell_adj_w(Gb: wp.array(dtype=wp.mat33d), a: wp.array(dtype=wp.vec3d), Mc: wp.array(dtype=wp.mat33d), Vi: wp.array(dtype=wp.float64), Ac: wp.array(dtype=wp.float64), Hw: wp.array(dtype=wp.float64), ng: wp.vec3d,
-                    x_adj: wp.array(dtype=wp.vec3d), Gs: wp.array(dtype=wp.mat33d), Gbe: wp.array(dtype=wp.mat33d)):
-    """(dE/dG) / V: the walls' flux gets it, the cap's u_s (x) a_s and G0 M_s directly, and on a touching cell the wall's term: its traction on the wall, tangential"""
-    b = wp.tid()
-    Gh = Gb[b]*Vi[b]
-    Gs[b] = Gh
-    wp.atomic_add(x_adj, b, Gh@a[b])
-    wp.atomic_add(Gbe, b, Gh@wp.transpose(Mc[b]))
-    if Ac[b] > wp.float64(0.0):
-        t = Ac[b]*(Gh@ng)
-        t = t-wp.dot(t, ng)*ng
-        wp.atomic_add(x_adj, b, t)
-        wp.atomic_add(Gbe, b, (-Hw[b])*wp.outer(t, ng))
 
 
 @wp.kernel(enable_backward=False)
@@ -146,9 +116,6 @@ class MergedUL(PlasticUL):
                       L=z(n, wp.float64), Lb=z(n, wp.float64), ei=z(n, wp.float64), be=z(n, wp.float64), er=z(n, wp.mat33d), Fc=z(n, wp.mat33d), Fb=z(n, wp.mat33d), R=z(n, wp.mat33d),
                       Fp=z(n, wp.mat33d), Rp=z(n, wp.mat33d), qp=z(n, wp.vec4d), terms=wp.zeros((NT, 256), dtype=wp.float64, device=dev), tsum=wp.zeros(NT, dtype=wp.float64, device=dev),
                       loss=wp.zeros(1, dtype=wp.float64, device=dev), bdelta=z(n, wp.float64), bfn=z(n, wp.float64), bff=z(n, wp.vec3d))
-        self.wl = dict(Ac=z(n, wp.float64), Hw=z(n, wp.float64))
-        self.twl = {k_: tt(a_) for k_, a_ in self.wl.items()}
-        self.wallg = False; self.wng = wp.vec3d(0., 1., 0.)
         self.tFc, self.tRp, self.tG, self.tL, self.tei, self.tbe, self.ter, self.tR = (tt(self.B[k_]) for k_ in ('Fc', 'Rp', 'G', 'L', 'ei', 'be', 'er', 'R'))
         self.tbe.fill_(1.); self.tR.copy_(self.I3.expand(n, 3, 3))
         self._Fe = self.I3.expand(n, 3, 3).clone()
@@ -181,7 +148,7 @@ class MergedUL(PlasticUL):
         wp.launch(k_Ge, n, inputs=[B['G0'], B['Ga'], U['used']], outputs=[B['Ge']])
         wall = [U['wi'], U['wj'], U['wa'], U['wn'], U['wt'], U['wtau']]
         wp.launch(k_gg_wall, Kw, inputs=[x, U['xn']]+wall+[B['Ge']], outputs=[B['Sg']])
-        wp.launch(k_gg_cell_w, n, inputs=[x, U['xn'], B['Sg'], B['Ge'], U['a'], U['Mc'], U['Vi'], self.wl['Ac'], self.wl['Hw'], self.wng], outputs=[B['G']])
+        wp.launch(k_gg_cell, n, inputs=[x, U['xn'], B['Sg'], B['Ge'], U['a'], U['Mc'], U['Vi']], outputs=[B['G']])
         wp.launch(k_Fs, n, inputs=[B['G'], S['F0']], outputs=[B['Fc']])
         wp.launch(k_Lc, n, inputs=[B['G'], U['Q'], U['Ln'], U['V0'], kap], outputs=[B['L'], B['Lb'], B['terms']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
@@ -193,7 +160,7 @@ class MergedUL(PlasticUL):
         if bl is not None:
             wp.launch(k_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt']], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
             wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], self.tones], outputs=[g])
-        wp.launch(k_gg_cell_adj_w, n, inputs=[B['Gb'], U['a'], U['Mc'], U['Vi'], self.wl['Ac'], self.wl['Hw'], self.wng], outputs=[g, B['Gs'], B['Gbe']])
+        wp.launch(k_gg_cell_adj, n, inputs=[B['Gb'], U['a'], U['Mc'], U['Vi']], outputs=[g, B['Gs'], B['Gbe']])
         wp.launch(k_gg_wall_adj, Kw, inputs=wall+[B['Gs']], outputs=[g, B['Gbe']])
         wp.launch(k_Ge_adj, n, inputs=[B['Gbe'], U['used']], outputs=[B['Gb0']])
         wp.launch(k_Aul_adj2, Kw, inputs=[B['Gbe'], U['As'], U['Ao'], U['Aw']], outputs=[B['Gb0']])
@@ -297,10 +264,6 @@ class MergedUL(PlasticUL):
         t['wi'][:m] = ic.to(torch.int32); t['wj'][:m] = jc.to(torch.int32); t['wa'][:m] = Ac; t['wn'][:m] = nn; t['wt'][:m] = tw
         t['wtau'][:m] = cc-(x[ic]+tw[:, None]*d); t['wv'][:m] = self.kap*Ac*Lw/24
         t['a'].copy_(a_); t['Mc'].copy_(Mc); t['Vi'].copy_(1/V.clamp(min=1e-12*float(V.median())))
-        if self.wallg:
-            ng_ = torch.tensor([self.ball['ng'][k_] for k_ in range(3)], dtype=f64, device=dev)
-            Hw_ = x@ng_-float(self.tball[2])
-            self.twl['Ac'].copy_(torch.where(cap & (Hw_ < r), (-(a_@ng_)).clamp(min=0.), torch.zeros_like(Hw_))); self.twl['Hw'].copy_(Hw_)
         t['xn'].copy_(x)
         if self.ball is not None:
             self.tbR.copy_(torch.where(cap, r, -torch.ones_like(r)))
@@ -311,11 +274,6 @@ class MergedUL(PlasticUL):
         s['Rh'].copy_(self.tRp)
         A_ = self.tRp.transpose(1, 2)@Fe; e_ = .5*(A_+A_.transpose(1, 2))-self.I3
         s['en'].copy_(e_-(e_.diagonal(dim1=1, dim2=2).sum(1)/3)[:, None, None]*self.I3)
-
-    def set_wall(self):
-        """no slip at the ground in the cells' reading, after set_ball, before update_ul; with mu 0 in place of the ball's glue. A pinned site lifts the no-slip plane by a ball radius, as it stands that far above the ground (10-31: 20 mm dead, the MPM's speed at 15 mm 0.35-0.5 of that at 50 mm, pinned 0.05);
-        a limit on the site's force leaves the base sliding as one. Here the site stays free and the downward part of a touching cell's cap moves with the ground, tangentially: the shear between it and the wall is read by the cell, and the wall's traction is that cell's stress, bounded by yield with nothing to choose"""
-        self.wallg = True; self.wng = self.ball['ng']
 
     def reread(self, beta=False):
         """after an evaluation at the point the solve stands on: R and Q read there, frozen for the next solve; beta: the springs' beta too, once per step at Newton's start (10-31: read at every accepted point it moved
