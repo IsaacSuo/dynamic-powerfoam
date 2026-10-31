@@ -1,0 +1,167 @@
+"""merged_ul.py on PAC-NeRF's plasticine scene 0 against its MPM particles (2026-10-31): the shape of elastic scene 0 (frame 0 identical), the scene's E, nu, yield stress and start
+velocity (data/pacnerf/gt/plasticine.json), gravity, the ground at y = -0.05 with friction large enough for the MPM's sticky ground (ours = theirs + (0.5, -0.05, 0.5), as plastic_drop.py).
+Per frame (1/24 s): height and widths (ours: the cap cells' outermost points), the centre of mass, Chamfer in both directions against 30000 of the particles.
+Frames saved on the way (x, radii, L, ep, yielded), every --every steps; the log line-buffered; no timeout.
+  python free_surface/merged_drop.py --foam <dir with dem_exact_single> --save <dir> --tag <tag>"""
+import argparse
+import io
+import json
+import math
+import time
+import zipfile
+from pathlib import Path
+
+import numpy as np
+import torch
+import warp as wp
+from plyfile import PlyData
+
+from free_surface.closure_warp import TrustCG
+from free_surface.merged_ul import MergedStep, MergedUL
+
+f64, dev = torch.float64, 'cuda'
+wp_t = lambda a_: wp.to_torch(a_, requires_grad=False)
+ROOT = Path('/home/fangsuo/py/dynamic-powerfoam/data/pacnerf')
+OFFSET = np.array([.5, -.05, .5])
+a_ = argparse.ArgumentParser()
+a_.add_argument('--foam', type=Path, required=True)
+a_.add_argument('--save', type=Path, default=Path('output/plastic'))
+a_.add_argument('--tag', default='drop')
+a_.add_argument('--frames', type=int, default=15)
+a_.add_argument('--dt', type=float, default=1/1200)
+a_.add_argument('--tol', type=float, default=1e-3)
+a_.add_argument('--mu', type=float, default=10., help="the ground's friction: large for the MPM's sticky ground; with --stick shear it only turns the glue on")
+a_.add_argument('--stick', choices=('coulomb', 'shear'), default='coulomb', help="the glue's limit: mu F_n, or the material's shear yield on the cell's footprint (PlasticUL.set_stick)")
+a_.add_argument('--grad', default='gg')
+a_.add_argument('--every', type=int, default=10)
+a_.add_argument('--pre-every', type=int, default=4)
+a_.add_argument('--log-from', type=int, default=10**9, help="every step from this one on: the start's |g|, the balls' overlap and radii, the Newton trace")
+a_.add_argument('--newton-max', type=int, default=300)
+a_.add_argument('--theta', type=float, default=.5)
+a_.add_argument('--kshare', type=float, default=1.)
+a_.add_argument('--log-mem', type=int, default=10**9)
+args = a_.parse_args()
+gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())['0']
+E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
+g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
+X0, r0, V0 = g['points'], cl['radii'], g['masses']; n = len(X0)
+args.save.mkdir(parents=True, exist_ok=True)
+Z = zipfile.ZipFile(ROOT/'simulation_data.zip')
+
+
+def truth(k):
+    v = PlyData.read(io.BytesIO(Z.read('simulation_data/plasticine/0/%d.ply' % k)))['vertex']
+    return np.stack([v['x'], v['y'], v['z']], 1).astype(np.float64)+OFFSET
+
+
+rng = np.random.default_rng(0)
+Gt = [truth(k) for k in range(args.frames+1)]
+pick = rng.choice(len(Gt[0]), 30000, replace=False)
+Gp = [torch.as_tensor(p[pick], device=dev).float() for p in Gt]
+
+
+def chamfer(a, b, chunk=1024):
+    """the mean nearest distance a -> b, b -> a (mm)"""
+    a = a.float()
+
+    def one(p, q):
+        return torch.cat([torch.cdist(p[i:i+chunk], q).min(1).values for i in range(0, len(p), chunk)]).mean()
+    return 1e3*float(one(a, b)), 1e3*float(one(b, a))
+
+
+mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
+W = MergedUL(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, ys, theta=args.theta, kshare=args.kshare, grad=args.grad)
+W.set_ball((0., 1., 0.), -.05, args.mu)
+if args.stick == 'shear':
+    W.set_stick()
+W.update_ul(W.X)
+W.prepare()
+up = torch.tensor([0., 1., 0.], dtype=f64, device=dev)
+fg = -9.8*M3*up; wref = float(fg.norm()); tol = args.tol*wref
+CG = TrustCG(W, mass, args.dt, per=2, product_iters=1)
+ST = MergedStep(W, CG, mass, W.ul_blocks(), fg, args.dt, args.mu)
+ST.pre_ul = True; ST.pre_every = args.pre_every; ST.smooth_pred = ST.carry_delta = True; ST.newton_max = args.newton_max
+ST.set_theta(args.theta, mass)
+ST.set_state(W.X.clone(), torch.tensor(gt['v'], dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
+h = float(np.median(V0))**(1/3)
+print('plasticine 0: E %.1f, nu %.4f, yield %.1f Pa (yield strain %.4f), v0 %s; foam %s: %d cells, h %.2f mm; dt 1/%d, tol %g of the weight, friction %g, grad %s; MPM %d particles' % (
+    gt['E'], nu, gt['ys'], gt['ys']/gt['E'], np.round(gt['v'], 4).tolist(), args.foam.name, n, 1e3*h, round(1/args.dt), args.tol, args.mu, args.grad, len(Gt[0])), flush=True)
+
+
+def ours():
+    """the sites and the cap cells' outermost points, on the last cut's radii and cap directions"""
+    x = ST.tx; a = W.tul['a']; c = a.norm(dim=1) > 0
+    return torch.cat([x, x[c]+W._ulr[c, None]*a[c]/a[c].norm(dim=1, keepdim=True)])
+
+
+def row(k):
+    o = ours(); gp = Gt[k]
+    oh = (o.max(0).values-o.min(0).values).cpu().numpy(); gh = gp.max(0)-gp.min(0)
+    c1, c2 = chamfer(o, Gp[k])
+    com = ((M3*ST.tx).sum(0)/M).cpu().numpy()
+    print('FRAME %2d t %.3f: height %.3f (MPM %.3f); x width %.3f (%.3f), z width %.3f (%.3f); com %s (%s); low %.4f (%.4f); Chamfer ours->MPM %.1f, MPM->ours %.1f mm' % (
+        k, k/24, oh[1], gh[1], oh[0], gh[0], oh[2], gh[2], np.round(com, 4).tolist(), np.round(gp.mean(0), 4).tolist(), float(o[:, 1].min()), gp[:, 1].min(), c1, c2), flush=True)
+    return (k, k/24, *oh, *gh, *com, *gp.mean(0), float(o[:, 1].min()), gp[:, 1].min(), c1, c2)
+
+
+rows = [row(0)]
+xs, rs, Ls, ys_, eps, ts = [], [], [], [], [], []
+
+
+def save():
+    np.savez(args.save/('frames_%s.npz' % args.tag), x=np.array(xs), r=np.array(rs), L=np.array(Ls), yld=np.array(ys_), ep=np.array(eps), t=np.array(ts), rows=np.array(rows))
+
+
+t0 = t_saved = time.time()
+Y2 = float((mass*(W.X[:, 1]-(M3*W.X).sum(0)[1]/M)**2).sum())
+nit, npr = [], []
+nf = int(round(1/(24*args.dt))); nsteps = args.frames*nf
+H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
+for s in range(1, nsteps+1):
+    t_s = time.time()
+    R_prev = W.tbR.clone()
+    yb_ = W._yld.clone()
+    e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
+    if s >= args.log_from:
+        tr_ = ST.stats['trace']; bd = torch.as_tensor(W.B['bdelta'].numpy(), device=dev); R_ = W.tbR; tc = bd > 0
+        both = (R_ > 0) & (R_prev > 0); gz = wp_t(ST.a['gz']).norm(dim=1); top = torch.argsort(gz, descending=True)[:4]
+        print('  step %d t %.4f: Newton %d, products %d, rejected %d; |g| %s; CG %s; touching %d, overlap / R max %.3f, overlap / h max %.3f, ground/weight %.2f; R / h of the touching max %.2f; this cut R / last max %.2f min %.2f, new caps %d, overlap of the new caps / h max %.3f; radii %d, walls %d; |eps_p| max %.3f; end |g| top cells %s' % (
+            s, s*args.dt, its, e_, ST.stats['rejected'], ['%.3g' % (a__[4]/wref) for a__ in tr_][:4], [a__[0] for a__ in tr_][:6], int(tc.sum()), float((bd[tc]/R_[tc]).max()) if bool(tc.any()) else 0., float(bd.max())/h, float(W.B['bfn'].numpy().sum())/wref,
+            float(R_[tc].max())/h if bool(tc.any()) else 0., float((R_[both]/R_prev[both]).max()), float((R_[both]/R_prev[both]).min()), int(((R_ > 0) & ~(R_prev > 0)).sum()), float(bd[(R_ > 0) & ~(R_prev > 0)].max())/h if bool(((R_ > 0) & ~(R_prev > 0)).any()) else 0., W.ul_stats['radii_it'], W.ul_stats['walls'], float(W.ep.flatten(1).norm(dim=1).max()),
+            ' '.join('%d: %.2f (delta/h %.3f, V0/med %.2f)' % (c_, float(gz[c_])/wref, float(bd[c_])/h, float(W.V0[c_]/W.V0.median())) for c_ in top.tolist())), flush=True)
+    if not math.isfinite(g2) or math.sqrt(g2) > tol:
+        tr_ = ST.stats['trace']
+        g_ = wp_t(ST.a['gz']).norm(dim=1); top = torch.argsort(g_, descending=True)[:8]; I3_ = W.I3
+        Gz = W.tG; sv = torch.linalg.svdvals(I3_+Gz); sf = torch.linalg.svdvals(W.tFc); dt_ = torch.linalg.det(I3_+Gz)
+        print('  at the failure: I + G(z) smallest singular value 1%% %.3f, min %.3f, cells below 0.2: %d, det <= 0: %d; F(z) smallest singular value min %.3f, largest max %.3f; beta min %.3f; e_i / e_y max %.1f' % (float(torch.quantile(sv[:, 2], .01)), float(sv[:, 2].min()), int((sv[:, 2] < .2).sum()), int((dt_ <= 0).sum()), float(sf[:, 2].min()), float(sf[:, 0].max()), float(W.tbe.min()), float(W.tei.max())/W.ey), flush=True)
+        print('  largest |g| cells (index: |g| / weight; smallest and largest singular value of I + G, of F; beta; yielded; V0 / median; height / h):', flush=True)
+        for c_ in top.tolist():
+            print('    %d: %.2f; %.3f %.3f; %.3f %.3f; beta %.3f; %d; V %.2f; y %.1f' % (c_, float(g_[c_])/wref, float(sv[c_, 2]), float(sv[c_, 0]), float(sf[c_, 2]), float(sf[c_, 0]), float(W.tbe[c_]), int(W._yld[c_]), float(W.V0[c_]/W.V0.median()), float(ST.tz[c_, 1]+.05)/h), flush=True)
+        np.savez(args.save/('fail_%s.npz' % args.tag), x=ST.tx.cpu().numpy(), v=ST.tv.cpu().numpy(), a=ST.ta.cpu().numpy(), z=ST.tz.cpu().numpy(), step=s, g=wp_t(ST.a['gz']).cpu().numpy())
+        print('step %d, t %.4f: the solve did not converge (|g| / weight %s after %d Newton iterations); CG %s; |g| %s; ratio %s' % (s, s*args.dt, math.sqrt(g2)/wref if math.isfinite(g2) else g2, its, [a__[0] for a__ in tr_][:30], ['%.3g' % (a__[4]/wref) for a__ in tr_][:30], ['%.2g' % a__[5] for a__ in tr_][:30]), flush=True)
+        break
+    if s >= args.log_mem:
+        ov_ = len(W._recut.A.ov[0]) if hasattr(W._recut.A, 'ov') else 0
+        print('  mem step %d t %.4f: torch allocated %.2f GB, reserved %.2f GB, peak allocated %.2f GB; overlap pairs %d; walls %d; yielded %d; r / r0 max %.2f; J min %.3f; Newton %d, products %d' % (s, s*args.dt, torch.cuda.memory_allocated()/2**30, torch.cuda.memory_reserved()/2**30, torch.cuda.max_memory_allocated()/2**30, ov_, W.ul_stats['walls'], int(W._yld.sum()), float((W._ulr/W._rr0).max()), float(torch.exp(W.tul['Ln']).min()), its, e_), flush=True)
+    ST.end()
+    nit.append(its); npr.append(e_)
+    if s % args.every == 0:
+        xs.append(ST.tx.cpu().numpy()); rs.append(W._ulr.cpu().numpy()); Ls.append(W.tul['Ln'].cpu().numpy()); ys_.append(W._yld.cpu().numpy()); eps.append(W.ep.cpu().numpy()); ts.append(s*args.dt)
+    if s % 20 == 0:
+        i_, j_, Lw, _, _, m = W._w
+        ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum())
+        bd = W.B['bdelta'].numpy()
+        Es_ = float(((M3*(ST.tx-ST.tx.mean(0)))[:, 1]*(ST.tx[:, 1]-(M3*ST.tx).sum(0)[1]/M)).sum())
+        print('  integrated mean strain yy %.4f xx %.4f zz %.4f; site height std / rest %.4f, its log %.4f; mean |ep| %.3f; springs %d, new %d, closed %d this step, without a wall %d; smallest one-cell dissipation / limit store %.2e' % (float(W.Hsum[1, 1]), float(W.Hsum[0, 0]), float(W.Hsum[2, 2]), (Es_/Y2)**.5, .5*math.log(Es_/Y2), float((mass*W.ep.flatten(1).norm(dim=1)).sum())/M, W.ul_stats['rows'], W.ul_stats['born'], W.ul_stats['closed'], W.ul_stats['ghost'], W.ul_stats.get('D_min', 0.)), flush=True)
+        print('t %.4f (%.0f s): KE %.3e dev %.3e vol %.3e var %.3e springs %.3e W_p %.3e (springs %.3f), left %.3f of the start\'s energy; com y %.4f; yielding %d cells, yielded so far %d; walls %d; J %.3f..%.3f, |eps_p| median %.3f max %.3f; touching %d, ground/weight %.2f; min wall L / h %.3f, max r / h %.2f, radii %d (fails %d), flips %d; products %d, Newton %d, rejected %d, negative %d; %.2f s' % (
+            s*args.dt, time.time()-t0, ek, ed, ev, float(W.tsum[2]), W.spring_store, W.Wp, W.Wp_spring/max(W.Wp, 1e-300), 1-(ek+ed+ev+float(W.tsum[2])+W.spring_store+W.Wp+eg)/H0, float((M3*ST.tx)[:, 1].sum())/M, W.ul_stats['yielding'], W.ul_stats['yielded'], m, float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()),
+            float(W.ep.flatten(1).norm(dim=1).median()), float(W.ep.flatten(1).norm(dim=1).max()), int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wref, float(Lw.min())/h, float(W._ulr.max())/h, W.ul_stats['radii_it'], W.ul_stats['radii_fail'], W.ul_stats['flips'], e_, its, ST.stats['rejected'], ST.stats['negative'], time.time()-t_s), flush=True)
+    if s % nf == 0:
+        rows.append(row(s//nf))
+        save(); t_saved = time.time()
+    elif time.time()-t_saved > 60:
+        save(); t_saved = time.time()
+save()
+ni, np_ = np.array(nit), np.array(npr)
+print('Newton per step: median %d, 99 %% %d, max %d, steps above 50: %d of %d; products per step: median %d, max %d, total %d; plastic work %.4f' % (np.median(ni), np.percentile(ni, 99), ni.max(), int((ni > 50).sum()), len(ni), np.median(np_), np_.max(), np_.sum(), W.Wp), flush=True)
+print('done: %.0f s' % (time.time()-t0), flush=True)
