@@ -78,7 +78,7 @@ def smooth(y):
 
 def gradcheck(x, tag):
     E, gr = W.grad(x)
-    W.reread()
+    W.reread(beta=True)
     E, gr = W.grad(x)
     over = int((W.tbe < 1).sum()); nb = int((W.tsp['sb'][:W._m_s] < 1).sum())
     d = torch.randn_like(x); d = d/d.norm()
