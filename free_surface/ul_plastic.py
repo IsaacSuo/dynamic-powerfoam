@@ -16,11 +16,12 @@ A step from n to n + 1, backward Euler (MidpointStep at theta = 1):
             2 mu |e| = s_y, then s_y |e| - s_y^2 / (4 mu), s_y = (2 / 3)^1/2 sigma_y (as PAC-NeRF's return). Each term is convex
             in x, so the step's only non-convexity is the ground's: the geometry's nonlinearity lives in the re-cut
   variance  kap A L / 24 (L_i - L_j)^2 on the current walls (the J field's variation inside the cells)
-  jump      the sites' relative motion the gradients do not explain: delta_tr = delta_n + (u_j - u_i) - 1/2 (G_i + G_j)(x_j - x_i), the sub-cell shear
-            strain gamma = delta / L over the wall's volume A L / 3, with the von Mises law in shear: density mu gamma^2 / 2 up to tau_y = sigma_y / 3^1/2, then
-            tau_y gamma - tau_y^2 / (2 mu). So k = mu A / (3 L) and the force limit tau_y A / 3 (the walls' largest stored energy, sum (A L / 3) tau_y^2 / (2 mu)
-            = V sigma_y^2 / (6 mu), is then the cells', s_y^2 V / (4 mu)). delta is the wall's own memory: a new wall starts at 0, a wall gone takes it
-            along (its area is 0 by then)
+  jump      the sites' relative motion the gradients do not explain: dt = (u_j - u_i) - 1/2 (G_i + G_j)(x_j - x_i), a sub-cell strain gamma = delta / L over the wall's
+            volume A L / 3, so k = mu A / (3 L). It has no yield of its own: in a flowing cell D = Dm + Df with mean Df = 0, s_y |D| averages to s_y |Dm| + s_y <|Df_perp|^2> / (2 |Dm|),
+            so the fluctuation's dissipation is second order, a viscosity s_y / (2 |Dm|); a force limit on the wall would add first-order friction, the yield counted twice (10-31: a
+            limit tau_y A took 29 % of the plastic work, tau_y A / 3 20 %, and each sliding wall starts each step on its knee: Newton failed). The wall follows its cells' return:
+            E = 1/2 k beta |delta_n + dt|^2, delta_n+1 = beta (delta_n + dt), beta the mean of the two cells' min(1, s_y / (2 mu |e_tr|)), frozen at Newton's start. Quadratic in x.
+            beta 1: the elastic memory; fast flow: force (A / 3 L)(s_y / 2 |D|)[v], independent of dt. A new wall starts at 0, a wall gone takes its memory along (its area is 0 by then)
   update    at x^n+1: e, delta returned to their limits and turned by Q, L_n+1 = L_n + ln det(I + G) (exact, not the step's linear tr H)
 Not here: the stabilisation S-NSNI, the normal part of UL's jump (lam + mu), rendering's F, flow's other materials."""
 import math
@@ -113,7 +114,7 @@ def k_Lb(Lb: wp.array(dtype=wp.float64), Q: wp.array(dtype=wp.mat33d), Gb: wp.ar
 
 @wp.kernel(enable_backward=False)
 def k_jump(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), wi: wp.array(dtype=int), wj: wp.array(dtype=int), wd: wp.array(dtype=wp.vec3d),
-           wdn: wp.array(dtype=wp.vec3d), wk: wp.array(dtype=wp.float64), wfy: wp.array(dtype=wp.float64), wdl: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64),
+           wdn: wp.array(dtype=wp.vec3d), wk: wp.array(dtype=wp.float64), wb: wp.array(dtype=wp.float64), wdl: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64),
            Gb: wp.array(dtype=wp.mat33d), x_adj: wp.array(dtype=wp.vec3d)):
     e = wp.tid()
     i, j = wi[e], wj[e]
@@ -122,14 +123,9 @@ def k_jump(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), G: wp.arra
     half = wp.float64(0.5)
     dv = wdn[e]+(x[j]-xn[j])-(x[i]-xn[i])-half*((G[i]+G[j])@wd[e])
     wdl[e] = dv
-    k, fy = wk[e], wfy[e]
-    nd = wp.length(dv)
-    w = half*k*nd*nd
+    k = wk[e]*wb[e]
     f = k*dv
-    if k*nd > fy:
-        w = fy*nd-half*fy*fy/k
-        f = (fy/nd)*dv
-    wp.atomic_add(terms, 3, e % NSLOT, w)
+    wp.atomic_add(terms, 3, e % NSLOT, half*wp.dot(f, dv))
     wp.atomic_add(x_adj, j, f)
     wp.atomic_add(x_adj, i, -f)
     PF = -half*wp.outer(f, wd[e])
@@ -213,7 +209,7 @@ class PlasticUL:
         self.st = SimpleNamespace(X=self.X, V=self.V0)
         self.mu, self.lam = E/(2*(1+nu)), E*nu/((1+nu)*(1-2*nu))
         self.kap = self.lam+2*self.mu/3
-        self.sy, self.tauy = math.sqrt(2/3)*sigma_y, sigma_y/math.sqrt(3)
+        self.sy = math.sqrt(2/3)*sigma_y
         self._ul_agg, self._ul_tol = agg, vol_tol
         self._recut = Recut(n, dev); self._recut.A.f32 = True
         G, _ = self._recut.geometry(self.X, self._ulr)
@@ -222,7 +218,7 @@ class PlasticUL:
         z = lambda k, dt_: wp.zeros(k, dtype=dt_, device=dev)
         self.ul = dict(Kw=Kw, xn=z(n, wp.vec3d), S=z(2*Kw, wp.int32), O=z(2*Kw, wp.int32), R=z(2*Kw, wp.vec3d), As=z(Kw, wp.int32), Ao=z(Kw, wp.int32), Aw=z(Kw, wp.float64), used=z(n, wp.int32),
                        wi=z(Kw, wp.int32), wj=z(Kw, wp.int32), wa=z(Kw, wp.float64), wn=z(Kw, wp.vec3d), wt=z(Kw, wp.float64), wtau=z(Kw, wp.vec3d), wd=z(Kw, wp.vec3d), wdn=z(Kw, wp.vec3d),
-                       wk=z(Kw, wp.float64), wfy=z(Kw, wp.float64), wv=z(Kw, wp.float64), a=z(n, wp.vec3d), Mc=z(n, wp.mat33d), Vi=z(n, wp.float64), Q=z(n, wp.mat33d), en=z(n, wp.mat33d),
+                       wk=z(Kw, wp.float64), wb=z(Kw, wp.float64), wv=z(Kw, wp.float64), a=z(n, wp.vec3d), Mc=z(n, wp.mat33d), Vi=z(n, wp.float64), Q=z(n, wp.mat33d), en=z(n, wp.mat33d),
                        Ln=z(n, wp.float64), V0=wp.from_torch(self.V0, dtype=wp.float64))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tul = {k_: tt(a_) for k_, a_ in self.ul.items() if k_ not in ('Kw', 'V0')}
@@ -288,7 +284,7 @@ class PlasticUL:
         wp.launch(k_cell, n, inputs=[B['G'], U['Q'], U['en'], U['Ln'], U['V0'], self.par], outputs=[B['L'], B['enrm'], B['Gb'], B['terms']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         wp.launch(k_Lb, n, inputs=[B['Lb'], U['Q']], outputs=[B['Gb']])
-        wp.launch(k_jump, Kw, inputs=[x, U['xn'], B['G'], U['wi'], U['wj'], U['wd'], U['wdn'], U['wk'], U['wfy']], outputs=[B['wdl'], B['terms'], B['Gb'], g])
+        wp.launch(k_jump, Kw, inputs=[x, U['xn'], B['G'], U['wi'], U['wj'], U['wd'], U['wdn'], U['wk'], U['wb']], outputs=[B['wdl'], B['terms'], B['Gb'], g])
         bl = self.ball
         if bl is not None:
             wp.launch(k_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt']], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
@@ -367,11 +363,11 @@ class PlasticUL:
         wa = A
         if self.grad_kind == 'fit':                                                 # (G = G0: no flux, the whole cell on the fit)
             wa = torch.zeros_like(A); a_ = torch.zeros_like(a_); Mc = V[:, None, None]*self.I3
-        for k2 in ('wi', 'wj', 'wa', 'wn', 'wt', 'wtau', 'wd', 'wdn', 'wk', 'wfy', 'wv'):
+        for k2 in ('wi', 'wj', 'wa', 'wn', 'wt', 'wtau', 'wd', 'wdn', 'wk', 'wb', 'wv'):
             t[k2].zero_()
         t['wi'][:m] = i.to(torch.int32); t['wj'][:m] = j.to(torch.int32); t['wa'][:m] = wa; t['wn'][:m] = nn; t['wt'][:m] = tw
         t['wtau'][:m] = c-(x[i]+tw[:, None]*d); t['wd'][:m] = d
-        t['wk'][:m] = self.mu*A/(3*Lw); t['wfy'][:m] = self.tauy*A/3; t['wv'][:m] = self.kap*A*Lw/24
+        t['wk'][:m] = self.mu*A/(3*Lw); t['wb'][:m] = 1.; t['wv'][:m] = self.kap*A*Lw/24
         lo, hi = torch.minimum(i, j), torch.maximum(i, j); key = lo*n+hi; sg = torch.where(i < j, 1., -1.).to(f64)[:, None]
         if len(self._mem_key):
             pos = torch.searchsorted(self._mem_key, key).clamp(max=len(self._mem_key)-1)
@@ -385,9 +381,16 @@ class PlasticUL:
         t['Q'].copy_(self.I3.expand(n, 3, 3))
 
     def set_rotation(self, z):
-        """the step's frozen rotation: of I + G at Newton's start z (Q = I for that evaluation)"""
+        """the step's frozen rotation, of I + G at Newton's start z (Q = I for that evaluation), and the walls' beta from the cells' trial strains there"""
         self.grad(z)
         self.tul['Q'].copy_(polar_batch(self.I3+self.tG))
+        self.grad(z)
+        i, j, Lw, key, sg, m = self._w
+        b = self._beta(self.tenrm)
+        self.tul['wb'][:m] = .5*(b[i]+b[j])
+
+    def _beta(self, nr):
+        return torch.minimum(torch.ones_like(nr), self.sy/(2*self.mu*nr).clamp(min=1e-300))
 
     def end_ul(self, th=1.):
         """after the step (the buffers at the accepted x^n+1): the returns and the update"""
@@ -397,7 +400,7 @@ class PlasticUL:
         tr = H.diagonal(dim1=1, dim2=2).sum(1)
         e = t['en']+H-(tr/3)[:, None, None]*I3
         nr = e.flatten(1).norm(dim=1)
-        sc = torch.minimum(torch.ones_like(nr), self.sy/(2*self.mu*nr).clamp(min=1e-300))
+        sc = self._beta(nr)
         er = sc[:, None, None]*e
         dep = e-er
         wc = float((self.V0*self.sy*dep.flatten(1).norm(dim=1)).sum()) if math.isfinite(self.sy) else 0.
@@ -410,13 +413,15 @@ class PlasticUL:
         self.ul_stats['flips'] = int(flip.sum()); self.ul_stats['yielding'] = int((sc < 1).sum())
         t['Ln'].add_(torch.where(flip, tr, torch.log(det.clamp(min=1e-3))))
         i, j, Lw, key, sg, m = self._w
-        dl = self.twdl[:m]; nd = dl.norm(dim=1); k, fy = t['wk'][:m], t['wfy'][:m]
-        sw = torch.minimum(torch.ones_like(nd), fy/(k*nd).clamp(min=1e-300))
-        self.ul_stats['wall_yielding'] = int((sw < 1).sum())
-        if math.isfinite(self.tauy):
-            self.Wp += float((fy*nd*(1-sw)).sum())
+        dl = self.twdl[:m]; nd = dl.norm(dim=1); k, wb = t['wk'][:m], t['wb'][:m]
+        self.ul_stats['wall_yielding'] = int((wb < 1).sum())
+        self.Wp += float((.5*k*wb*(1-wb)*nd*nd).sum())                              # (what the step's energy held less what the memory keeps)
+        be = .5*(sc[i]+sc[j])-wb                                                     # (the frozen beta against the cells' at the step's end)
+        self.ul_stats['beta_err'] = (float(be.abs().mean()), float(be.abs().max()))
         Qf = .5*(Q[i]+Q[j])
-        dn = torch.einsum('fab,fb->fa', Qf, sw[:, None]*dl)*sg                       # (the memory oriented low index -> high)
+        dn = torch.einsum('fab,fb->fa', Qf, wb[:, None]*dl)*sg                       # (the memory oriented low index -> high)
+        q_ = dn.norm(dim=1)/Lw
+        self.ul_stats['delta_L'] = (float(q_.median()), float(torch.quantile(q_, .99)), float(q_.max()))
         o = torch.argsort(key); self._mem_key = key[o]; self._mem_d = dn[o]
 
     def stored(self):
@@ -426,7 +431,7 @@ class PlasticUL:
 
     def ul_blocks(self, lr_thr=None, lr_cap=0):
         """the diagonal blocks for the preconditioner, at the step's start (a preconditioner: the walls' direct weights, the cap's, the fit's only through M_s; the tangential
-        offsets' G0 and the variance left out). G_s = sum_k u_k (x) r_sk: V0 (mu_t (|r|^2 I + r r^T / 3) + kap r r^T), mu_t = s_y / (2 |e_tr|) on the yielding cells; the jump's k or fy / |delta|"""
+        offsets' G0 and the variance left out). G_s = sum_k u_k (x) r_sk: V0 (mu_t (|r|^2 I + r r^T / 3) + kap r r^T), mu_t = s_y / (2 |e_tr|) on the yielding cells; the jump's k beta"""
         assert lr_thr is None, 'no low-rank term here'
         n = self.n; t = self.tul; dev = self.dev; i, j, Lw, key, sg, m = self._w
         A, tw, nn, Vi = t['wa'][:m], t['wt'][:m], t['wn'][:m], t['Vi']
@@ -447,8 +452,7 @@ class PlasticUL:
         rr = r[:, :, None]*r[:, None, :]; r2 = (r*r).sum(1)
         K = torch.zeros(n, 3, 3, dtype=f64, device=dev)
         K.index_add_(0, k, (self.V0[s]*mut[s])[:, None, None]*(r2[:, None, None]*self.I3+rr/3)+(self.V0[s]*self.kap)[:, None, None]*rr)
-        kw, fy, nd = t['wk'][:m], t['wfy'][:m], self.twdl[:m].norm(dim=1)
-        kt = torch.minimum(kw, fy/nd.clamp(min=1e-300))[:, None, None]*self.I3
+        kt = (t['wk'][:m]*t['wb'][:m])[:, None, None]*self.I3
         K.index_add_(0, i, kt); K.index_add_(0, j, kt)
         return K
 

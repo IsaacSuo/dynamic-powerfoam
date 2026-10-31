@@ -108,6 +108,7 @@ def save():
 
 t0 = t_saved = time.time()
 Y2 = float((mass*(W.X[:, 1]-(M3*W.X).sum(0)[1]/M)**2).sum())
+nit, npr = [], []
 nf = int(round(1/(24*args.dt))); nsteps = args.frames*nf
 H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
 for s in range(1, nsteps+1):
@@ -126,6 +127,7 @@ for s in range(1, nsteps+1):
         print('step %d, t %.4f: the solve did not converge (|g| / weight %s after %d Newton iterations); CG %s; |g| %s; ratio %s' % (s, s*args.dt, math.sqrt(g2)/wref if math.isfinite(g2) else g2, its, [a__[0] for a__ in tr_][:30], ['%.3g' % (a__[4]/wref) for a__ in tr_][:30], ['%.2g' % a__[5] for a__ in tr_][:30]), flush=True)
         break
     ST.end()
+    nit.append(its); npr.append(e_)
     if s % args.every == 0:
         xs.append(ST.tx.cpu().numpy()); rs.append(W._ulr.cpu().numpy()); Ls.append(W.tul['Ln'].cpu().numpy()); ens.append(W.tul['en'].cpu().numpy()); eps.append(W.ep.cpu().numpy()); ts.append(s*args.dt)
     if s % 20 == 0:
@@ -133,7 +135,7 @@ for s in range(1, nsteps+1):
         ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum())
         bd = W.B['bdelta'].numpy()
         Es_ = float(((M3*(ST.tx-ST.tx.mean(0)))[:, 1]*(ST.tx[:, 1]-(M3*ST.tx).sum(0)[1]/M)).sum())
-        print('  integrated mean strain yy %.4f xx %.4f zz %.4f; cells\' share of W_p %.3f; site height std / rest %.4f, its log %.4f; mean |ep| %.3f' % (float(W.Hsum[1, 1]), float(W.Hsum[0, 0]), float(W.Hsum[2, 2]), W.Wp_cell/max(W.Wp, 1e-300), (Es_/Y2)**.5, .5*math.log(Es_/Y2), float((mass*W.ep.flatten(1).norm(dim=1)).sum())/M), flush=True)
+        print('  integrated mean strain yy %.4f xx %.4f zz %.4f; cells\' share of W_p %.3f; site height std / rest %.4f, its log %.4f; mean |ep| %.3f; frozen beta error mean %.3f max %.3f; memory |delta| / L median %.4f, 99 %% %.4f, max %.4f' % (float(W.Hsum[1, 1]), float(W.Hsum[0, 0]), float(W.Hsum[2, 2]), W.Wp_cell/max(W.Wp, 1e-300), (Es_/Y2)**.5, .5*math.log(Es_/Y2), float((mass*W.ep.flatten(1).norm(dim=1)).sum())/M, *W.ul_stats['beta_err'], *W.ul_stats['delta_L']), flush=True)
         print('t %.4f (%.0f s): KE %.3e dev %.3e vol %.3e jump %.3e var %.3e W_p %.3e; com y %.4f; yielding %d cells, %d of %d walls; J %.3f..%.3f, |eps_p| median %.3f max %.3f; touching %d, ground/weight %.2f; min wall L / h %.3f, max r / h %.2f, radii %d (fails %d), flips %d; products %d, Newton %d, rejected %d, negative %d; %.2f s' % (
             s*args.dt, time.time()-t0, ek, ed, ev, float(W.tsum[3]), float(W.tsum[2]), W.Wp, float((M3*ST.tx)[:, 1].sum())/M, W.ul_stats['yielding'], W.ul_stats['wall_yielding'], m, float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()),
             float(W.ep.flatten(1).norm(dim=1).median()), float(W.ep.flatten(1).norm(dim=1).max()), int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wref, float(Lw.min())/h, float(W._ulr.max())/h, W.ul_stats['radii_it'], W.ul_stats['radii_fail'], W.ul_stats['flips'], e_, its, ST.stats['rejected'], ST.stats['negative'], time.time()-t_s), flush=True)
@@ -143,4 +145,6 @@ for s in range(1, nsteps+1):
     elif time.time()-t_saved > 60:
         save(); t_saved = time.time()
 save()
+ni, np_ = np.array(nit), np.array(npr)
+print('Newton per step: median %d, 99 %% %d, max %d, steps above 50: %d of %d; products per step: median %d, max %d, total %d; plastic work %.4f, cells\' share %.3f' % (np.median(ni), np.percentile(ni, 99), ni.max(), int((ni > 50).sum()), len(ni), np.median(np_), np_.max(), np_.sum(), W.Wp, W.Wp_cell/max(W.Wp, 1e-300)), flush=True)
 print('done: %.0f s' % (time.time()-t0), flush=True)

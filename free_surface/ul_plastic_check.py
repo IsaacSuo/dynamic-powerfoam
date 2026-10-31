@@ -50,8 +50,8 @@ th = .03; Qr = torch.tensor([[np.cos(th), -np.sin(th), 0.], [np.sin(th), np.cos(
 W.set_rotation(X_+(X_@(Qr.T-W.I3)))
 x1 = x1+(X_@(Qr.T-W.I3))
 E0, g0 = W.grad(x1)
-print('state for the gradient: E terms dev %.3e vol %.3e var %.3e jump %.3e ball %.3e; cells over the limit %d of %d, walls %d of %d, balls touching %d' % (
-    *[float(W.tsum[k]) for k in (0, 1, 2, 3, 6)], int((2*W.mu*W.tenrm > W.sy).sum()), n, int((W.tul['wk'][:W._w[5]]*W.twdl[:W._w[5]].norm(dim=1) > W.tul['wfy'][:W._w[5]]).sum()), W._w[5], int((W.B['bdelta'].numpy() > 0).sum())), flush=True)
+print('state for the gradient: E terms dev %.3e vol %.3e var %.3e jump %.3e ball %.3e; cells over the limit %d of %d, walls with beta < 1 %d of %d (beta median %.3f), balls touching %d' % (
+    *[float(W.tsum[k]) for k in (0, 1, 2, 3, 6)], int((2*W.mu*W.tenrm > W.sy).sum()), n, int((W.tul['wb'][:W._w[5]] < 1).sum()), W._w[5], float(W.tul['wb'][:W._w[5]].median()), int((W.B['bdelta'].numpy() > 0).sum())), flush=True)
 wrong = []
 for k in range(6):
     d = torch.randn(n, 3, dtype=f64, device=dev)
@@ -113,8 +113,17 @@ x2 = X_+.6*h*torch.randn(n, 3, dtype=f64, device=dev)*(args.ys/args.E*20)
 W.set_rotation(x2)
 W.grad(x2)
 over0 = int((2*W.mu*W.tenrm > W.sy).sum())
+m_ = W._w[5]; o_ = torch.argsort(W._w[3]); dl0, wb0 = W.twdl[:m_].clone(), W.tul['wb'][:m_].clone()
 W.end_ul(1.)
 nr = W.tul['en'].flatten(1).norm(dim=1)
-print('check 6: %d cells over the limit before; after the return |s| / s_y max %.6f; traceless %.1e; symmetric %.1e; walls yielding %d, memory |k d| / fy max %.6f; plastic work %.3e' % (
+print('check 6: %d cells over the limit before; after the return |s| / s_y max %.6f; traceless %.1e; symmetric %.1e; walls with beta < 1 %d; memory / (beta |delta_tr|) %.4f..%.4f (<= 1: the mean of two rotations); plastic work %.3e (cells %.3e)' % (
     over0, float((2*W.mu*nr/W.sy).max()), float(W.tul['en'].diagonal(dim1=1, dim2=2).sum(1).abs().max()), float((W.tul['en']-W.tul['en'].transpose(1, 2)).abs().max()), W.ul_stats['wall_yielding'],
-    float((W._mem_d.norm(dim=1)*W.tul['wk'][:W._w[5]][torch.argsort(W._w[3])]/W.tul['wfy'][:W._w[5]][torch.argsort(W._w[3])]).max()), W.Wp), flush=True)
+    float((W._mem_d.norm(dim=1)/(wb0[o_]*dl0[o_].norm(dim=1))).min()), float((W._mem_d.norm(dim=1)/(wb0[o_]*dl0[o_].norm(dim=1))).max()), W.Wp, W.Wp_cell), flush=True)
+# 7. an elastic cell's wall keeps its memory: no yield, no motion: the energy is 1/2 k |delta|^2 and the force k delta, in the sum
+W = PlasticUL(X, r, V0, args.E, args.nu, float('inf'), grad='gg')
+W.update_ul(W.X); W.prepare()
+m_ = W._w[5]
+W.tul['wdn'][:m_] = .01*h*torch.randn(m_, 3, dtype=f64, device=dev)
+W.set_rotation(W.X)
+E7, _ = W.grad(W.X)
+print('check 7: sigma_y inf: beta min %.6f; jump energy %.6e against 1/2 k |delta|^2 %.6e' % (float(W.tul['wb'][:m_].min()), float(W.tsum[3]), float((.5*W.tul['wk'][:m_]*W.tul['wdn'][:m_].norm(dim=1)**2).sum())), flush=True)
