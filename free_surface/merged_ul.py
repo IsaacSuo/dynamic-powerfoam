@@ -1,15 +1,16 @@
 """One model for elastic and plastic bodies (2026-10-31; the user: not one or the other, they can be joined). The limit is the only switch. Moduli per unit density, masses = volumes.
 A spring's reading splits: x_j - x_i - R T = (F - R) T + (x_j - x_i - F T), the cell's shape change and a remainder. So the shape part goes to the cell, the remainder stays on the spring:
-  state      each cell F (elastic: its stretch is what the limit holds), each spring its rest offset T. x -> F is linear within a step, F = (I + G(x)) F_n, G the divergence-theorem gradient of ul_plastic.py over the connected walls
+  state      each cell F (elastic: its stretch is what the limit holds), each spring p, what its rest offset T has become. x -> F is linear within a step, F = (I + G(x)) F_n, G the divergence-theorem gradient of ul_plastic.py over the connected walls
   cell       e = dev sym(R^T F): R frozen for the step, read at Newton's start, so the step is convex; R is the rotation nearest F, so its error costs nothing to first order, and the state is F alone. V0 W(e), W von Mises: mu e^2 up to e_y = s_y / (2 mu), then s_y e - s_y^2 / (4 mu). Pressure: V0 kap / 2 L^2, L = L_n + tr(Q^T (I + G)) - 3 within the step, ln det at its end, variance as ul_plastic.py
-  spring     r = x_j - x_i - 1/2 (F_i + F_j) T, linear in x and needing no rotation of its own, energy 1/2 k beta r^2, beta the mean of the two cells' return factors, frozen as R. k = 2 mu A / L as the DEM's bond, of the rest wall while
-             a cell of the pair has not yielded, of the current wall when both have
+  spring     r = x_j - x_i - p_n - 1/2 (G_i + G_j) p_n, linear in x and needing no rotation of its own, energy 1/2 k beta r^2, beta the mean of the two cells' return factors, frozen as R. k = 2 mu A / L as the DEM's bond, of the rest wall while
+             a cell of the pair has not yielded, of the current wall when both have. The lever is p, not each cell's F T (10-31, 1/2 (F_i + F_j) T with T = Fbar^-1 (d - r): in flow F is about a rotation and neighbours differ by up to a half turn,
+             so Fbar went singular, smallest sigma 1e-5, lever 81631 L, the step's first |g| 5.85e7 weights, 99.6 % of it on the springs; without them 25-32)
   step       theta method, forces at z. The return belongs to the step's end: e_e = e_n + (e(z) - e_n) / th, its force (1 - th) 2 mu e_n + th beta 2 mu e_e, potential (1 - th) B(e_n, e - e_n) + th^2 W(e_e); the same on r. Unyielded it is the
              plain theta method; at th = 1/2 it keeps the elastic energy and yielding only dissipates
-  update     at x^n+1: F's deviatoric log stretch held at the limit, the remainder scaled by beta, T moved to read it (T = Fbar^-1 (x_j - x_i - r)). No limit reached: T stays the rest offset, F the total deformation
+  update     at x^n+1: F's deviatoric log stretch held at the limit, the remainder scaled by beta, p_n+1 = x_j - x_i - beta r. No limit reached: F the total deformation, p the rest offset carried by the pair's mean gradient (1/2 (F_i + F_j) T up to (G_i - G_j)(F_i - F_j) T / 4 a step)
   connection the spring list, not the cut. A spring goes only when both cells have yielded and its wall is gone (its force went with the area); a new wall gets a spring when both have yielded, r = 0, otherwise it does not count: the cell treats it
              as a free surface, so nothing pulls across it. Springs without a wall stay in the cell's fit. Self contact is not in this file
-Limit inf: T, the list and the total F never change, an elastic body. Small limit: F is about a rotation, T moves with the flow, ul_plastic.py with a stiffer spring. No switch between them."""
+Limit inf: the list and the total F never change, an elastic body. Small limit: F is about a rotation, p is reset to the flow, ul_plastic.py with a stiffer spring. No switch between them."""
 import math
 
 import numpy as np
@@ -52,16 +53,16 @@ def k_cell_shape(Fc: wp.array(dtype=wp.mat33d), Rh: wp.array(dtype=wp.mat33d), e
 
 
 @wp.kernel(enable_backward=False)
-def k_spring(x: wp.array(dtype=wp.vec3d), Fc: wp.array(dtype=wp.mat33d), si: wp.array(dtype=int), sj: wp.array(dtype=int), sT: wp.array(dtype=wp.vec3d), sdn: wp.array(dtype=wp.vec3d), sk: wp.array(dtype=wp.float64),
-             sb: wp.array(dtype=wp.float64), th_: wp.float64, sr: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d), Fb: wp.array(dtype=wp.mat33d)):
+def k_spring(x: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), si: wp.array(dtype=int), sj: wp.array(dtype=int), sP: wp.array(dtype=wp.vec3d), sdn: wp.array(dtype=wp.vec3d), sk: wp.array(dtype=wp.float64),
+             sb: wp.array(dtype=wp.float64), th_: wp.float64, sr: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d), Gb: wp.array(dtype=wp.mat33d)):
     """the remainder at z, at the step's end into sr, and its force"""
     e = wp.tid()
     i, j = si[e], sj[e]
     if i == j:
         return
     half = wp.float64(0.5)
-    T = sT[e]
-    d = x[j]-x[i]-half*(Fc[i]@T+Fc[j]@T)
+    p = sP[e]
+    d = x[j]-x[i]-p-half*(G[i]@p+G[j]@p)
     ca = wp.float64(1.0)-th_
     dn = sdn[e]
     r = (d-ca*dn)/th_
@@ -71,9 +72,9 @@ def k_spring(x: wp.array(dtype=wp.vec3d), Fc: wp.array(dtype=wp.mat33d), si: wp.
     f = k*(ca*dn+(th_*b)*r)
     wp.atomic_add(x_adj, j, f)
     wp.atomic_add(x_adj, i, -f)
-    PF = -half*wp.outer(f, T)
-    wp.atomic_add(Fb, i, PF)
-    wp.atomic_add(Fb, j, PF)
+    PG = -half*wp.outer(f, p)
+    wp.atomic_add(Gb, i, PG)
+    wp.atomic_add(Gb, j, PG)
 
 
 class MergedUL(PlasticUL):
@@ -88,14 +89,14 @@ class MergedUL(PlasticUL):
         lo, hi = torch.minimum(p[:, 0], p[:, 1]), torch.maximum(p[:, 0], p[:, 1])
         self.tlo, self.thi = lo, hi
         d = X_[hi]-X_[lo]; L = d.norm(dim=1)
-        self.tT = d.clone(); self.tk0 = self.kshare*2*self.mu*A0/L; self.tkey = lo*n+hi
-        self.tdl = torch.zeros_like(d)                                              # (the remainder kept across a step, for a pair with a yielded cell)
+        self.tk0 = self.kshare*2*self.mu*A0/L; self.tkey = lo*n+hi
+        self.tdl = torch.zeros_like(d)                                              # (the remainder kept across a step)
         o = torch.argsort(self.tkey)
-        self.tlo, self.thi, self.tT, self.tk0, self.tkey, self.tdl = lo[o], hi[o], self.tT[o], self.tk0[o], self.tkey[o], self.tdl[o]
+        self.tlo, self.thi, self.tk0, self.tkey, self.tdl = lo[o], hi[o], self.tk0[o], self.tkey[o], self.tdl[o]
         self.restkey = self.tkey.clone()
         Ks = self.ul['Kw']
         z = lambda k, dt_: wp.zeros(k, dtype=dt_, device=dev)
-        self.sp = dict(K=Ks, si=z(Ks, wp.int32), sj=z(Ks, wp.int32), sT=z(Ks, wp.vec3d), sdn=z(Ks, wp.vec3d), sk=z(Ks, wp.float64), sb=z(Ks, wp.float64), sr=z(Ks, wp.vec3d),
+        self.sp = dict(K=Ks, si=z(Ks, wp.int32), sj=z(Ks, wp.int32), sP=z(Ks, wp.vec3d), sdn=z(Ks, wp.vec3d), sk=z(Ks, wp.float64), sb=z(Ks, wp.float64), sr=z(Ks, wp.vec3d),
                        F0=z(n, wp.mat33d), Rh=z(n, wp.mat33d), en=z(n, wp.mat33d), Fend=z(n, wp.mat33d))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tsp = {k_: tt(a_) for k_, a_ in self.sp.items() if k_ != 'K'}
@@ -140,8 +141,8 @@ class MergedUL(PlasticUL):
         wp.launch(k_L, n, inputs=[B['G'], U['Q'], U['Ln'], U['V0'], kap], outputs=[B['L'], B['Lb'], B['terms']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         wp.launch(k_cell_shape, n, inputs=[B['Fc'], S['Rh'], S['en'], U['V0'], mu, sy, th_], outputs=[B['ei'], B['be'], B['er'], B['Fb'], B['terms']])
-        wp.launch(k_spring, S['K'], inputs=[x, B['Fc'], S['si'], S['sj'], S['sT'], S['sdn'], S['sk'], S['sb'], th_], outputs=[S['sr'], B['terms'], g, B['Fb']])
         wp.launch(k_Fs_adj, n, inputs=[B['Fb'], S['F0']], outputs=[B['Gb']])
+        wp.launch(k_spring, S['K'], inputs=[x, B['G'], S['si'], S['sj'], S['sP'], S['sdn'], S['sk'], S['sb'], th_], outputs=[S['sr'], B['terms'], g, B['Gb']])
         wp.launch(k_Lb, n, inputs=[B['Lb'], U['Q']], outputs=[B['Gb']])
         bl = self.ball
         if bl is not None:
@@ -180,21 +181,16 @@ class MergedUL(PlasticUL):
         ds = x[hi_s]-x[lo_s]
         nnew = int(new.sum())
         dl_ = torch.cat([self.tdl[stay], torch.zeros(nnew, 3, dtype=f64, device=dev)])
-        T_ = torch.cat([self.tT[stay], torch.zeros(nnew, 3, dtype=f64, device=dev)])
         k0_ = torch.cat([self.tk0[stay], torch.zeros(nnew, dtype=f64, device=dev)])
         key_s = lo_s*n+hi_s
         o = torch.argsort(key_s)
-        lo_s, hi_s, ds, dl_, T_, k0_, key_s = lo_s[o], hi_s[o], ds[o], dl_[o], T_[o], k0_[o], key_s[o]
+        lo_s, hi_s, ds, dl_, k0_, key_s = lo_s[o], hi_s[o], ds[o], dl_[o], k0_[o], key_s[o]
         self.tlo, self.thi, self.tkey = lo_s, hi_s, key_s
         m_s = len(key_s)
         if m_s > self.sp['K']:
             raise RuntimeError('update_ul: %d springs over the capacity %d' % (m_s, self.sp['K']))
-        Fb = .5*(Fe[lo_s]+Fe[hi_s])
-        any_y = yld[lo_s] | yld[hi_s]; both_y = yld[lo_s] & yld[hi_s]
-        # T moves for a pair with a yielded cell, so the reading at x is the kept remainder; otherwise T stays and the reading is what it is
-        if bool(any_y.any()):
-            T_[any_y] = torch.linalg.solve(Fb[any_y], (ds[any_y]-dl_[any_y]).unsqueeze(-1)).squeeze(-1)
-        dn_ = ds-torch.einsum('fab,fb->fa', Fb, T_)
+        both_y = yld[lo_s] & yld[hi_s]
+        p_ = ds-dl_                                                                 # (the offset that reads the kept remainder at x; a new spring's r = 0)
         # the connected walls, by their pair; k of the current wall when both cells have yielded
         pos = torch.searchsorted(key_s, key).clamp(max=m_s-1); conn = key_s[pos] == key
         order = torch.argsort(key); pw = torch.searchsorted(key[order], key_s).clamp(max=len(key)-1); has_wall = key[order][pw] == key_s
@@ -202,10 +198,10 @@ class MergedUL(PlasticUL):
         k_ = k0_.clone(); q_ = both_y & has_wall
         Ls_ = ds.norm(dim=1)
         k_[q_] = self.kshare*2*self.mu*Aw[q_]/Ls_[q_]
-        self.tT, self.tdl, self.tk0 = T_, dn_.clone(), k_.clone()
-        for k2 in ('si', 'sj', 'sT', 'sdn', 'sk'):
+        self.tP, self.tdl, self.tk0 = p_, dl_.clone(), k_.clone()
+        for k2 in ('si', 'sj', 'sP', 'sdn', 'sk'):
             s[k2].zero_()
-        s['si'][:m_s] = lo_s.to(torch.int32); s['sj'][:m_s] = hi_s.to(torch.int32); s['sT'][:m_s] = T_; s['sdn'][:m_s] = dn_; s['sk'][:m_s] = k_; s['sb'].fill_(1.)
+        s['si'][:m_s] = lo_s.to(torch.int32); s['sj'][:m_s] = hi_s.to(torch.int32); s['sP'][:m_s] = p_; s['sdn'][:m_s] = dl_; s['sk'][:m_s] = k_; s['sb'].fill_(1.)
         self._m_s = m_s
         ic, jc, Ac, cc = i[conn], j[conn], A[conn], c[conn]
         m = len(ic); U = self.ul

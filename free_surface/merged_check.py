@@ -109,7 +109,7 @@ for N in (20, 40, 80):
     W.update_ul(x_)
     E, gr = W.grad(x_)
     print('  %d steps: |F - I| median %.2e, 99%% %.2e, max %.2e; ln J max %.2e; remainder / L max %.2e; E %.3e, against the peak store mu |e|^2 V %.3e; walls %d, springs without a wall %d, new %d' % (
-        N, float(dF.median()), float(torch.quantile(dF, .99)), float(dF.max()), float(W.tul['Ln'].abs().max()), float((W.tsp['sdn'][:W._m_s].norm(dim=1)/(W.tT.norm(dim=1))).max()), float(E), mu*.25**2*Vt, W.ul_stats['walls'], W.ul_stats['ghost'], W.ul_stats['born']))
+        N, float(dF.median()), float(torch.quantile(dF, .99)), float(dF.max()), float(W.tul['Ln'].abs().max()), float((W.tsp['sdn'][:W._m_s].norm(dim=1)/(W.tP.norm(dim=1))).max()), float(E), mu*.25**2*Vt, W.ul_stats['walls'], W.ul_stats['ghost'], W.ul_stats['born']))
 # the return, and a step with memories
 for a in (1.5, 3, 10):
     W = model(args.E*args.ey)

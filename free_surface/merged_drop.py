@@ -119,7 +119,7 @@ probes = []
 
 
 def probe(ST_):
-    """at the step's first point, after the re-read: the springs' part of |g| (their k off for one evaluation, then back), the levers F T of their chain through G, the neighbours' relative rotation. Logging only"""
+    """at the step's first point, after the re-read: the springs' part of |g| (their k off for one evaluation, then back), the levers p of their chain through G, the neighbours' relative rotation (F no longer enters the springs). Logging only"""
     s_, m_, lo, hi = W.tsp, W._m_s, W.tlo, W.thi
     g_all = wp_t(ST_.a['gz']).clone()
     sk_ = s_['sk'].clone(); s_['sk'].zero_()
@@ -128,9 +128,9 @@ def probe(ST_):
     ST_._eval(0.); ST_._accept()
     n_all, n_no, n_sp = float(g_all.norm())/wref, float(g_no.norm())/wref, float((g_all-g_no).norm())/wref
     gn = g_all.norm(dim=1); top = int(gn.argmax())
-    F0, T, k_, b_, r_, dn_ = s_['F0'], s_['sT'][:m_], s_['sk'][:m_], s_['sb'][:m_], s_['sr'][:m_], s_['sdn'][:m_]
+    F0, T, k_, b_, r_, dn_ = s_['F0'], s_['sP'][:m_], s_['sk'][:m_], s_['sb'][:m_], s_['sr'][:m_], s_['sdn'][:m_]
     dl = (ST_.tx[hi]-ST_.tx[lo]).norm(dim=1)
-    ai, aj = torch.einsum('fab,fb->fa', F0[lo], T).norm(dim=1), torch.einsum('fab,fb->fa', F0[hi], T).norm(dim=1)
+    ai = aj = T.norm(dim=1)
     lev = torch.maximum(ai, aj)/dl
     sg = torch.linalg.svdvals((.5*(F0[lo]+F0[hi])).cpu())[:, 2].to(dev)
     U, _, Vh = torch.linalg.svd(F0.cpu())
@@ -143,7 +143,7 @@ def probe(ST_):
     ring = torch.cat([hi[lo == c1], lo[hi == c1], hi[lo == c2], lo[hi == c2], torch.tensor([c1, c2], device=dev)])
     q_ = lambda a__, p_: float(torch.quantile(a__, p_))
     med = W.V0.median()
-    print('  lever step %d t %.4f: first |g| %.3g, without the springs %.3g, the springs\' part %.3g; top site %d, |g| %.3g, V0/med %.2f; Fbar smallest sigma: min %.3g, 0.1 %% %.3f, 1 %% %.3f; |F T| / |d|: median %.2f, 99 %% %.2f, 99.9 %% %.2f, max %.3g, above 3: %d, 10: %d, 100: %d; |T| / |d| max %.3g; relative rotation in degrees: median %.1f, 99 %% %.1f, 99.9 %% %.1f, max %.2f, above 90: %d, 150: %d; |r| / |d| at the start max %.3g; the top spring (%d, %d): lever %.3g, sigma %.3g, rotation %.2f, |r| / |d| %.3g, |G_i - G_j| %.3g, k %.3g, beta %.3f, V0/med %.2f %.2f; the top site in its rings: %d' % (
+    print('  lever step %d t %.4f: first |g| %.3g, without the springs %.3g, the springs\' part %.3g; top site %d, |g| %.3g, V0/med %.2f; Fbar smallest sigma: min %.3g, 0.1 %% %.3f, 1 %% %.3f; |p| / |d|: median %.2f, 99 %% %.2f, 99.9 %% %.2f, max %.3g, above 3: %d, 10: %d, 100: %d; |p| / |d| max %.3g; relative rotation in degrees: median %.1f, 99 %% %.1f, 99.9 %% %.1f, max %.2f, above 90: %d, 150: %d; |r| / |d| at the start max %.3g; the top spring (%d, %d): lever %.3g, sigma %.3g, rotation %.2f, |r| / |d| %.3g, |G_i - G_j| %.3g, k %.3g, beta %.3f, V0/med %.2f %.2f; the top site in its rings: %d' % (
         s, s*args.dt, n_all, n_no, n_sp, top, float(gn[top])/wref, float(W.V0[top]/med), float(sg.min()), q_(sg, .001), q_(sg, .01), q_(lev, .5), q_(lev, .99), q_(lev, .999), float(lev.max()), int((lev > 3).sum()), int((lev > 10).sum()), int((lev > 100).sum()), float((T.norm(dim=1)/dl).max()),
         q_(ang, .5), q_(ang, .99), q_(ang, .999), float(ang.max()), int((ang > 90).sum()), int((ang > 150).sum()), float((r_.norm(dim=1)/dl).max()), c1, c2, float(lev[e_]), float(sg[e_]), float(ang[e_]), float(r_[e_].norm()/dl[e_]), float((W.tG[c1]-W.tG[c2]).norm()), float(k_[e_]), float(b_[e_]), float(W.V0[c1]/med), float(W.V0[c2]/med), int(bool((ring == top).any()))), flush=True)
     probes.append((s, s*args.dt, n_all, n_no, n_sp, float(sg.min()), q_(lev, .999), float(lev.max()), q_(ang, .999), float(ang.max()), float((r_.norm(dim=1)/dl).max()), float(lev[e_]), float(sg[e_]), int(bool((ring == top).any()))))
