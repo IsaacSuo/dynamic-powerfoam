@@ -257,16 +257,17 @@ class PlasticUL:
         self.stick = True
 
     def footprint(self, x, r, g=None):
-        """each cell's area on the ground plane: a point y of the plane has power |y - p|^2 + d^2 - r^2 (p the site's projection, d its height), so the plane is cut by the 2-d power diagram of the
-        circles a^2 = r^2 - d^2; the areas add up to the union of the discs, nothing counted twice. On a raster of spacing g (default a quarter of the median cell size)"""
+        """each touching cell's plan view: the column over a point y of the plane goes to the touching cell of least power |y - p|^2 - r^2 (p the site's projection), so the plane is cut by the 2-d power
+        diagram of the circles of radius r; the areas add up to the union of the discs, nothing counted twice. Not the ball cut by the ground (r^2 - d^2): the balls are bumps touching with their tips, discs of 5-6 mm
+        on cells of 15 mm, a footprint 2-6 times the MPM's contact area too small (10-31), while the material under a site reaches the ground all across its section. On a raster of spacing g (default a quarter of the median cell size)"""
         A = torch.zeros(self.n, dtype=f64, device=x.device); ng = torch.tensor([self.ball['ng'][k_] for k_ in range(3)], dtype=f64, device=x.device)
-        d = x@ng-float(self.tball[2]); a2 = r*r-d*d
-        c = torch.nonzero((d < r) & (a2 > 0)).flatten()
+        d = x@ng-float(self.tball[2])
+        c = torch.nonzero((d < r) & (d > -r)).flatten()
         if len(c) == 0:
             return A
         k0 = int(torch.argmin(ng.abs())); e0 = torch.zeros(3, dtype=f64, device=x.device); e0[k0] = 1.
         u = torch.linalg.cross(ng, e0); u = u/u.norm(); v = torch.linalg.cross(ng, u)
-        P = torch.stack([x[c]@u, x[c]@v], 1); ac = a2[c]; rc = ac.sqrt()
+        rc = r[c]; ac = rc*rc; P = torch.stack([x[c]@u, x[c]@v], 1)
         g = float(self.V0.median())**(1/3)/4 if g is None else g
         lo, hi = (P-rc[:, None]).min(0).values, (P+rc[:, None]).max(0).values
         gx = torch.arange(float(lo[0])+g/2, float(hi[0]), g, dtype=f64, device=x.device); gy = torch.arange(float(lo[1])+g/2, float(hi[1]), g, dtype=f64, device=x.device)

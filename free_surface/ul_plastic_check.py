@@ -124,13 +124,14 @@ import math
 W = model('gg')
 yp = float(W.tball[2]); Ra, Da = .02, .03
 xs = W.X[:, :0].new_zeros((n, 3)); xs[:, 1] = yp+10.
-xs[0] = torch.tensor([0., yp, 0.], dtype=f64); xs[1] = torch.tensor([Da, yp, 0.], dtype=f64); xs[2] = torch.tensor([.2, yp, 0.], dtype=f64)
+xs[0] = torch.tensor([0., yp, 0.], dtype=f64); xs[1] = torch.tensor([Da, yp, 0.], dtype=f64); xs[2] = torch.tensor([.2, yp+.5*Ra, 0.], dtype=f64)   # (the third a height up: its plan view does not depend on it; the cut by the ground would be pi (r^2 - d^2))
 rs = torch.full((n,), 1e-3, dtype=f64, device=dev); rs[:3] = Ra
 lens = 2*Ra*Ra*math.acos(Da/(2*Ra))-.5*Da*math.sqrt(4*Ra*Ra-Da*Da)
 ex = (math.pi*Ra*Ra-.5*lens, math.pi*Ra*Ra)
 for gs in (h/4, h/16):
     Af = W.footprint(xs, rs, g=gs)
-    print('check 8: the footprint, raster %.2f mm: discs 1, 2 of the overlapping pair %.4e, %.4e against %.4e; the third %.4e against %.4e; others %.1e' % (1e3*gs, float(Af[0]), float(Af[1]), ex[0], float(Af[2]), ex[1], float(Af[3:].sum())), flush=True)
+    print('check 8: the footprint, raster %.2f mm: discs 1, 2 of the overlapping pair %.4e, %.4e against %.4e; the third, %.1f r up, %.4e against %.4e; others %.1e' % (1e3*gs, float(Af[0]), float(Af[1]), ex[0], .5, float(Af[2]), ex[1], float(Af[3:].sum())), flush=True)
+assert abs(float(Af[2])/ex[1]-1) < .01 and abs(float(Af[0])/ex[0]-1) < .01, 'check 8 failed: the plan view against the exact discs'
 W.set_stick()
 x9 = X_+.02*h*torch.randn(n, 3, dtype=f64, device=dev)
 tb = {k_: __import__('warp').to_torch(W.ball[k_], requires_grad=False) for k_ in ('xn', 'kt', 'bound', 'lamt')}
