@@ -38,9 +38,11 @@ print('rest: E %.3e, max |g| %.3e' % (float(E), float(gr.norm(dim=1).max())))
 Rq = torch.linalg.qr(torch.as_tensor(np.random.default_rng(1).normal(size=(3, 3)), device=dev))[0]
 Rq = Rq*torch.sign(torch.linalg.det(Rq))
 x = (X-xc)@Rq.T+xc+.01
-W.grad(x); W.reread()
-E, gr = W.grad(x)
-print('rigid motion: E %.3e against the store at e_y %.3e; max |g| %.3e against one wall at the limit %.3e' % (float(E), mu*ey*ey*Vt, float(gr.norm(dim=1).max()), 2*mu*ey*float(W._ulG.wall_A.detach().max())))
+z_ = X+th*(x-X)
+W.grad(z_); W.reread(); W.grad(z_)
+print('rigid motion, z on the chord: |L| max %.3e, spring energy %.3e' % (float(W.tL.abs().max()), float(W.tsum[5])))
+W.grad(x); W.reread(); W.grad(x)
+print('rigid motion, z at its end: shape and spring energy %.3e against the store at e_y %.3e' % (float(W.tsum[0]+W.tsum[3]+W.tsum[5]), mu*ey*ey*Vt))
 e0 = {}
 for name, v in dict(uniaxial=(2, -1, -1), shear=(1, -1, 0)).items():
     v = torch.tensor(v, dtype=f64, device=dev); v = v/v.norm(); e0[name] = Rq@torch.diag(v)@Rq.T

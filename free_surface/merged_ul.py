@@ -1,7 +1,8 @@
 """One model for elastic and plastic bodies (2026-10-31; the user: not one or the other, they can be joined). The limit is the only switch. Moduli per unit density, masses = volumes.
 A spring's reading splits: x_j - x_i - R T = (F - R) T + (x_j - x_i - F T), the cell's shape change and a remainder. So the shape part goes to the cell, the remainder stays on the spring:
   state      each cell F (elastic: its stretch is what the limit holds), each spring p, what its rest offset T has become. x -> F is linear within a step, F = (I + G(x)) F_n, G the divergence-theorem gradient of ul_plastic.py over the connected walls
-  cell       e = dev sym(R^T F): R frozen for the step, read at Newton's start, so the step is convex; R is the rotation nearest F, so its error costs nothing to first order, and the state is F alone. V0 W(e), W von Mises: mu e^2 up to e_y = s_y / (2 mu), then s_y e - s_y^2 / (4 mu). Pressure: V0 kap / 2 L^2, L = L_n + tr(Q^T (I + G)) - 3 within the step, ln det at its end, variance as ul_plastic.py
+  cell       e = dev sym(R^T F): R frozen for the step, read at Newton's start, so the step is convex; R is the rotation nearest F, so its error costs nothing to first order, and the state is F alone. V0 W(e), W von Mises: mu e^2 up to e_y = s_y / (2 mu), then s_y e - s_y^2 / (4 mu). Pressure: V0 kap / 2 L^2, L = L_n + tr(C^T G) within the step, L_n + tr(C^T G) / th at its end, C = (I + G / (2 th))^-T frozen as R: at th = 1/2 its work is its store, a rotation reads 0, ln J is read to third order
+             (10-31: tr(Q^T (I + G)) - 3 within the step with ln det at its end made 8.3 % of the start's energy by 0.27 s of the landing, everything else 0.03 %, as a cell flattened in one step reads little within it and a lot at its end). Variance as ul_plastic.py
   spring     r = x_j - x_i - p_n - 1/2 (G_i + G_j) p_n, linear in x and needing no rotation of its own, energy 1/2 k beta r^2, beta the mean of the two cells' return factors, frozen as R. k = 2 mu A / L as the DEM's bond, of the rest wall while
              a cell of the pair has not yielded, of the current wall when both have. The lever is p, not each cell's F T (10-31, 1/2 (F_i + F_j) T with T = Fbar^-1 (d - r): in flow F is about a rotation and neighbours differ by up to a half turn,
              so Fbar went singular, smallest sigma 1e-5, lever 81631 L, the step's first |g| 5.85e7 weights, 99.6 % of it on the springs; without them 25-32)
@@ -19,10 +20,21 @@ import warp as wp
 
 from free_surface.closure_warp import MidpointStep, PS_GQ2, PS_PQ, PS_PZ, k_Aul, k_F8, k_Gul, k_Gul_adj, k_ball, k_ball_adj, k_mid_ball, k_mid_begin, k_mid_inv, k_mid_pre, k_mid_pre_ball
 from free_surface.skin_warp import NSLOT, NT, k_total, k_total_loss
-from free_surface.spring_plastic import k_Fs, k_Fs_adj, k_L
+from free_surface.spring_plastic import k_Fs, k_Fs_adj
 from free_surface.ul_plastic import PlasticUL, k_Aul_adj2, k_Ge, k_Ge_adj, k_Lb, k_gg_cell, k_gg_cell_adj, k_gg_wall, k_gg_wall_adj, k_var, polar_batch
 
 f64 = torch.float64
+
+
+@wp.kernel(enable_backward=False)
+def k_Lc(G: wp.array(dtype=wp.mat33d), C: wp.array(dtype=wp.mat33d), Ln: wp.array(dtype=wp.float64), V0: wp.array(dtype=wp.float64), kap: wp.float64, L: wp.array(dtype=wp.float64),
+         Lb: wp.array(dtype=wp.float64), terms: wp.array2d(dtype=wp.float64)):
+    """L = L_n + tr(C^T G) and its energy; dE/dL into Lb"""
+    b = wp.tid()
+    Lc = Ln[b]+wp.trace(wp.transpose(C[b])@G[b])
+    L[b] = Lc
+    wp.atomic_add(terms, 1, b % NSLOT, V0[b]*wp.float64(0.5)*kap*Lc*Lc)
+    wp.atomic_add(Lb, b, V0[b]*kap*Lc)
 
 
 @wp.kernel(enable_backward=False)
@@ -138,7 +150,7 @@ class MergedUL(PlasticUL):
         wp.launch(k_gg_wall, Kw, inputs=[x, U['xn']]+wall+[B['Ge']], outputs=[B['Sg']])
         wp.launch(k_gg_cell, n, inputs=[x, U['xn'], B['Sg'], B['Ge'], U['a'], U['Mc'], U['Vi']], outputs=[B['G']])
         wp.launch(k_Fs, n, inputs=[B['G'], S['F0']], outputs=[B['Fc']])
-        wp.launch(k_L, n, inputs=[B['G'], U['Q'], U['Ln'], U['V0'], kap], outputs=[B['L'], B['Lb'], B['terms']])
+        wp.launch(k_Lc, n, inputs=[B['G'], U['Q'], U['Ln'], U['V0'], kap], outputs=[B['L'], B['Lb'], B['terms']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         wp.launch(k_cell_shape, n, inputs=[B['Fc'], S['Rh'], S['en'], U['V0'], mu, sy, th_], outputs=[B['ei'], B['be'], B['er'], B['Fb'], B['terms']])
         wp.launch(k_Fs_adj, n, inputs=[B['Fb'], S['F0']], outputs=[B['Gb']])
@@ -269,7 +281,10 @@ class MergedUL(PlasticUL):
         s, m = self.tsp, self._m_s
         wp.launch(k_F8, self.n, inputs=[self.B['Fc']], outputs=[self.B['Fp'], self.B['Rp'], self.B['qp']])
         s['Rh'].copy_(self.tRp)
-        self.tul['Q'].copy_(polar_batch(self.I3+self.tG))
+        M = self.I3+self.tG/(2*self.th)                                             # (U['Q'] holds C; a cell flipped at this point reads the plain trace)
+        a0, a1, a2 = M[:, :, 0], M[:, :, 1], M[:, :, 2]; c0, c1, c2 = torch.linalg.cross(a1, a2), torch.linalg.cross(a2, a0), torch.linalg.cross(a0, a1)
+        det = (a0*c0).sum(1); ok = det > 1e-3
+        self.tul['Q'].copy_(torch.where(ok[:, None, None], torch.stack([c0, c1, c2], 2)/torch.where(ok, det, torch.ones_like(det))[:, None, None], self.I3))
         if beta:
             s['sb'][:m] = .5*(self.tbe[self.tlo]+self.tbe[self.thi])
 
@@ -317,10 +332,8 @@ class MergedUL(PlasticUL):
         self._Fe = Fe
         self._yld = new
         self.Hsum += (self.V0[:, None, None]*H).sum(0)/self.V0.sum()
-        Fr = I3+Gs; det = torch.linalg.det(Fr); flip = det <= 1e-3
-        tr = H.diagonal(dim1=1, dim2=2).sum(1)
-        self.ul_stats['flips'] = int(flip.sum()); self.ul_stats['yielding'] = int(yn.sum()); self.ul_stats['yielded'] = int(new.sum())
-        t['Ln'].add_(torch.where(flip, tr, torch.log(det.clamp(min=1e-3))))
+        self.ul_stats['flips'] = int((torch.linalg.det(I3+Gs) <= 1e-3).sum()); self.ul_stats['yielding'] = int(yn.sum()); self.ul_stats['yielded'] = int(new.sum())
+        t['Ln'].add_((t['Q']*self.tG).sum((1, 2))/th)
 
     def stored(self):
         """the elastic energy after the last end_ul: shape, on the F kept; volume"""
@@ -350,8 +363,9 @@ class MergedUL(PlasticUL):
         r = torch.zeros(len(u), 3, dtype=f64, device=dev).index_add(0, inv, ra); sc, kc = u//n, u % n
         mut = self.mu*self.tbe
         rr = r[:, :, None]*r[:, None, :]; r2 = (r*r).sum(1)
+        cr = torch.einsum('fab,fb->fa', t['Q'][sc], r)                              # (dL/du = C r)
         K = torch.zeros(n, 3, 3, dtype=f64, device=dev)
-        K.index_add_(0, kc, (self.V0[sc]*mut[sc])[:, None, None]*(r2[:, None, None]*self.I3+rr/3)+(self.V0[sc]*self.kap)[:, None, None]*rr)
+        K.index_add_(0, kc, (self.V0[sc]*mut[sc])[:, None, None]*(r2[:, None, None]*self.I3+rr/3)+(self.V0[sc]*self.kap)[:, None, None]*(cr[:, :, None]*cr[:, None, :]))
         ms = self._m_s
         kb = (s['sk'][:ms]*s['sb'][:ms])[:, None, None]*self.I3
         K.index_add_(0, self.tlo, kb); K.index_add_(0, self.thi, kb)
