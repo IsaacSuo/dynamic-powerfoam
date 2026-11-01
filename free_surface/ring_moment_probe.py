@@ -135,3 +135,51 @@ def probe(W, ST, mass, tol, wref, V0, nl=150):
         cnt[0] = 0
         _, _, _, it, nrep = W._recut.solve_radii(xs[2], st_, Vt, tol=W._ul_tol, r_base=W._rr0)
         print('radii to %.0e from %s: Newton %d, geometries %d, repairs %d' % (W._ul_tol, name, it, cnt[0], nrep), flush=True)
+
+
+def probe_dt(W, ST, mass, tol, V0, nl=80):
+    """what an explicit step could be: the largest frequency of M^-1 K at a frozen state, by cell and overall, and one force's time"""
+    import time
+    from free_surface.ring_moment import exact_blocks
+    dev = W.dev; n = W.n
+    ST.step(tol, lambda g_: .5*tol)
+    z = ST.tz.clone()
+    t0 = time.time(); _, g0 = W.grad(z); g0 = g0.clone(); float(g0.sum()); t1 = time.time()
+    for _ in range(20):
+        _, g_ = W.grad(z); float(g_.sum())
+    print('one force: %.2f ms' % (1e3*(time.time()-t1)/20), flush=True)
+    m = mass
+
+    def K(d):
+        s_ = float(d.abs().max()); s_ = s_ if s_ > 0 else 1.
+        _, g1 = W.grad(z+1e-9*d/s_)
+        return (g1-g0)*s_/1e-9
+    r = torch.randn(n, 3, dtype=f64, device=dev)
+    zr = r/m[:, None]; be = math.sqrt(float((r*zr).sum()))
+    V, U, al, bt = [], [], [], []
+    for j in range(nl):
+        v = zr/be; u = r/be
+        V.append(v); U.append(u)
+        Kv = K(v)
+        a = float((v*Kv).sum()); al.append(a)
+        r = Kv-a*u-(be*U[-2] if j > 0 else 0.)
+        for k in range(len(U)):
+            r = r-float((V[k]*r).sum())*U[k]
+        zr = r/m[:, None]; be = math.sqrt(max(float((r*zr).sum()), 1e-300)); bt.append(be)
+    T = torch.diag(torch.tensor(al, dtype=f64))+torch.diag(torch.tensor(bt[:-1], dtype=f64), 1)+torch.diag(torch.tensor(bt[:-1], dtype=f64), -1)
+    th, S = torch.linalg.eigh(T)
+    top = th[-5:].numpy()
+    print('M^-1 K, largest: %s; explicit dt limit 2 / omega: 1 / %.0f (now dt 1 / %.0f); most negative %.3e' % (np.round(top, 0).tolist(), math.sqrt(float(th[-1]))/2, 1/ST.dt, float(th[0])), flush=True)
+    y = (S[:, -1].to(dev)[:, None, None]*torch.stack(V, 0)).sum(0)
+    sh = (m[:, None]*y*y).sum(1); sh = sh/sh.sum()
+    Lc = W.tlo; lo, hi = W.tlo, W.thi
+    d = z[hi]-z[lo]; L = d.norm(dim=1); Lmin = torch.full((n,), 1e9, dtype=f64, device=dev); Lmin.scatter_reduce_(0, lo, L, 'amin'); Lmin.scatter_reduce_(0, hi, L, 'amin')
+    h_ = float(np.median(V0)**(1/3))
+    print('  it lives on %.1f cells: %s (cell, share, V / median, nearest L / h)' % (1/float((sh*sh).sum()), [(int(c), round(float(sh[c]), 3), round(float(V0[c])/float(np.median(V0)), 3), round(float(Lmin[c])/h_, 3)) for c in torch.argsort(sh, descending=True)[:4]]), flush=True)
+    Kb, _ = exact_blocks(W, z, g0, torch.zeros_like(m))
+    ev = torch.linalg.eigvalsh(Kb.cpu())[:, 2].to(dev)
+    rate = ev.clamp(min=0.)/m
+    q = lambda p_: float(torch.quantile(rate, p_))
+    print('per cell, block / mass: median %.0f, 90 %% %.0f, 99 %% %.0f, 99.9 %% %.0f, max %.0f' % (q(.5), q(.9), q(.99), q(.999), float(rate.max())), flush=True)
+    for hz in (1200, 2400, 4800, 9600, 19200, 38400):
+        print('  dt 1 / %5d: cells over the single-cell limit %d' % (hz, int((rate.sqrt() > 2*hz).sum())), flush=True)

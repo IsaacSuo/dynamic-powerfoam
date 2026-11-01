@@ -47,6 +47,7 @@ a_.add_argument('--tangent', action='store_true', help='the outer iteration on t
 a_.add_argument('--probe', action='store_true', help='at the loaded state: ring_moment_probe.py, then stop')
 a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
 a_.add_argument('--no-extrap', action='store_true', help='the radii from the last radii')
+a_.add_argument('--probe-dt', action='store_true', help='at the loaded state: the explicit step limit, then stop')
 a_.add_argument('--eta', type=float, default=.01, help='CG to this of |g|')
 a_.add_argument('--eta-out', type=float, default=.1, help='a frozen problem to this of |g|')
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
@@ -223,6 +224,10 @@ if args.no_extrap:
     W.radii_extrap = False
 ST.pre_every = args.pre_every
 ST._pre_age = 0
+if args.probe_dt:
+    from free_surface.ring_moment_probe import probe_dt
+    probe_dt(W, ST, mass, tol, V0)
+    raise SystemExit
 if args.probe:
     from free_surface.ring_moment_probe import probe
     probe(W, ST, mass, tol, wref, V0)
