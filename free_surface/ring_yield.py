@@ -2,15 +2,18 @@
 The corner to give up. A uniform flow balances only if every cell reads one stress; its virial is then that stress times M_i, and M_i is round only in the sum. So a uniform flow, an incremental potential and a convex cell cannot all hold (ring_flow.py's header). The potential is only what a trust-region solver asks for. Given up here: the model is a non-associated plasticity cell by cell, yield in the Frobenius norm of the strain, elastic metric M_i.
   state     q per half spring (the rest vector until the cell yields), P per cell for the outer layer's virtual springs q_k = P D_k, x. F_g = I + G(x) on the rest cut. A cell whose plastic strain passes eps_cut goes on the current cut: F_g = (I + G) F_g,n, P = I, L a running sum (rest rows read poorly once the plastic stretch's anisotropy of M passes what the foam's own has: e^(2 eps) ~ 1 + delta, delta about .3)
   reading   A = sum w d (x) q + F_g Mo P^T, M = sum w q (x) q + P Mo P^T, F = A M^-1, the whole cell's fit; R = polar(A), the whole cell's minimum; in its frame H = R^T F - I; the step's start H_n = R_n^T F_n - I, kept in the material frame so a spin reads nothing (read in R(z), F_n - R gave a first-order false strain: the flight's outer iteration diverged at step 2); the step's end H_e = (H(z) - (1 - th) H_n) / th. Yield on the tensor only, as the MPM: beta = min(1, e_y / |dev sym H_e|). Not on the remainder: a cell's wiggles are not its strain (the user, 10-31)
-  force     half spring f = w [beta (F - R) q + (1 - beta)(1 - th) R H_n q + beta_r (d - F q) + (1 - beta_r)(1 - th) R r_n q], r_n = R_n^T (d_n - F_n q); the outer layer through F_g: [(beta (F - R) + (1 - beta)(1 - th) R H_n) P + beta_r (F_g - F P) + (1 - beta_r)(1 - th) R R_n^T (F_g,n - F_n P)] Mo. Pressure V0 [lam L + (1 - beta) 2 mu / 3 (L - (1 - th) L_n)] on L: the springs' volumetric part goes down with beta and the pressure takes it, the volumetric stress 3 kap v whatever beta, so a flowing cell's force has no v R: its negative stiffness in compression, |v| 2 mu V, does not stay when the shape's stiffness has gone with beta
+  force     half spring f = w [beta (F - R) q + (1 - beta)(1 - th) R e_n q + beta_r (d - F q) + (1 - beta_r)(1 - th) R r_n], e_n = dev H_n, r_n = R_n^T (d_n - F_n q); the outer layer through F_g: [(beta (F - R) + (1 - beta)(1 - th) R e_n) P + beta_r (F_g - F P) + (1 - beta_r)(1 - th) R R_n^T (F_g,n - F_n P)] Mo. Pressure V0 (lam + (1 - beta) 2 mu / 3) L on L: the springs' volumetric part goes down with beta and the pressure takes it, the volumetric stress 3 kap v at z whatever beta, so a flowing cell's force has no v R: its negative stiffness in compression, |v| 2 mu V, does not stay when the shape's stiffness has gone with beta.
+            The start's term is deviatoric and the pressure has no L_n. With H_n whole and L - (1 - th) L_n (until 11-01) the two v_n cancel only on M = 2 mu V I; on rho = tr M / 6 mu V a flowing cell keeps (rho - 1) mu v_n, explicit, against the implicit 3 kap v: in the stiff limit L_n+1 = -(1 + (2 / 3)(rho - 1) mu / kap) L_n, 1 + .31 (rho - 1) at nu .3. A cell of the skin on the cut has rho to 4: L -.62 to +1.09 in two steps, J .4 to 2.9, 20 % of the start's energy made
             beta = beta_r = 1: w (d - R q), exactly ring_ul.py. No switch
   remainder a Maxwell element, beta_r = 1 / (1 + kappa (1 / beta - 1)), kappa = 5 at w (ring_flow.py's header)
   frozen    beta, beta_r, R, L's linearisation C frozen: the force is the gradient of a convex quadratic, by the fit's normal equations (sum w r (x) q + r_o Mo P^T = 0, so d/dx through F drops out of the remainder's energy, and M M^-1 cancels in the tensor's):
-            E = 1/2 beta tr(X M X^T) + (1 - beta)(1 - th) tr(R H_n M X^T) + 1/2 beta_r W_r + (1 - beta_r)(1 - th) W_r,n + V0 [1/2 lam L^2 + (1 - beta) 2 mu / 3 (1/2 L^2 - (1 - th) L_n L)], X = F - R
-  solver    so a local-global iteration (YieldStep): z of the frozen problem, by the trust-region CG with its energy ratio valid there; then beta, R, C read at z, until the true |g| is small; after hold_after outer iterations a cell under beta .2 keeps its R and C: its force goes with beta (F - R), so R's error costs little, and on a cell far gone R can flip between two rotations. For one norm term the outer map contracts by 2 mu beta / (k + 2 mu beta), k the inertia's, and it is a majorisation (IRLS) when M is round
+            E = 1/2 beta tr(X M X^T) + (1 - beta)(1 - th) tr(R e_n M X^T) + 1/2 beta_r W_r + (1 - beta_r)(1 - th) W_r,n + V0 (lam + (1 - beta) 2 mu / 3) L^2 / 2, X = F - R
+  solver    so a local-global iteration (YieldStep): z of the frozen problem, by the trust-region CG with its energy ratio valid there; then beta, R, C read at z, until the true |g| is small; after hold_after outer iterations a cell under beta .2 keeps its R and C: its force goes with beta (F - R), so R's error costs little, and on a cell far gone R can flip between two rotations. The reading of beta is the outer map's fixed point, not always its attractor: at the limit beta_r moves kappa times beta, and a cell's reading can fall as its remainder softens: a cell read .960 and 1.283 e_y in turn for 120 iterations, beta_r 1 and .41. So a cell whose beta turns back has its step halved (Picard on a slope m < -1 converges at step under 2 / (1 - m)); the true |g| is always read at the unrelaxed beta. For one norm term the outer map contracts by 2 mu beta / (k + 2 mu beta), k the inertia's, and it is a majorisation (IRLS) when M is round
   torque    per cell skew(A P^T) = 0 by R^T A symmetric and the normal equations, at the fixed point where R = polar(A(z)), but for the start's term, second order: (1 - beta)(1 - th) skew(H H_n M)
-  update    at the step's end, the polar F_e = R_e U of a cell that yields: U_e = a exp(c dev log U), c holding the limit, a = exp(L / 3): only its shape is a state, its volume L's (on nothing else the fit's volume drifts, once beta has given its volumetric share to the pressure: a cell read .29 by the fit with L about 0, then its R flipped 125 degrees at every outer iteration). a's log within +-.5 (L is a linear reading, and a sets only q's scale); q -> U_e^-1 R_e^T (d_e - beta_r r_e), r_e = d_e - F_e q: so F' = R_e U_e and r' = beta_r r, and q comes from d itself, however flat F_e read (the reading must end on the limit: the step's start term (1 - beta)(1 - th) R H_n has no limit of its own, and an increment bounded per step left H_n past it: plastic work -.05, then 1e8). The outer layer's virtual springs the same, P -> U_e^-1 R_e^T (F_g - beta_r (F_g - F_e P)); on the cut, P = I, F_g -> R_e U_e + beta_r (F_g - F_e)
+  update    at the step's end, the polar F_e = R_e U of a cell that yields: U_e = a exp(c dev log U), c holding the limit, a = exp(L / 3): only its shape is a state, its volume L's (on nothing else the fit's volume drifts, once beta has given its volumetric share to the pressure: a cell read .29 by the fit with L about 0, then its R flipped 125 degrees at every outer iteration). a's log within +-.5 (L is a linear reading, and a sets only q's scale); q -> U_e^-1 R_e^T (d_e - beta_r r_e), r_e = d_e - F_e q: so F' = R_e U_e and r' = beta_r r, and q comes from d itself, however flat F_e read (the reading must end on the limit: the step's start term (1 - beta)(1 - th) R H_n has no limit of its own, and an increment bounded per step left H_n past it: plastic work -.05, then 1e8). The outer layer's virtual springs the same, P -> U_e^-1 R_e^T (F_g - beta_r (F_g - F_e P)); on the cut, F_g -> R_e U_e + beta_r (F_g - F_e)
   merging   a cell under agg of the median volume is one cell with its neighbour across its largest wall: A, M summed, F, R, beta shared, its gradient the group's volume mean, V_g G_g = sum V_i G_i, which keeps the cancellation across walls
+  the cut   the state is the fit: F_e, what the last step's return left, and the cut only re-weights the quadrature of it. At fixed x and q new weights read F'' = A'' M''^-1, not F_e, as the normal equations hold the remainder on the old weights only: F'' - F_e = sum dw r (x) q M^-1, (dw / w)(r / L), against a limit of a percent: it was read as stress at the step's start, H_n to 89 e_y. So all of a cell's q and its outer layer go through T = F_e^-1 F'', one map: A = A'' T^T, M = T M'' T^T, F = F'' T^-1 = F_e exactly, the remainder is d - F'' q, the least for the new weights. A new spring reads none, q = F_e^-1 d, and leaves the fit alone. A cell's T too far from I (det under .1): all its q = F_e^-1 d, the remainder dropped. Each cell's q stand in its own frame, F_e^-1 d: a cell that changes group goes first through F_e,group^-1 F_e, which keeps its remainder, or the difference of the two F reads as one
+  outer     on the cut q_k = F_e^-1 D_k, D_k the cut's own vectors, so Mo = F_e^-1 Mo_cur F_e^-T in q's frame (until 11-01 Mo_cur itself: right on no rotated cell), P = I, and F_g = (I + G) F_g,n reads q_k. F_g,n = F_e + s E, the remainder E = F_g - F_e on the part of the moment it had, s = tr Mo_old / tr Mo up to 1 (a cap born reads none, as a spring). (P F_g^-1 with F_g -> I, the same to first order, was tried: F_g over one step reads singular values .07 to 6 on a cell whose neighbours lie in a plane: the outer layer lost 70 % of the start's energy at the cuts, and made it in the steps)
 Self contact not here. set_ball, start(), prepare(), update_ul; through YieldStep. ring_yield_check.py its checks, ring_yield_part.py, ring_yield_drop.py."""
 import math
 
@@ -54,7 +57,7 @@ def k_ry_ab(Ss: wp.array(dtype=wp.mat33d), V0: wp.array(dtype=wp.float64), Vgi: 
 
 
 @wp.kernel(enable_backward=False)
-def k_ry_L(Fc: wp.array(dtype=wp.mat33d), Gm: wp.array(dtype=wp.mat33d), C: wp.array(dtype=wp.mat33d), Ln: wp.array(dtype=wp.float64), V0: wp.array(dtype=wp.float64), lam: wp.float64, k2: wp.float64, ca: wp.float64, flag: wp.array(dtype=int), gid: wp.array(dtype=int),
+def k_ry_L(Fc: wp.array(dtype=wp.mat33d), Gm: wp.array(dtype=wp.mat33d), C: wp.array(dtype=wp.mat33d), Ln: wp.array(dtype=wp.float64), V0: wp.array(dtype=wp.float64), lam: wp.float64, k2: wp.float64, flag: wp.array(dtype=int), gid: wp.array(dtype=int),
            be: wp.array(dtype=wp.float64), Lz: wp.array(dtype=wp.float64), Cz: wp.array(dtype=wp.mat33d), Fz: wp.array(dtype=wp.mat33d), L: wp.array(dtype=wp.float64), Lb: wp.array(dtype=wp.float64), terms: wp.array2d(dtype=wp.float64)):
     """L on its frozen linearisation; the springs' volumetric share that beta has let go, on the pressure"""
     b = wp.tid()
@@ -63,9 +66,9 @@ def k_ry_L(Fc: wp.array(dtype=wp.mat33d), Gm: wp.array(dtype=wp.mat33d), C: wp.a
     if flag[b] != 0:
         lb = Ln[b]+wp.ddot(C[b], Gm[b])
     L[b] = lb
-    s = k2*(wp.float64(1.0)-be[gid[b]])
-    wp.atomic_add(terms, 1, b % NSLOT, V0[b]*(half*lam*lb*lb+s*(half*lb*lb-ca*Ln[b]*lb)))
-    wp.atomic_add(Lb, b, V0[b]*(lam*lb+s*(lb-ca*Ln[b])))
+    s = lam+k2*(wp.float64(1.0)-be[gid[b]])
+    wp.atomic_add(terms, 1, b % NSLOT, V0[b]*half*s*lb*lb)
+    wp.atomic_add(Lb, b, V0[b]*s*lb)
 
 
 @wp.kernel(enable_backward=False)
@@ -154,14 +157,17 @@ def k_ry_half(x: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=int), rj: wp.array
 
 
 @wp.kernel(enable_backward=False)
-def k_ry_start(Fn: wp.array(dtype=wp.mat33d), Mt: wp.array(dtype=wp.mat33d), gid: wp.array(dtype=int), Rn: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d)):
+def k_ry_start(Fn: wp.array(dtype=wp.mat33d), Mt: wp.array(dtype=wp.mat33d), gid: wp.array(dtype=int), Rn: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Hd: wp.array(dtype=wp.mat33d)):
     """the step's start in the material frame, per group"""
     b = wp.tid()
     if gid[b] != b:
         return
     R = rot_proper(Fn[b]@Mt[b])
     Rn[b] = R
-    Hn[b] = wp.transpose(R)@Fn[b]-wp.identity(n=3, dtype=wp.float64)
+    I = wp.identity(n=3, dtype=wp.float64)
+    H = wp.transpose(R)@Fn[b]-I
+    Hn[b] = H
+    Hd[b] = H-(wp.trace(H)/wp.float64(3.0))*I
 
 
 @wp.kernel(enable_backward=False)
@@ -217,16 +223,19 @@ class RingYield(RingFlow):
     """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's; eps_cut: the plastic strain that takes a cell onto the current cut; agg: cells under this of the median volume are merged (0: none); hold, ledger: as ring_flow.py"""
     C_cap = 4.
 
-    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., eps_cut=.15, agg_merge=.1, hold=False, ledger=False, **kw):
+    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., eps_cut=.15, agg_merge=.1, shares=True, hold=False, ledger=False, **kw):
+        self.shares = bool(shares)
         super().__init__(X, r, V0, pairs, A, c, E, nu, sigma_y, theta=theta, kappa=kappa, hold=hold, ledger=ledger, **kw)
         self.eps_cut, self.agg_merge = float(eps_cut), float(agg_merge)
         self.Wp_cell = self.Wp_half = 0.
+        self._Ft = self._Fti = None
+        self.Ecut_parts = [0., 0., 0., 0.]; self.Ecut_w = [0., 0.]; self.Ecut_t = [0.]*8
 
     def start(self):
         n, dev = self.n, self.dev
         z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
         Ks = self.ul['Kw']
-        self.ry = dict(Ff=z(n, wp.mat33d), Fn=z(n, wp.mat33d), Rn=z(n, wp.mat33d), Hn=z(n, wp.mat33d), Ron=z(n, wp.mat33d), Rz=z(n, wp.mat33d), Mt=z(n, wp.mat33d), Mti=z(n, wp.mat33d), MoP=z(n, wp.mat33d), Pc=z(n, wp.mat33d), be=z(n, wp.float64), br=z(n, wp.float64), ei=z(n, wp.float64), Lz=z(n, wp.float64), Cz=z(n, wp.mat33d), Fz=z(n, wp.mat33d),
+        self.ry = dict(Ff=z(n, wp.mat33d), Fn=z(n, wp.mat33d), Rn=z(n, wp.mat33d), Hn=z(n, wp.mat33d), Hd=z(n, wp.mat33d), Ron=z(n, wp.mat33d), Rz=z(n, wp.mat33d), Mt=z(n, wp.mat33d), Mti=z(n, wp.mat33d), MoP=z(n, wp.mat33d), Pc=z(n, wp.mat33d), be=z(n, wp.float64), br=z(n, wp.float64), ei=z(n, wp.float64), Lz=z(n, wp.float64), Cz=z(n, wp.mat33d), Fz=z(n, wp.mat33d),
                        gid=z(n, wp.int32), Vgi=z(n, wp.float64), Gs=z(n, wp.mat33d), Grs=z(n, wp.mat33d), Gm=z(n, wp.mat33d), Grm=z(n, wp.mat33d), Gbm=z(n, wp.mat33d), Gbrm=z(n, wp.mat33d), Ss=z(n, wp.mat33d), Srs=z(n, wp.mat33d))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.ty = {k_: tt(a_) for k_, a_ in self.ry.items()}
@@ -262,30 +271,49 @@ class RingYield(RingFlow):
         self._gid = gid
 
     def _set_halves(self, x):
-        """the half springs by their pair at x: the kept q, a new one reading no remainder in its cell's last frame; equal halves, mu A / L each"""
+        """the half springs by their pair at x: the kept q, a new one reading no remainder on its cell's fit; equal halves, mu A / L each"""
         T = self.tr
         lo, hi, key, ms = self.tlo, self.thi, self.tkey, self._m_s
         pos = torch.searchsorted(self._qkey, key).clamp(max=len(self._qkey)-1); kept = self._qkey[pos] == key
         d = x[hi]-x[lo]
         qi, qj = d.clone(), d.clone()
         qi[kept] = self._qi[pos[kept]]; qj[kept] = self._qj[pos[kept]]
-        if not bool(kept.all()) and hasattr(self, '_Re'):
+        if not bool(kept.all()) and self._Fti is not None:
             nw = ~kept
-            qi[nw] = torch.einsum('fba,fb->fa', self._Re[self._gid[lo[nw]]], d[nw])/(1+self._ve[self._gid[lo[nw]]])[:, None]; qj[nw] = torch.einsum('fba,fb->fa', self._Re[self._gid[hi[nw]]], d[nw])/(1+self._ve[self._gid[hi[nw]]])[:, None]
+            qi[nw] = torch.einsum('fab,fb->fa', self._Fti[lo[nw]], d[nw]); qj[nw] = torch.einsum('fab,fb->fa', self._Fti[hi[nw]], d[nw])
         self._qkey, self._qi, self._qj = key.clone(), qi, qj
         w = self.tk0/(2*self.kshare)
+        share = torch.full((ms,), .5, dtype=f64, device=self.dev)
+        if self.shares:
+            i_w, j_w, _, _, _, m = self._w
+            lo_w, hi_w = torch.minimum(i_w, j_w), torch.maximum(i_w, j_w)
+            kw = lo_w*self.n+hi_w
+            tlo_w = torch.where(i_w < j_w, self.tul['wt'][:m], 1-self.tul['wt'][:m])
+            o = torch.argsort(kw)
+            pw = torch.searchsorted(kw[o], key).clamp(max=m-1); hw = kw[o][pw] == key
+            both = self._yld[lo] & self._yld[hi] & hw
+            share[both] = tlo_w[o][pw[both]].clamp(.02, .98)
         for k_ in ('i', 'j', 'wi', 'wj', 'qi', 'qj', 'dni', 'dnj'):
             T[k_].zero_()
-        T['i'][:ms] = lo.to(torch.int32); T['j'][:ms] = hi.to(torch.int32); T['wi'][:ms] = w; T['wj'][:ms] = w; T['qi'][:ms] = qi; T['qj'][:ms] = qj
+        T['i'][:ms] = lo.to(torch.int32); T['j'][:ms] = hi.to(torch.int32); T['wi'][:ms] = 2*share*w; T['wj'][:ms] = 2*(1-share)*w; T['qi'][:ms] = qi; T['qj'][:ms] = qj
 
     def _cut(self, x):
-        """the current cut at x: merged_ul.py's list and gradient, the halves; a cut cell's outer layer on it, P = I; its group on the current walls"""
+        """the current cut at x: merged_ul.py's list and gradient, the halves; a cut cell's outer layer pushed onto it; its group on the current walls; the fit carried across"""
+        Mo_old = self.tr['Mo'].clone()
         MergedUL.update_ul(self, x)
         self._cut_valid = True
+        self._Fti = self._inv(self._Ft)
         self._set_halves(x)
         t, T, Y, yld = self.tul, self.tr, self.ty, self._yld
         Mc = t['Mc']
-        T['Mo'].copy_(torch.where(yld[:, None, None], self.mu*(Mc+Mc.transpose(1, 2)), self._Mo0))
+        T['Mo'].copy_(self._Mo0)
+        Fi_, Pc = self._Fti[yld], Y['Pc'][yld]
+        Mq = Fi_@(self.mu*(Mc[yld]+Mc[yld].transpose(1, 2)))@Fi_.transpose(1, 2)
+        T['Mo'][yld] = Mq
+        tr3 = lambda a_: a_.diagonal(dim1=1, dim2=2).sum(1)
+        tn = tr3(Mq)
+        s_ = torch.where(tn > 0, tr3(Pc@Mo_old[yld]@Pc.transpose(1, 2))/tn.clamp(min=1e-300), torch.zeros_like(tn)).clamp(0., 1.)
+        self._Fe[yld] = self._Ft[yld]+s_[:, None, None]*(self._Fe[yld]@self._inv(Pc)-self._Ft[yld])
         Y['Pc'][yld] = self.I3
         if self.ball is not None:
             self.tbR.copy_(torch.where(yld, self.tbR, self._tbR0))
@@ -301,6 +329,69 @@ class RingYield(RingFlow):
             m2 = tiny[j_n] & ~tiny[i_n] & y_[j_n]; gid[j_n[m2]] = i_n[m2]
             self._set_gid(torch.as_tensor(gid, device=self.dev))
         self._wv_masks()
+        if self.ledger:
+            self._e_w = self._parts(x)
+        self._carry_fit(x)
+
+    def _inv(self, A):
+        """the inverse of 3 x 3 matrices, the pseudo-inverse where near singular"""
+        a0, a1, a2 = A[:, :, 0], A[:, :, 1], A[:, :, 2]; c0, c1, c2 = torch.linalg.cross(a1, a2), torch.linalg.cross(a2, a0), torch.linalg.cross(a0, a1)
+        det = (a0*c0).sum(1); sing = det.abs() <= 1e-10*(A*A).sum((1, 2))**1.5
+        Ai = torch.stack([c0, c1, c2], 1)/torch.where(sing, torch.ones_like(det), det)[:, None, None]
+        if bool(sing.any()):
+            Ai[sing] = torch.linalg.pinv(A[sing].cpu()).to(A.device)
+        return Ai
+
+    def _carry_fit(self, x):
+        """all of a group's q and its outer layer through T = F_e^-1 F'', so that the fit on the new weights is F_e; a group with a cell on the cut only"""
+        T, Y, ms, lo, hi, n, g = self.tr, self.ty, self._m_s, self.tlo, self.thi, self.n, self._gid
+        P, Mo = Y['Pc'], T['Mo']
+        wi, wj = T['wi'][:ms], T['wj'][:ms]
+        d = x[hi]-x[lo]
+        qi, qj = self._qi, self._qj
+        on = torch.zeros(n, dtype=torch.bool, device=self.dev)
+        on[g[self._yld]] = True
+        ch = ((self._Ft-self._Ft[g]).abs().sum((1, 2)) > 0) & on[g]
+        self.ul_stats['frames'] = int(ch.sum())
+        if bool(ch.any()):
+            T0 = self.I3.expand(n, 3, 3).clone()
+            T0[ch] = self._Fti[g[ch]]@self._Ft[ch]
+            qi, qj = torch.einsum('fab,fb->fa', T0[lo], qi), torch.einsum('fab,fb->fa', T0[hi], qj)
+            y_, e_ = ch & self._yld, ch & ~self._yld
+            Mo[y_] = T0[y_]@Mo[y_]@T0[y_].transpose(1, 2)
+            self._Fe[y_] = self._Fe[y_]@self._inv(T0[y_])
+            P[e_] = T0[e_]@P[e_]
+        MoP = Mo@P.transpose(1, 2)
+        M = torch.zeros(n, 3, 3, dtype=f64, device=self.dev).index_add(0, g, P@MoP)
+        M.index_add_(0, g[lo], wi[:, None, None]*qi[:, :, None]*qi[:, None, :]); M.index_add_(0, g[hi], wj[:, None, None]*qj[:, :, None]*qj[:, None, :])
+        A = torch.zeros(n, 3, 3, dtype=f64, device=self.dev).index_add(0, g, self._Fe@MoP)
+        A.index_add_(0, g[lo], wi[:, None, None]*d[:, :, None]*qi[:, None, :]); A.index_add_(0, g[hi], wj[:, None, None]*d[:, :, None]*qj[:, None, :])
+        k = torch.nonzero(on)[:, 0]
+        Tk = self._Fti[k]@(A[k]@self._inv(M[k]))
+        dt_ = torch.linalg.det(Tk)
+        bad = ~(dt_ > .1) | ~torch.isfinite(Tk).all(dim=(1, 2))
+        Tm = self.I3.expand(n, 3, 3).clone()
+        Tm[k] = torch.where(bad[:, None, None], self.I3, Tk)
+        reset = torch.zeros(n, dtype=torch.bool, device=self.dev)
+        reset[k[bad]] = True
+        qi2, qj2 = torch.einsum('fab,fb->fa', Tm[g[lo]], qi), torch.einsum('fab,fb->fa', Tm[g[hi]], qj)
+        Tg = Tm[g]
+        el = ~self._yld
+        Y['Pc'][el] = Tg[el]@P[el]
+        y = self._yld
+        Mo[y] = Tg[y]@Mo[y]@Tg[y].transpose(1, 2)
+        self._Fe[y] = self._Fe[y]@self._inv(Tg[y])
+        if bool(reset.any()):
+            ri, rj = reset[g[lo]], reset[g[hi]]
+            qi2[ri] = torch.einsum('fab,fb->fa', self._Fti[g[lo[ri]]], d[ri]); qj2[rj] = torch.einsum('fab,fb->fa', self._Fti[g[hi[rj]]], d[rj])
+            rc = reset[g]
+            Y['Pc'][rc & el] = self._Fti[g[rc & el]]@self._Fe[rc & el]
+            self._Fe[rc & y] = self._Ft[g[rc & y]]
+        self._qi, self._qj = qi2, qj2
+        T['qi'][:ms] = qi2; T['qj'][:ms] = qj2
+        if self.ledger:
+            dT = (Tk-self.I3).flatten(1).norm(dim=1)
+            self.ul_stats['T_med'], self.ul_stats['T_max'], self.ul_stats['T_reset'] = float(dT.median()), float(dT.max()), int(bad.sum())
 
     def _state_start(self, x):
         """the step's start: M, its inverse, the fit at x, each half's remainder there"""
@@ -308,10 +399,10 @@ class RingYield(RingFlow):
         g = self._gid
         P, Mo = Y['Pc'], T['Mo']
         Y['MoP'].copy_(Mo@P.transpose(1, 2))
-        w = T['wi'][:ms]
+        wi, wj = T['wi'][:ms], T['wj'][:ms]
         qi, qj = T['qi'][:ms], T['qj'][:ms]
         M = torch.zeros(n, 3, 3, dtype=f64, device=self.dev).index_add(0, g, P@Y['MoP'])
-        M.index_add_(0, g[lo], w[:, None, None]*qi[:, :, None]*qi[:, None, :]); M.index_add_(0, g[hi], w[:, None, None]*qj[:, :, None]*qj[:, None, :])
+        M.index_add_(0, g[lo], wi[:, None, None]*qi[:, :, None]*qi[:, None, :]); M.index_add_(0, g[hi], wj[:, None, None]*qj[:, :, None]*qj[:, None, :])
         lead = g == torch.arange(n, device=self.dev)
         a0, a1, a2 = M[:, :, 0], M[:, :, 1], M[:, :, 2]; c0, c1, c2 = torch.linalg.cross(a1, a2), torch.linalg.cross(a2, a0), torch.linalg.cross(a0, a1)
         det = (a0*c0).sum(1); sing = det.abs() <= 1e-10*(M*M).sum((1, 2))**1.5
@@ -322,10 +413,10 @@ class RingYield(RingFlow):
         d = x[hi]-x[lo]
         Fe = self._Fe
         A = torch.zeros(n, 3, 3, dtype=f64, device=self.dev).index_add(0, g, Fe@Y['MoP'])
-        A.index_add_(0, g[lo], w[:, None, None]*d[:, :, None]*qi[:, None, :]); A.index_add_(0, g[hi], w[:, None, None]*d[:, :, None]*qj[:, None, :])
+        A.index_add_(0, g[lo], wi[:, None, None]*d[:, :, None]*qi[:, None, :]); A.index_add_(0, g[hi], wj[:, None, None]*d[:, :, None]*qj[:, None, :])
         Fn = A@Mi
         Y['Fn'].copy_(Fn)
-        wp.launch(k_ry_start, n, inputs=[self.ry['Fn'], self.ry['Mt'], self.ry['gid']], outputs=[self.ry['Rn'], self.ry['Hn']])
+        wp.launch(k_ry_start, n, inputs=[self.ry['Fn'], self.ry['Mt'], self.ry['gid']], outputs=[self.ry['Rn'], self.ry['Hn'], self.ry['Hd']])
         Rn = Y['Rn'][g]
         T['dni'][:ms] = torch.einsum('fba,fb->fa', Rn[lo], d-torch.einsum('fab,fb->fa', Fn[g[lo]], qi)); T['dnj'][:ms] = torch.einsum('fba,fb->fa', Rn[hi], d-torch.einsum('fab,fb->fa', Fn[g[hi]], qj))
         Y['Ron'].copy_(Rn.transpose(1, 2)@(Fe-Fn[g]@P))
@@ -336,6 +427,7 @@ class RingYield(RingFlow):
         x = x.detach().clone()
         cut = bool(self._yld.any())
         e0 = self._parts(x) if cut and self.ledger else None
+        t0_ = self._tensor_parts(x) if cut and self.ledger else None
         self._cut_valid = False
         self._xs = x
         if cut:
@@ -347,7 +439,12 @@ class RingYield(RingFlow):
         if cut and self.ledger:
             e1 = self._parts(x)
             self.Ecut += sum(e1)-sum(e0)
-            self.Ecut_parts = [a_+b_-c_ for a_, b_, c_ in zip(getattr(self, 'Ecut_parts', [0., 0., 0.]), e1, e0)]
+            self.Ecut_parts = [a_+b_-c_ for a_, b_, c_ in zip(self.Ecut_parts, e1, e0)]
+            self.Ecut_w = [a_+b_-c_ for a_, b_, c_ in zip(self.Ecut_w, self._e_w[:2], e0[:2])]
+            self.Ecut_t = [a_+b_-c_ for a_, b_, c_ in zip(self.Ecut_t, self._tensor_parts(x), t0_)]
+            lead_ = self._gid == torch.arange(self.n, device=self.dev)
+            on_ = self._yld[lead_]
+            self.ul_stats['fit_gap'] = float((self.ty['Fn'][lead_][on_]-self._Ft[lead_][on_]).flatten(1).norm(dim=1).max()) if bool(on_.any()) else 0.
         if self.ledger:
             Y, g = self.ty, self._gid
             lead = g == torch.arange(self.n, device=self.dev)
@@ -359,9 +456,38 @@ class RingYield(RingFlow):
             self.ul_stats['v_gap_med'], self.ul_stats['v_gap_max'] = float(gap[lead].median()), float(gap[lead].max())
             self.ul_stats['v_max'] = float(tr_[lead].abs().max())
 
+    def _tensor_parts(self, x):
+        """the state at x, by the tensor's volumetric part, the cross term, its deviatoric part and the remainder; cells with beta under .5, the rest"""
+        T, Y, ms, lo, hi, n, g = self.tr, self.ty, self._m_s, self.tlo, self.thi, self.n, self._gid
+        d = x[hi]-x[lo]
+        wi, wj = T['wi'][:ms], T['wj'][:ms]; qi, qj = self._qi[:ms], self._qj[:ms]
+        P, Mo = Y['Pc'], T['Mo']
+        MoP = Mo@P.transpose(1, 2)
+        M = torch.zeros(n, 3, 3, dtype=f64, device=self.dev).index_add(0, g, P@MoP)
+        M.index_add_(0, g[lo], wi[:, None, None]*qi[:, :, None]*qi[:, None, :]); M.index_add_(0, g[hi], wj[:, None, None]*qj[:, :, None]*qj[:, None, :])
+        A = torch.zeros(n, 3, 3, dtype=f64, device=self.dev).index_add(0, g, self._Fe@MoP)
+        A.index_add_(0, g[lo], wi[:, None, None]*d[:, :, None]*qi[:, None, :]); A.index_add_(0, g[hi], wj[:, None, None]*d[:, :, None]*qj[:, None, :])
+        lead = g == torch.arange(n, device=self.dev)
+        Us, _, Vh = torch.linalg.svd(A[lead].cpu())
+        Sg = torch.diag_embed(torch.stack([torch.ones(len(Us), dtype=f64), torch.ones(len(Us), dtype=f64), torch.linalg.det(Us@Vh)], 1))
+        R = self.I3.expand(n, 3, 3).clone(); R[lead] = (Us@Sg@Vh).to(self.dev)
+        Rm = R[g]
+        mi = torch.einsum('fba,fb->fa', Rm[lo], d)-qi; mj = torch.einsum('fba,fb->fa', Rm[hi], d)-qj
+        Hg = Rm.transpose(1, 2)@self._Fe-P
+        E = torch.zeros(n, dtype=f64, device=self.dev).index_add(0, g, .5*((Hg@Mo)*Hg).sum((1, 2))).index_add(0, g[lo], .5*wi*(mi*mi).sum(1)).index_add(0, g[hi], .5*wj*(mj*mj).sum(1))
+        Ml, El, bl = M[lead], E[lead], Y['be'][lead]
+        F = A[lead]@self._inv(Ml)
+        H = R[lead].transpose(1, 2)@F-self.I3
+        v = H.diagonal(dim1=1, dim2=2).sum(1)/3
+        Hd = H-v[:, None, None]*self.I3
+        ev = .5*v*v*Ml.diagonal(dim1=1, dim2=2).sum(1); ec = v*(Hd*Ml).sum((1, 2)); ed = .5*((Hd@Ml)*Hd).sum((1, 2)); er = El-ev-ec-ed
+        hot = bl < .5
+        return [float(a_[hot].sum()) for a_ in (ev, ec, ed, er)]+[float(a_[~hot].sum()) for a_ in (ev, ec, ed, er)]
+
     def _parts(self, x):
-        a, b = self.stored(x)
-        return [a, b, self.ground_store(x)]
+        """the springs, the outer layer, volume, the ground at x"""
+        _, b = self.stored(x)
+        return [self._Es, self._Eo, b, self.ground_store(x)]
 
     def run(self):
         """E and dE/dx at xw, all frozen but x: both gradients and their groups, F_g, L; A, the fit; the cells, the halves; back through both gradients"""
@@ -393,16 +519,16 @@ class RingYield(RingFlow):
         wp.launch(k_ry_gs, n, inputs=[Br['G'], V0, gid], outputs=[Y['Grs']])
         wp.launch(k_ry_gm, n, inputs=[Y['Grs'], Y['Vgi'], gid], outputs=[Y['Grm']])
         wp.launch(k_rf_F, n, inputs=[Y['Gm'], Y['Grm'], S['F0'], Rg['flag']], outputs=[B['Fc']])
-        wp.launch(k_ry_L, n, inputs=[B['Fc'], Y['Gm'], U['Q'], U['Ln'], V0, wp.float64(self.lam), wp.float64(2*self.mu/3), ca, Rg['flag'], gid, Y['be'], Y['Lz'], Y['Cz'], Y['Fz']], outputs=[B['L'], B['Lb'], B['terms']])
+        wp.launch(k_ry_L, n, inputs=[B['Fc'], Y['Gm'], U['Q'], U['Ln'], V0, wp.float64(self.lam), wp.float64(2*self.mu/3), Rg['flag'], gid, Y['be'], Y['Lz'], Y['Cz'], Y['Fz']], outputs=[B['L'], B['Lb'], B['terms']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         wp.launch(k_var, Ur['Kw'], inputs=[Ur['wi'], Ur['wj'], Ur['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         hs = [Rg['i'], Rg['j'], Rg['wi'], Rg['wj'], Rg['qi'], Rg['qj']]
         wp.launch(k_ry_A, Rg['K'], inputs=[x]+hs+[gid], outputs=[Rg['Am']])
         wp.launch(k_ry_Aout, n, inputs=[B['Fc'], Y['MoP'], gid], outputs=[Rg['Am']])
         wp.launch(k_ry_Ff, n, inputs=[Rg['Am'], Y['Mti']], outputs=[Y['Ff']])
-        wp.launch(k_ry_cell, n, inputs=[Y['Ff'], Y['Hn'], Y['Rz'], Y['Mt'], B['Fc'], Y['Ron'], Y['Pc'], Rg['Mo'], Y['be'], Y['br'], ca, gid], outputs=[B['Fb'], B['terms']])
+        wp.launch(k_ry_cell, n, inputs=[Y['Ff'], Y['Hd'], Y['Rz'], Y['Mt'], B['Fc'], Y['Ron'], Y['Pc'], Rg['Mo'], Y['be'], Y['br'], ca, gid], outputs=[B['Fb'], B['terms']])
         wp.launch(k_rf_Fadj, n, inputs=[B['Fb'], S['F0'], Rg['flag']], outputs=[Y['Gbm'], Y['Gbrm']])
-        wp.launch(k_ry_half, Rg['K'], inputs=[x]+hs+[Rg['dni'], Rg['dnj'], gid, Y['Ff'], Y['Hn'], Y['Rz'], Y['be'], Y['br'], ca], outputs=[B['terms'], g])
+        wp.launch(k_ry_half, Rg['K'], inputs=[x]+hs+[Rg['dni'], Rg['dnj'], gid, Y['Ff'], Y['Hd'], Y['Rz'], Y['be'], Y['br'], ca], outputs=[B['terms'], g])
         wp.launch(k_ry_Lb, n, inputs=[B['Lb'], U['Q'], Y['Cz'], Rg['flag']], outputs=[Y['Gbm'], Y['Gbrm']])
         bl = self.ball
         if bl is not None:
@@ -454,6 +580,21 @@ class RingYield(RingFlow):
                 Sf = torch.linalg.svdvals(tY['Ff'][g_]); Sg = torch.linalg.svdvals(self.tFc[c_])
                 print('    cell %d (group %d, cut %d): reading/e_y %.1f beta %.4f beta_r %.4f; R turned %.1f deg; fit sv %.3f %.3f; F_g sv %.3f %.3f; L %.4f |C| %.2f |Cz| %.2f' % (c_, g_, int(self._yld[c_]), float(tY['ei'][g_])/self.ey, float(tY['be'][g_]), float(tY['br'][g_]), ang, float(Sf[2]), float(Sf[0]), float(Sg[2]), float(Sg[0]), float(self.tL[c_]), float(self.tul['Q'][c_].norm()), float(tY['Cz'][c_].norm())), flush=True)
 
+    def relax(self):
+        """beta as just read -> the frozen beta for the next solve: a group whose reading has turned back steps by half as much as before. False: the first reading of the step, nothing changed"""
+        Y = self.ty
+        raw = Y['be'].clone()
+        if self._be_f is None:
+            self._be_f, self._dbe, self._om = raw, torch.zeros_like(raw), torch.ones_like(raw)
+            return False
+        db = raw-self._be_f
+        self._om = torch.where(db*self._dbe < 0, .5*self._om, 1.1*self._om).clamp(.02, 1.)
+        new = self._be_f+self._om*db
+        self._be_f, self._dbe = new, db
+        Y['be'].copy_(new)
+        Y['br'].copy_(1/(1+self.kappa*(1/new.clamp(min=1e-12)-1)))
+        return True
+
     def end_ul(self, th=.5):
         """after the step (the buffers at the accepted z): the plastic work, the returns on q and P, F_g, L; a cell past eps_cut goes on the cut"""
         assert th == self.th == .5, 'the plastic work is written for the midpoint'
@@ -481,6 +622,7 @@ class RingYield(RingFlow):
         flag = self._yld
         yn = lead & ((be < 1) | (br < 1))
         Re = R.clone()
+        Fprime = Fe.clone()
         if bool(yn.any()):
             U_, S_, Vh = torch.linalg.svd(Fe[yn].cpu())
             sg = torch.linalg.det(U_@Vh)
@@ -498,7 +640,6 @@ class RingYield(RingFlow):
             lue = la+sc*dv
             Uei = torch.zeros(n, 3, 3, dtype=f64, device=self.dev)
             Uei[yn] = (V_*torch.exp(-lue)[:, None, :]@V_.transpose(1, 2)).to(self.dev)
-            Fprime = Fe.clone()
             Fprime[yn] = (U2*torch.exp(lue)[:, None, :]@Vh).to(self.dev)
             Re[yn] = Rp.to(self.dev)
             eps = torch.zeros(n, dtype=f64, device=self.dev)
@@ -528,12 +669,10 @@ class RingYield(RingFlow):
             em = ymem & ~flag
             Y['Pc'][em] = Uei[g[em]]@(Re[g[em]].transpose(1, 2)@(Fgend[em]-br[g[em]][:, None, None]*Eo[em]))
         self._Fe = Fnew
-        self._Re, self._ve = Re, (He.diagonal(dim1=1, dim2=2).sum(1)/3)
+        self._Ft = Fprime[g].clone()
         # past eps_cut: onto the cut, its group with it
         over = (self._eps > self.eps_cut) & ~flag
         if bool(over.any()):
-            self._Fe[over] = self._Fe[over]@torch.linalg.inv(Y['Pc'][over])
-            Y['Pc'][over] = I3
             self._yld = self._yld | over
             T['flag'][over] = 1
         self.ul_stats['flips'] = int((J <= 1e-3).sum()); self.ul_stats['yielding'] = int(yn.sum()); self.ul_stats['yielded'] = int((self._eps > 0).sum()); self.ul_stats['cut_cells'] = int(self._yld.sum())
@@ -551,11 +690,11 @@ class RingYield(RingFlow):
         if x is None:
             x = (self.tx-(1-self.th)*self._xs)/self.th
         d = x[hi]-x[lo]
-        w = T['wi'][:ms]; qi, qj = self._qi[:ms], self._qj[:ms]
+        wi, wj = T['wi'][:ms], T['wj'][:ms]; qi, qj = self._qi[:ms], self._qj[:ms]
         Fe, P, Mo = self._Fe, Y['Pc'], T['Mo']
         MoP = Mo@P.transpose(1, 2)
         A = torch.zeros(n, 3, 3, dtype=f64, device=self.dev).index_add(0, g, Fe@MoP)
-        A.index_add_(0, g[lo], w[:, None, None]*d[:, :, None]*qi[:, None, :]); A.index_add_(0, g[hi], w[:, None, None]*d[:, :, None]*qj[:, None, :])
+        A.index_add_(0, g[lo], wi[:, None, None]*d[:, :, None]*qi[:, None, :]); A.index_add_(0, g[hi], wj[:, None, None]*d[:, :, None]*qj[:, None, :])
         lead = g == torch.arange(n, device=self.dev)
         R = self.I3.expand(n, 3, 3).clone()
         Us, _, Vh = torch.linalg.svd(A[lead].cpu())
@@ -563,9 +702,10 @@ class RingYield(RingFlow):
         R[lead] = (Us@Sg@Vh).to(self.dev)
         Rm = R[g]
         mi = torch.einsum('fba,fb->fa', Rm[lo], d)-qi; mj = torch.einsum('fba,fb->fa', Rm[hi], d)-qj
-        Es = float((.5*w*(mi*mi).sum(1)).sum()+(.5*w*(mj*mj).sum(1)).sum())
+        Es = float((.5*wi*(mi*mi).sum(1)).sum()+(.5*wj*(mj*mj).sum(1)).sum())
         H = Rm.transpose(1, 2)@Fe-P
         Eo = float((.5*((H@Mo)*H).sum((1, 2))).sum())
+        self._Es, self._Eo = Es, Eo
         L = t['Ln']
         Ev = float((self.V0*.5*self.lam*L*L).sum())
         Ev += float((self.turv*(L[self._irw]-L[self._jrw])**2).sum())
@@ -601,12 +741,13 @@ class RingYield(RingFlow):
             K.index_add_(0, k_, (self.V0[s_]*mod[s_])[:, None, None]*(cr[:, :, None]*cr[:, None, :])+(br[g[s_]]*rM)[:, None, None]*self.I3)
         ms = self._m_s
         lo, hi = self.tlo, self.thi
-        w = T['wi'][:ms]
+        wi, wj = T['wi'][:ms], T['wj'][:ms]
         qi, qj = T['qi'][:ms], T['qj'][:ms]
         Mi = Y['Mti']
-        li = w*(torch.einsum('fab,fb->fa', Mi[g[lo]], qi)*qi).sum(1); lj = w*(torch.einsum('fab,fb->fa', Mi[g[hi]], qj)*qj).sum(1)
+        li = (torch.einsum('fab,fb->fa', Mi[g[lo]], qi)*qi).sum(1); lj = (torch.einsum('fab,fb->fa', Mi[g[hi]], qj)*qj).sum(1)
         bi, ci, bj, cj = be[g[lo]], br[g[lo]], be[g[hi]], br[g[hi]]
-        ka = w*(ci+cj+(bj-cj)*lj); kb = w*(ci+cj+(bi-ci)*li)
+        wc = wi*ci+wj*cj
+        ka = wc+wj*wj*(bj-cj)*lj; kb = wc+wi*wi*(bi-ci)*li
         K.index_add_(0, lo, ka[:, None, None]*self.I3); K.index_add_(0, hi, kb[:, None, None]*self.I3)
         if self.hold and bool(self._stuck.any()):
             off = self._stuck & (self.tbR > 0) & (self.tbd < .05*self.tbR)
@@ -619,6 +760,49 @@ class RingYield(RingFlow):
 class YieldStep(MidpointStep):
     """the local-global iteration: at z read beta, beta_r, R, C and the true |g|; then z of the frozen problem to eta_out of it, by the trust-region CG on Pi, its energy valid there (a quadratic, and Hertz); until |g| is at the tolerance. stats: outer iterations, the trace (products, edge, negative, stop, |g|, ratio, taken, outer)"""
     eta_out, inner_max, outer_max, cg_cap_max, hold_after = .1, 30, 200, 3000, 3
+    trace_from = None
+    trace_first = None
+
+    def _first(self, s_):
+        """the step's first |g| by what stands on the largest cells; the balls' part taken out by their own forces"""
+        W, n = self.W, self.W.n
+        Y, t, g = W.ty, W.tul, W._gid
+        gz = wp.to_torch(self.a['gz'], requires_grad=False)
+        gn = gz.norm(dim=1)
+        fn = W.B['bfn'].numpy(); bff = W.B['bff'].numpy()
+        tf = torch.as_tensor(fn, device=W.dev)
+        ng = torch.as_tensor([float(W.ball['ng'][k]) for k in range(3)], dtype=f64, device=W.dev)
+        fb = torch.as_tensor(bff, device=W.dev)-tf[:, None]*ng
+        # (g holds -F n for a ball: the rest once the balls' forces are taken out, by |g + F n - ff|; the sign read at both ends)
+        g_nb = torch.minimum((gz+fb).norm(dim=1), (gz-fb).norm(dim=1))
+        wref = float(self.tz.new_tensor(9.8)*W.V0.norm())
+        o = torch.argsort(gn, descending=True)[:6].tolist()
+        print('  step %d: first |g| / wref %.1f; without the balls %.1f; ball forces: normal norm %.1f, tangent norm %.1f; touching %d; largest:' % (s_, float(gn.norm())/wref, float(g_nb.norm())/wref, float(tf.norm())/wref, float(torch.as_tensor(bff, device=W.dev).norm())/wref, int((W.B['bdelta'].numpy() > 0).sum())), flush=True)
+        for c in o:
+            print('    cell %d: |g| %.2f, without its ball %.2f; ball F %.2f, ff %.2f, d / R %.3f, R / h %.2f; beta %.3f, reading / e_y %.1f; L %.3f; V %.2f; y / h %.2f; yielded %d; |v| %.2f; |z - x| / h %.3f' % (c, float(gn[c])/wref, float(g_nb[c])/wref, float(tf[c])/wref, float(np.linalg.norm(bff[c]))/wref, float(W.tbd[c])/max(float(W.tbR[c]), 1e-12), float(W.tbR[c])/float(W.V0.median())**(1/3), float(Y['be'][g[c]]), float(Y['ei'][g[c]])/W.ey, float(W.tL[c]), float(W.V0[c]/W.V0.median()), float(self.tz[c, 1]+.05)/float(W.V0.median())**(1/3), int(W._yld[c]), float(self.tv[c].norm()), float((self.tz[c]-self.tx[c]).norm())/float(W.V0.median())**(1/3)), flush=True)
+
+    def _trace(self, outer):
+        W, n = self.W, self.W.n
+        Y, t, g = W.ty, W.tul, W._gid
+        gz = wp.to_torch(self.a['gz'], requires_grad=False).norm(dim=1)
+        c = int(torch.argmax(gz))
+        cur = dict(R=Y['Rz'].clone(), be=Y['be'].clone(), br=Y['br'].clone(), C=t['Q'].clone(), z=self.tz.clone())
+        prev = getattr(self, '_tp', None)
+        self._tp = cur
+        wref = float((9.8*self.mass_*1).norm()) if hasattr(self, 'mass_') else 1.
+        print('    outer %d: |g| %.4e, largest %.4e at cell %d (group %d, beta %.4f, beta_r %.4f, reading / e_y %.3f)' % (outer, float(gz.norm()), float(gz[c]), c, int(g[c]), float(Y['be'][g[c]]), float(Y['br'][g[c]]), float(Y['ei'][g[c]])/W.ey), flush=True)
+        if prev is None or prev['R'].shape != cur['R'].shape:
+            return
+        lead = g == torch.arange(n, device=W.dev)
+        dR, db, dC = (cur['R']-prev['R']).flatten(1).norm(dim=1), (cur['be']-prev['be']).abs(), (cur['C']-prev['C']).flatten(1).norm(dim=1)
+        dz = (cur['z']-prev['z']).norm(dim=1)
+        dR[~lead] = 0.; db[~lead] = 0.
+        top = lambda a_: [(int(k), round(float(a_[k]), 5), round(float(cur['be'][g[k]]), 3)) for k in torch.argsort(a_, descending=True)[:4]]
+        print('      since the last reading, (cell, change, its beta): R %s; beta %s; C %s; z %s (in h: %.2e)' % (top(dR), top(db), top(dC), top(dz), float(dz.max())/float(W.V0.median())**(1/3)), flush=True)
+        ms, lo, hi = W._m_s, W.tlo, W.thi
+        sp = torch.nonzero((lo == c) | (hi == c))[:, 0]
+        ne = torch.where(lo[sp] == c, hi[sp], lo[sp])
+        print('      cell %d: dR %.2e, dC %.2e, dz %.2e; its neighbours (cell, group beta, reading / e_y, dR, dbeta, dC, wall w L / mu h2): %s' % (c, float(dR[g[c]]), float(dC[c]), float(dz[c]), [(int(k), round(float(cur['be'][g[k]]), 3), round(float(Y['ei'][g[k]])/W.ey, 2), round(float(dR[g[k]]), 5), round(float(db[g[k]]), 5), round(float(dC[k]), 5), round(float((W.tr['wi'][:ms][e_]+W.tr['wj'][:ms][e_])*(W.tx[hi[e_]]-W.tx[lo[e_]]).norm()/(2*W.mu))/float(W.V0.median())**(2/3), 3)) for k, e_ in zip(ne, sp)]), flush=True)
 
     def solve(self, tol_abs, cg_tol_abs):
         W, A, bl, n = self.W, self.a, self.W.ball, self.W.n
@@ -631,6 +815,7 @@ class YieldStep(MidpointStep):
             W.hold_start(self.tx, self.muf)
         evals, its, outer = 1, 0, 0
         st = dict(rejected=0, edge=0, negative=0, trace=[], outer=0)
+        W._be_f = None
         self._eval(0.)
         delta = self.delta_start if self.carry_delta and self.delta_start else -1.
         cap = self.cg_cap
@@ -639,8 +824,15 @@ class YieldStep(MidpointStep):
             g2 = self._eval(0.)[PS_GQ2]; evals += 1
             self._accept()
             g_ = math.sqrt(g2)
+            if outer == 0 and self.trace_first is not None and self.trace_first():
+                self._first(self.trace_first.s)
+            if self.trace_from is not None and (self.trace_from <= outer < self.trace_from+6 or outer >= self.outer_max-4):
+                self._trace(outer)
             if g_ <= tol_abs or outer >= self.outer_max:
                 break
+            if W.relax():
+                g2 = self._eval(0.)[PS_GQ2]; evals += 1
+                self._accept()
             outer += 1
             target = max(.5*tol_abs, self.eta_out*g_)
             delta0 = None

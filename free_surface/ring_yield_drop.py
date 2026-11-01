@@ -37,6 +37,11 @@ a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
 a_.add_argument('--scene', type=int, default=0)
 a_.add_argument('--watch', type=int, nargs='*', default=None)
+a_.add_argument('--trace-from', type=int, default=None)
+a_.add_argument('--save-state', type=int, nargs='*', default=[], help='checkpoints after these steps')
+a_.add_argument('--load-state', type=Path, default=None)
+a_.add_argument('--first-every', type=int, default=0)
+a_.add_argument('--first-from', type=int, default=240)
 a_.add_argument('--watch-from', type=int, default=0)
 a_.add_argument('--soft-tol', type=float, default=.1, help='of the weight: a step that ends over the tolerance but under this goes on, counted and logged (.1 is at most a .1 m/s kick to one site)')
 a_.add_argument('--no-hold', action='store_true', help="the ground only presses; the MPM's sticky ground holds tension, up to the material's yield here")
@@ -89,6 +94,17 @@ W.grad(W.X); W.reread(); W.grad(W.X)
 ST = YieldStep(W, CG, mass, W.ul_blocks(), fg, args.dt, args.mu)
 ST.pre_ul = True; ST.pre_every = args.pre_every; ST.smooth_pred = ST.carry_delta = True
 ST.set_theta(.5, mass)
+ST.trace_from = args.trace_from
+
+
+class _First:
+    s = 0
+
+    def __call__(self):
+        return args.first_every > 0 and self.s >= args.first_from and self.s % args.first_every == 0
+
+
+ST.trace_first = _First()
 ST.set_state(W.X.clone(), torch.tensor(gt['v'], dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
 h = float(np.median(V0))**(1/3)
 print('plasticine, ring springs with the tensor limit: E %.1f, nu %.4f, yield %.1f Pa (yield strain %.4f, cell limit e_y %.4f), kappa %g, v0 %s; foam %s: %d cells, h %.2f mm; dt 1/%d, tol %g of the weight, friction %g; MPM %d particles' % (
@@ -124,15 +140,85 @@ def save():
     np.savez(args.save/('frames_%s.npz' % args.tag), x=np.array(xs), r=np.array(rs), L=np.array(Ls), yld=np.array(ys_), t=np.array(ts), rows=np.array(rows))
 
 
+def pack(o):
+    out = {}
+    for k_, v_ in o.__dict__.items():
+        if isinstance(v_, (bool, int, float, str, type(None))):
+            out[k_] = v_
+        elif isinstance(v_, torch.Tensor):
+            out[k_] = v_.detach().cpu().clone()
+        elif isinstance(v_, wp.array):
+            out[k_] = ('wp', v_.numpy().copy())
+        elif isinstance(v_, (tuple, list)) and all(isinstance(a__, (torch.Tensor, int, float, type(None))) for a__ in v_):
+            out[k_] = (type(v_).__name__, [a__.detach().cpu().clone() if isinstance(a__, torch.Tensor) else a__ for a__ in v_])
+        elif isinstance(v_, dict):
+            d_ = {}
+            for k2, v2 in v_.items():
+                if isinstance(v2, wp.array):
+                    d_[k2] = ('wp', v2.numpy().copy())
+                elif isinstance(v2, torch.Tensor):
+                    d_[k2] = v2.detach().cpu().clone()
+                elif isinstance(v2, (bool, int, float, str, type(None))):
+                    d_[k2] = v2
+            out[k_] = ('dict', d_)
+    return out
+
+
+def wp_put(a, v):
+    t_ = wp.to_torch(a, requires_grad=False)
+    t_.copy_(torch.as_tensor(v, device=t_.device, dtype=t_.dtype))
+
+
+def unpack(o, st):
+    for k_, v_ in st.items():
+        cur = getattr(o, k_, None)
+        if isinstance(v_, torch.Tensor):
+            if isinstance(cur, torch.Tensor) and cur.shape == v_.shape:
+                cur.copy_(v_.to(cur.device))
+            else:
+                setattr(o, k_, v_.to(dev))
+        elif isinstance(v_, tuple) and v_[0] == 'wp':
+            if isinstance(cur, wp.array):
+                wp_put(cur, v_[1])
+        elif isinstance(v_, tuple) and v_[0] == 'dict':
+            if isinstance(cur, dict):
+                for k2, v2 in v_[1].items():
+                    c2 = cur.get(k2)
+                    if isinstance(v2, tuple) and v2[0] == 'wp':
+                        if isinstance(c2, wp.array):
+                            wp_put(c2, v2[1])
+                    elif isinstance(v2, torch.Tensor):
+                        if isinstance(c2, torch.Tensor) and c2.shape == v2.shape:
+                            c2.copy_(v2.to(c2.device))
+                        else:
+                            cur[k2] = v2.to(dev)
+                    else:
+                        cur[k2] = v2
+            else:
+                setattr(o, k_, {k2: (v2.to(dev) if isinstance(v2, torch.Tensor) else v2) for k2, v2 in v_[1].items()})
+        elif isinstance(v_, tuple) and v_[0] in ('tuple', 'list'):
+            a__ = [b_.to(dev) if isinstance(b_, torch.Tensor) else b_ for b_ in v_[1]]
+            setattr(o, k_, tuple(a__) if v_[0] == 'tuple' else a__)
+        else:
+            setattr(o, k_, v_)
+
+
+s_first = 1
+if args.load_state is not None:
+    ck = torch.load(args.load_state, weights_only=False)
+    unpack(W, ck['W']); unpack(ST, ck['ST'])
+    s_first = ck['s']+1
+    print('from step %d of %s' % (ck['s'], args.load_state), flush=True)
 t0 = t_saved = time.time()
 nit, npr, nrd, ncl, nfe = [], [], [], [], []
 nsoft = 0
 nf = int(round(1/(24*args.dt))); nsteps = args.steps or args.frames*nf
 H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
 W.watch = args.watch
-for s in range(1, nsteps+1):
+for s in range(s_first, nsteps+1):
     t_s = time.time()
     W.watch_on = bool(args.watch) and s >= args.watch_from
+    ST.trace_first.s = s
     if W.watch_on:
         print('  step %d' % s, flush=True)
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
@@ -154,12 +240,15 @@ for s in range(1, nsteps+1):
         break
     ST.end()
     nit.append(its); npr.append(e_); nrd.append(ST.stats['outer']); ncl.append(int(W.ul_stats['cut_cells'])); nfe.append(ST.stats['rejected'])
+    if s in args.save_state:
+        torch.save(dict(W=pack(W), ST=pack(ST), s=s), args.save/('state_%s_%d.pt' % (args.tag, s)))
     if s % args.every == 0:
         xs.append(ST.tx.cpu().numpy()); rs.append(W._ulr.cpu().numpy()); Ls.append(W.tul['Ln'].cpu().numpy()); ys_.append(W._yld.cpu().numpy()); ts.append(s*args.dt)
     if s % 20 == 0:
         i_, j_, Lw, _, _, m = W._w
         ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum()); eb = W.ground_store(ST.tx)
-        print('  the cut made: springs %.3e, volume %.3e, ground %.3e; H_n / e_y median %.2f, max %.1f; springs v against L: gap median %.4f, max %.3f, |v| max %.3f' % (*getattr(W, 'Ecut_parts', [0., 0., 0.]), W.ul_stats.get('Hn_med', 0.), W.ul_stats.get('Hn_max', 0.), W.ul_stats.get('v_gap_med', 0.), W.ul_stats.get('v_gap_max', 0.), W.ul_stats.get('v_max', 0.)), flush=True)
+        print('  the cut made, tensor volumetric, cross, deviatoric, remainder: on beta under .5 %s; the rest %s' % (['%.2e' % a__ for a__ in W.Ecut_t[:4]], ['%.2e' % a__ for a__ in W.Ecut_t[4:]]), flush=True)
+        print('  the cut made: springs %.3e, outer %.3e, volume %.3e, ground %.3e (without the carried fit: springs %.3e, outer %.3e); T - I median %.4f, max %.3f, reset %d; fit gap %.1e; H_n / e_y median %.2f, max %.1f; springs v against L: gap median %.4f, max %.3f, |v| max %.3f' % (*W.Ecut_parts, *W.Ecut_w, W.ul_stats.get('T_med', 0.), W.ul_stats.get('T_max', 0.), W.ul_stats.get('T_reset', 0), W.ul_stats.get('fit_gap', 0.), W.ul_stats.get('Hn_med', 0.), W.ul_stats.get('Hn_max', 0.), W.ul_stats.get('v_gap_med', 0.), W.ul_stats.get('v_gap_max', 0.), W.ul_stats.get('v_max', 0.)), flush=True)
         bd = W.B['bdelta'].numpy()
         print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_p %.3e, flags made %.2e, cuts made %.2e; left %.4f of the start\'s energy; com y %.4f; flowing %d cells, yielded so far %d, on the cut %d; outer %d; walls %d, springs %d, new %d, closed %d, without a wall %d; J %.3f..%.3f; touching %d, ground/weight %.2f; min wall L / h %.3f, max r / h %.2f, radii %d (fails %d), flips %d; rho / e_y median %.2f, max %.1f, beta min %.3f; products %d, Newton %d, rejected %d, negative %d; %.2f s' % (
             s*args.dt, time.time()-t0, ek, ed, ev, eb, W.Wp, W.Eflag, W.Ecut, 1-(ek+ed+ev+eb+W.Wp+eg-W.Eflag-W.Ecut)/H0, float((M3*ST.tx)[:, 1].sum())/M, W.ul_stats['yielding'], W.ul_stats['yielded'], W.ul_stats['cut_cells'], ST.stats['outer'], m, W._m_s, W.ul_stats['born'], W.ul_stats['closed'], W.ul_stats['ghost'], float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()),
