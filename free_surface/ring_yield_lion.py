@@ -11,6 +11,7 @@ import warp as wp
 
 from free_surface.closure_warp import TrustCG
 from free_surface.ring_yield import RingYield, YieldStep
+from free_surface.ring_moment import RingMoment
 
 f64, dev = torch.float64, 'cuda'
 wp_t = lambda a_: wp.to_torch(a_, requires_grad=False)
@@ -27,6 +28,8 @@ a_.add_argument('--aa', type=int, default=6)
 a_.add_argument('--hold-after', type=int, default=3)
 a_.add_argument('--eps-cut', type=float, default=-1.)
 a_.add_argument('--beta', type=float, default=.05)
+a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
+a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
 args = a_.parse_args()
 E, nu, C0, v0 = 10648.614517785627/1000, .3912951704721983, -.2, (0., 0., -.245)
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
@@ -34,7 +37,7 @@ X0, r0, V0 = g['points'], cl['radii'], g['masses']; n = len(X0)
 args.save.mkdir(parents=True, exist_ok=True)
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
 up = torch.tensor([0., 0., 1.], dtype=f64, device=dev)
-W = RingYield(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, 1e9, theta=.5, kappa=5., eps_cut=args.eps_cut)
+W = (RingMoment if args.moment else RingYield)(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, 1e9, theta=.5, kappa=5., eps_cut=args.eps_cut)
 W.set_ball((0., 0., 1.), C0, 0.)
 if args.beta > 0:
     W.set_viscosity(args.beta, args.dt)
@@ -49,6 +52,8 @@ ST.pre_ul = True; ST.pre_every = args.pre_every; ST.smooth_pred = ST.carry_delta
 ST.set_theta(.5, mass)
 ST.aa_m = args.aa
 ST.hold_after = args.hold_after
+W.true_blocks = args.true_blocks
+ST._pre_age = 0
 ST.set_state(W.X.clone(), torch.tensor(v0, dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
 H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
 h = float(np.median(V0))**(1/3)
