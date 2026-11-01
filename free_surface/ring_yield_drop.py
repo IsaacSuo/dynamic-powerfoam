@@ -19,6 +19,7 @@ from scipy.spatial import cKDTree
 
 from free_surface.closure_warp import TrustCG
 from free_surface.ring_yield import RingYield, YieldStep
+from free_surface.ring_moment import RingMoment
 
 f64, dev = torch.float64, 'cuda'
 wp_t = lambda a_: wp.to_torch(a_, requires_grad=False)
@@ -39,6 +40,7 @@ a_.add_argument('--pre-every', type=int, default=4)
 a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
 a_.add_argument('--scene', type=int, default=0)
+a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
 a_.add_argument('--aa', type=int, default=6, help='the outer iteration: Anderson over this many differences (0: none)')
 a_.add_argument('--hold-after', type=int, default=3)
 a_.add_argument('--track-off', action='store_true', help='which cells leave the body, and their last steps')
@@ -83,7 +85,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = RingYield(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True)
+W = (RingMoment if args.moment else RingYield)(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
