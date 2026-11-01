@@ -38,6 +38,11 @@ a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: a
 a_.add_argument('--scene', type=int, default=0)
 a_.add_argument('--watch', type=int, nargs='*', default=None)
 a_.add_argument('--trace-from', type=int, default=None)
+a_.add_argument('--aa', type=int, default=0, help='the outer iteration: Anderson over this many differences (0: none)')
+a_.add_argument('--ground-mono', action='store_true')
+a_.add_argument('--contact-point', action='store_true')
+a_.add_argument('--br-lag', action='store_true')
+a_.add_argument('--hold-after', type=int, default=3)
 a_.add_argument('--save-state', type=int, nargs='*', default=[], help='checkpoints after these steps')
 a_.add_argument('--load-state', type=Path, default=None)
 a_.add_argument('--first-every', type=int, default=0)
@@ -82,7 +87,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = RingYield(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True)
+W = RingYield(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, ground_mono=args.ground_mono, contact_point=args.contact_point, br_lag=args.br_lag, hold=not args.no_hold, ledger=True)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
@@ -95,6 +100,8 @@ ST = YieldStep(W, CG, mass, W.ul_blocks(), fg, args.dt, args.mu)
 ST.pre_ul = True; ST.pre_every = args.pre_every; ST.smooth_pred = ST.carry_delta = True
 ST.set_theta(.5, mass)
 ST.trace_from = args.trace_from
+ST.aa_m = args.aa
+ST.hold_after = args.hold_after
 
 
 class _First:
@@ -247,6 +254,7 @@ for s in range(s_first, nsteps+1):
     if s % 20 == 0:
         i_, j_, Lw, _, _, m = W._w
         ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum()); eb = W.ground_store(ST.tx)
+        print('  work of the springs over the steps: the tensor %.4e, the remainder %.4e; plastic work by the formula, cells %.4e, halves %.4e' % (getattr(W, 'W_tensor', 0.), getattr(W, 'W_rem', 0.), W.Wp_cell, W.Wp_half), flush=True)
         print('  the cut made, tensor volumetric, cross, deviatoric, remainder: on beta under .5 %s; the rest %s' % (['%.2e' % a__ for a__ in W.Ecut_t[:4]], ['%.2e' % a__ for a__ in W.Ecut_t[4:]]), flush=True)
         print('  the cut made: springs %.3e, outer %.3e, volume %.3e, ground %.3e (without the carried fit: springs %.3e, outer %.3e); T - I median %.4f, max %.3f, reset %d; fit gap %.1e; H_n / e_y median %.2f, max %.1f; springs v against L: gap median %.4f, max %.3f, |v| max %.3f' % (*W.Ecut_parts, *W.Ecut_w, W.ul_stats.get('T_med', 0.), W.ul_stats.get('T_max', 0.), W.ul_stats.get('T_reset', 0), W.ul_stats.get('fit_gap', 0.), W.ul_stats.get('Hn_med', 0.), W.ul_stats.get('Hn_max', 0.), W.ul_stats.get('v_gap_med', 0.), W.ul_stats.get('v_gap_max', 0.), W.ul_stats.get('v_max', 0.)), flush=True)
         bd = W.B['bdelta'].numpy()

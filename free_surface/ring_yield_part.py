@@ -29,6 +29,9 @@ a_.add_argument('--tol', type=float, default=1e-3)
 a_.add_argument('--grad', default='gg')
 a_.add_argument('--theta', type=float, default=.5)
 a_.add_argument('--kappa', type=float, default=5.)
+a_.add_argument('--eps-cut', type=float, default=.15)
+a_.add_argument('--aa', type=int, default=0)
+a_.add_argument('--equal-halves', action='store_true')
 a_.add_argument('--tag', default='yield_part')
 a_.add_argument('--field', action='store_true', help='the last dt\'s end state into <tag>_field.npz')
 args = a_.parse_args()
@@ -59,14 +62,14 @@ def total_strain(x):
 out = {}
 for dt in args.dts:
     t0 = time.time()
-    W = RingYield(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], args.E, args.nu, args.E*args.ey, theta=args.theta, kappa=args.kappa, grad=args.grad)
+    W = RingYield(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], args.E, args.nu, args.E*args.ey, theta=args.theta, kappa=args.kappa, grad=args.grad, eps_cut=args.eps_cut, shares=not args.equal_halves, ledger=True)
     W.set_ball((0., 1., 0.), -100., 0.)
     W.start()
     W.prepare()
     fg = torch.zeros(n, 3, dtype=f64, device=dev)
     wref = 9.8*float(M3.norm()*3**0)
     CG = TrustCG(W, mass, dt, per=2, product_iters=1)
-    W.update_ul(W.X); W.grad(W.X); W.reread(); W.grad(W.X); ST = YieldStep(W, CG, mass, W.ul_blocks(), fg, dt, 0.)
+    W.update_ul(W.X); W.grad(W.X); W.reread(); W.grad(W.X); ST = YieldStep(W, CG, mass, W.ul_blocks(), fg, dt, 0.); ST.aa_m = args.aa
     ST.pre_ul = True; ST.pre_every = 4; ST.smooth_pred = ST.carry_delta = True
     ST.set_theta(args.theta, mass)
     v = a*Xd@Dg.T
