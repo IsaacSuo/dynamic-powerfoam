@@ -7,6 +7,7 @@ The corner to give up. A uniform flow balances only if every cell reads one stre
   patch     a uniform flow is what the potential was given up for, so it must balance: F uniform must give X K uniform. So on the cut R = polar(F), H = U - I, e = dev H, whatever M_i. With polar(F M) each cell read its own skew part 1/2 [e, D] of M's anisotropy D: |g| / s_y V^2/3 .09 median, .41 largest on the deep sites of a uniform flow, and in flow only beta_r w holds that, r / L about .28 e_y / beta_r, .03, measured .02: a landing's remainder took 23.5 % of the plastic work, with this 15 %. Now .0009, .0047, of order e_y D. The price: a cell alone is not free of torque, skew(R M_t F^T) of order e D; the sum is zero on a uniform state, as the sum of M_i is round: a free flight's angular momentum off by .19 % in 1.5 periods, all in plastic flow. Off the cut polar(F M) as the ring, whose elastic stiffness takes the same force at r / L .28 e
   metric    on the cut the walls are the current ones and q = F_e^-1 d, so M = F_e^-1 (sum w d (x) d) F_e^-T, about 2 mu V U_e^-2: with it the flow stress is off by 2 e (.936 at e_y .1 on a uniform path). The energy of the strain belongs on the moment of the walls as they stand, in the material frame: M_t = U M U, U the stretch of F_n: E_t = 1/2 beta tr(X M_t X^T), dE/dF = beta X M_t, a half's force w beta X K q, K = M_t M^-1, about U^2, one matrix on a uniform state. So 1/2 tr(H M_t H^T) is mu V |U - I|^2 at any elastic strain: the ring's elastic law. V is the rest's: M_t scaled by V0 / V of the walls as they stand, or a loop in shear and volume does work, .48 of its peak's energy at amp .1 (ring_yield_elastic.py, 11-02), 1e-10 with it. Off the cut M_t = M, K = I. (Weights pulled back by Nanson's formula instead: the current walls are not the affine image of an intermediate cut, M about 2 mu V (I - 1.2 e): .973.)
   remainder a Maxwell element, the stabilisation of a virtual element method, F being the projection (the normal equations): its share of the plastic work falls with h. beta_r = 1 / (1 + kappa (1 / beta - 1)), kappa = 5 at w (ring_flow.py's header), beta of the last step's end. Read within the step, at a reading just over the limit beta_r falls kappa times beta and lets go w r, |r| / L far over e_y: the force's change many times the tensor's, a gain over 1 on the outer map's fixed point, which then turns (.960, 1.283 e_y; on a settled body hundreds of cells at once). The first-order lag is a choice of time discretisation of the rate. kappa has a bound from above: a flowing cell has negative second-order work |b|^2 / 4 of 2 mu in a direction, b the part of n D across n (the non-associated price), which only the remainder holds, against beta_r
+  viscosity set_viscosity(beta, dt), c = beta / (th dt): 1/2 c tr(S M_s S) + 1/2 c sum w |r - R r_n|^2 + 1/2 c V0 kap (L - L_n)^2, S = dev sym((F - F_n) F_n^-1), M_s = R_n M_t R_n^T, in parallel with the limit (not by beta). A half's force + w (c Y F_n^-T M^-1 q + c (r - R r_n)), Y = dev sym(S M_s). S has no R: linear in F, nothing for the outer iteration to chase; on X - R e_n, which holds a spin against the frozen R with c M_t (c 120 on the lion), the outer iterations stood at 1.5 tol on landing. A spin reads only the midpoint's second order: a turn of 90 degrees at a stretch, its work 1 / steps^3 (64 down at 4 times the steps). The normal equations still drop the fit out of the remainder's part
   frozen    beta, beta_r, R, v, L's linearisation C frozen: the force is the gradient of a convex quadratic, by the fit's normal equations (sum w r (x) q + r_o Mo P^T = 0, so d/dx through F drops out of the remainder's energy, and M M^-1 cancels in the tensor's):
             E = 1/2 beta tr(X M_t X^T) + (1 - beta)(1 - th) tr(R e_n M_t X^T) + 1/2 beta_r W_r + (1 - beta_r)(1 - th) W_r,n + V0 kap_b L^2 / 2
   solver    so a local-global iteration (YieldStep): z of the frozen problem, by the trust-region CG with its energy ratio valid there; then beta, R, v, C read at z, until the true |g| is small; Anderson over the last aa_m iterates, the combination with the least true |g| by its differences (in the mass's norm of G - z a stiff direction's residual does not show: the combination stood still at 6 tol), back to the plain iterate when the true |g| rises by aa_back. After hold_after outer iterations a cell under beta .2 keeps its R and C: its force goes with beta X, so R's error costs little, and on a cell far gone R can flip between two rotations (dropped: the same state, five times the iterations)
@@ -58,8 +59,8 @@ def k_ry_ab(Ss: wp.array(dtype=wp.mat33d), V0: wp.array(dtype=wp.float64), Vgi: 
 
 @wp.kernel(enable_backward=False)
 def k_ry_L(Fc: wp.array(dtype=wp.mat33d), Gm: wp.array(dtype=wp.mat33d), C: wp.array(dtype=wp.mat33d), Ln: wp.array(dtype=wp.float64), V0: wp.array(dtype=wp.float64), lam: wp.float64, k2: wp.float64, flag: wp.array(dtype=int), gid: wp.array(dtype=int),
-           be: wp.array(dtype=wp.float64), Lz: wp.array(dtype=wp.float64), Cz: wp.array(dtype=wp.mat33d), Fz: wp.array(dtype=wp.mat33d), L: wp.array(dtype=wp.float64), Lb: wp.array(dtype=wp.float64), terms: wp.array2d(dtype=wp.float64)):
-    """L on its frozen linearisation; the springs' volumetric share that beta has let go, on the pressure"""
+           be: wp.array(dtype=wp.float64), Lz: wp.array(dtype=wp.float64), Cz: wp.array(dtype=wp.mat33d), Fz: wp.array(dtype=wp.mat33d), cv: wp.float64, L: wp.array(dtype=wp.float64), Lb: wp.array(dtype=wp.float64), terms: wp.array2d(dtype=wp.float64)):
+    """L on its frozen linearisation; the springs' volumetric share that beta has let go, on the pressure; the viscous pressure on L - L_n"""
     b = wp.tid()
     half = wp.float64(0.5)
     lb = Lz[b]+wp.ddot(Cz[b], Fc[b]-Fz[b])
@@ -69,8 +70,9 @@ def k_ry_L(Fc: wp.array(dtype=wp.mat33d), Gm: wp.array(dtype=wp.mat33d), C: wp.a
     s = lam+k2
     if flag[b] == 0:
         s = lam+k2*(wp.float64(1.0)-be[gid[b]])
-    wp.atomic_add(terms, 1, b % NSLOT, V0[b]*half*s*lb*lb)
-    wp.atomic_add(Lb, b, V0[b]*s*lb)
+    dl = lb-Ln[b]
+    wp.atomic_add(terms, 1, b % NSLOT, V0[b]*half*s*(lb*lb+cv*dl*dl))
+    wp.atomic_add(Lb, b, V0[b]*s*(lb+cv*dl))
 
 
 @wp.kernel(enable_backward=False)
@@ -107,8 +109,8 @@ def k_ry_Ff(Am: wp.array(dtype=wp.mat33d), Mti: wp.array(dtype=wp.mat33d), Ff: w
 
 @wp.kernel(enable_backward=False)
 def k_ry_cell(Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Rz: wp.array(dtype=wp.mat33d), Fc: wp.array(dtype=wp.mat33d), Ron: wp.array(dtype=wp.mat33d), Pc: wp.array(dtype=wp.mat33d), Mo: wp.array(dtype=wp.mat33d),
-              be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), ca: wp.float64, gid: wp.array(dtype=int), vm: wp.array(dtype=wp.float64), Mtt: wp.array(dtype=wp.mat33d), Kt: wp.array(dtype=wp.mat33d), Fb: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64)):
-    """the tensor's energy once per group, term 0; the outer layer's remainder, term 5; dE/dF_g"""
+              be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), ca: wp.float64, gid: wp.array(dtype=int), vm: wp.array(dtype=wp.float64), Mtt: wp.array(dtype=wp.mat33d), Kt: wp.array(dtype=wp.mat33d), Vz: wp.array(dtype=wp.mat33d), cv: wp.float64, Fb: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64)):
+    """the tensor's energy once per group, term 0; the outer layer's remainder, term 5, with its viscous part; dE/dF_g, Vz the fit's viscous part"""
     b = wp.tid()
     half = wp.float64(0.5)
     one = wp.float64(1.0)
@@ -121,13 +123,33 @@ def k_ry_cell(Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Rz: 
         wp.atomic_add(terms, 0, b % NSLOT, half*bb*wp.ddot(X@Mtt[b], X)+(one-bb)*ca*wp.ddot(Xn@Mtt[b], X))
     R0 = Fc[b]-Ff[g]@Pc[b]
     Rn = Rz[g]@Ron[b]
-    wp.atomic_add(terms, 5, b % NSLOT, half*cc*wp.ddot(R0@Mo[b], R0)+(one-cc)*ca*wp.ddot(Rn@Mo[b], R0))
-    Fb[b] = (((bb*X+((one-bb)*ca)*Xn)@(Kt[g]@Pc[b]))+cc*R0+((one-cc)*ca)*Rn)@Mo[b]
+    Rv = R0-Rn
+    wp.atomic_add(terms, 5, b % NSLOT, half*cc*wp.ddot(R0@Mo[b], R0)+(one-cc)*ca*wp.ddot(Rn@Mo[b], R0)+half*cv*wp.ddot(Rv@Mo[b], Rv))
+    Fb[b] = (((bb*X+((one-bb)*ca)*Xn)@(Kt[g]@Pc[b]))+(Vz[g]@Pc[b])+cc*R0+((one-cc)*ca)*Rn+cv*Rv)@Mo[b]
+
+
+@wp.kernel(enable_backward=False)
+def k_ry_visc(Ff: wp.array(dtype=wp.mat33d), Fn: wp.array(dtype=wp.mat33d), Fni: wp.array(dtype=wp.mat33d), Ms: wp.array(dtype=wp.mat33d), Mti: wp.array(dtype=wp.mat33d), gid: wp.array(dtype=int), cv: wp.float64, Vz: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64)):
+    """the fit's viscous energy on S = dev sym((F - F_n) F_n^-1), per group, term 0; Vz = dPsi/dF M^-1, what a half's q and the outer layer's P take"""
+    b = wp.tid()
+    if gid[b] != b:
+        return
+    half = wp.float64(0.5)
+    third = wp.float64(1.0)/wp.float64(3.0)
+    I = wp.identity(n=3, dtype=wp.float64)
+    l = (Ff[b]-Fn[b])@Fni[b]
+    s = half*(l+wp.transpose(l))
+    S = s-(third*wp.trace(s))*I
+    SM = S@Ms[b]
+    Y = half*(SM+wp.transpose(SM))
+    Y = Y-(third*wp.trace(Y))*I
+    wp.atomic_add(terms, 0, b % NSLOT, half*cv*wp.ddot(SM, S))
+    Vz[b] = cv*(Y@(wp.transpose(Fni[b])@Mti[b]))
 
 
 @wp.kernel(enable_backward=False)
 def k_ry_half(x: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=int), rj: wp.array(dtype=int), wi: wp.array(dtype=wp.float64), wj: wp.array(dtype=wp.float64), qi: wp.array(dtype=wp.vec3d), qj: wp.array(dtype=wp.vec3d), dni: wp.array(dtype=wp.vec3d), dnj: wp.array(dtype=wp.vec3d), gid: wp.array(dtype=int),
-              Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Rz: wp.array(dtype=wp.mat33d), be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), ca: wp.float64, vm: wp.array(dtype=wp.float64), Kt: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d)):
+              Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Rz: wp.array(dtype=wp.mat33d), be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), ca: wp.float64, vm: wp.array(dtype=wp.float64), Kt: wp.array(dtype=wp.mat33d), Vz: wp.array(dtype=wp.mat33d), cv: wp.float64, terms: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d)):
     """each half's force, the springs carry it; the remainder's energy, term 4"""
     e = wp.tid()
     i, j = ri[e], rj[e]
@@ -144,8 +166,8 @@ def k_ry_half(x: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=int), rj: wp.array
     r = d-Ff[gi]@q
     rn = Rz[gi]@dni[e]
     qk = Kt[gi]@q
-    f = w*(bb*((Ff[gi]-vm[gi]*Rz[gi])@qk)+((one-bb)*ca)*(Rz[gi]@(Hn[gi]@qk))+cc*r+((one-cc)*ca)*rn)
-    wp.atomic_add(terms, 4, e % NSLOT, half*cc*w*wp.dot(r, r)+(one-cc)*ca*w*wp.dot(rn, r))
+    f = w*(bb*((Ff[gi]-vm[gi]*Rz[gi])@qk)+((one-bb)*ca)*(Rz[gi]@(Hn[gi]@qk))+cc*r+((one-cc)*ca)*rn+Vz[gi]@q+cv*(r-rn))
+    wp.atomic_add(terms, 4, e % NSLOT, half*cc*w*wp.dot(r, r)+(one-cc)*ca*w*wp.dot(rn, r)+half*cv*w*wp.dot(r-rn, r-rn))
     gj = gid[j]
     q = qj[e]
     bb = be[gj]
@@ -154,8 +176,8 @@ def k_ry_half(x: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=int), rj: wp.array
     r = d-Ff[gj]@q
     rn = Rz[gj]@dnj[e]
     qk = Kt[gj]@q
-    f = f+w*(bb*((Ff[gj]-vm[gj]*Rz[gj])@qk)+((one-bb)*ca)*(Rz[gj]@(Hn[gj]@qk))+cc*r+((one-cc)*ca)*rn)
-    wp.atomic_add(terms, 4, e % NSLOT, half*cc*w*wp.dot(r, r)+(one-cc)*ca*w*wp.dot(rn, r))
+    f = f+w*(bb*((Ff[gj]-vm[gj]*Rz[gj])@qk)+((one-bb)*ca)*(Rz[gj]@(Hn[gj]@qk))+cc*r+((one-cc)*ca)*rn+Vz[gj]@q+cv*(r-rn))
+    wp.atomic_add(terms, 4, e % NSLOT, half*cc*w*wp.dot(r, r)+(one-cc)*ca*w*wp.dot(rn, r)+half*cv*w*wp.dot(r-rn, r-rn))
     wp.atomic_add(x_adj, j, f)
     wp.atomic_add(x_adj, i, -f)
 
@@ -246,7 +268,7 @@ class RingYield(RingFlow):
         n, dev = self.n, self.dev
         z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
         Ks = self.ul['Kw']
-        self.ry = dict(Ff=z(n, wp.mat33d), Fn=z(n, wp.mat33d), Rn=z(n, wp.mat33d), Hn=z(n, wp.mat33d), Hd=z(n, wp.mat33d), gy=z(n, wp.int32), vm=z(n, wp.float64), Mtt=z(n, wp.mat33d), Kt=z(n, wp.mat33d), Ron=z(n, wp.mat33d), Rz=z(n, wp.mat33d), Mt=z(n, wp.mat33d), Mti=z(n, wp.mat33d), MoP=z(n, wp.mat33d), Pc=z(n, wp.mat33d), be=z(n, wp.float64), br=z(n, wp.float64), ei=z(n, wp.float64), Lz=z(n, wp.float64), Cz=z(n, wp.mat33d), Fz=z(n, wp.mat33d),
+        self.ry = dict(Ff=z(n, wp.mat33d), Fn=z(n, wp.mat33d), Rn=z(n, wp.mat33d), Hn=z(n, wp.mat33d), Hd=z(n, wp.mat33d), gy=z(n, wp.int32), vm=z(n, wp.float64), Mtt=z(n, wp.mat33d), Kt=z(n, wp.mat33d), Vz=z(n, wp.mat33d), Fni=z(n, wp.mat33d), Ms=z(n, wp.mat33d), Ron=z(n, wp.mat33d), Rz=z(n, wp.mat33d), Mt=z(n, wp.mat33d), Mti=z(n, wp.mat33d), MoP=z(n, wp.mat33d), Pc=z(n, wp.mat33d), be=z(n, wp.float64), br=z(n, wp.float64), ei=z(n, wp.float64), Lz=z(n, wp.float64), Cz=z(n, wp.mat33d), Fz=z(n, wp.mat33d),
                        gid=z(n, wp.int32), Vgi=z(n, wp.float64), Gs=z(n, wp.mat33d), Grs=z(n, wp.mat33d), Gm=z(n, wp.mat33d), Grm=z(n, wp.mat33d), Gbm=z(n, wp.mat33d), Gbrm=z(n, wp.mat33d), Ss=z(n, wp.mat33d), Srs=z(n, wp.mat33d))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.ty = {k_: tt(a_) for k_, a_ in self.ry.items()}
@@ -451,6 +473,9 @@ class RingYield(RingFlow):
             Y['Kt'][on_] = Y['Mtt'][on_]@Mi[on_]
         self._mark_groups()
         wp.launch(k_ry_start, n, inputs=[self.ry['Fn'], self.ry['Mt'], self.ry['Mtt'], self.ry['gid'], self.ry['gy']], outputs=[self.ry['Rn'], self.ry['Hn'], self.ry['Hd']])
+        if self.cv > 0.:
+            Y['Fni'][lead] = self._inv(Fn[lead])
+            Y['Ms'][lead] = Y['Rn'][lead]@Y['Mtt'][lead]@Y['Rn'][lead].transpose(1, 2)
         Rn = Y['Rn'][g]
         T['dni'][:ms] = torch.einsum('fba,fb->fa', Rn[lo], d-torch.einsum('fab,fb->fa', Fn[g[lo]], qi)); T['dnj'][:ms] = torch.einsum('fba,fb->fa', Rn[hi], d-torch.einsum('fab,fb->fa', Fn[g[hi]], qj))
         Y['Ron'].copy_(Rn.transpose(1, 2)@(Fe-Fn[g]@P))
@@ -525,16 +550,19 @@ class RingYield(RingFlow):
         wp.launch(k_ry_gs, n, inputs=[Br['G'], V0, gid], outputs=[Y['Grs']])
         wp.launch(k_ry_gm, n, inputs=[Y['Grs'], Y['Vgi'], gid], outputs=[Y['Grm']])
         wp.launch(k_rf_F, n, inputs=[Y['Gm'], Y['Grm'], S['F0'], Rg['flag']], outputs=[B['Fc']])
-        wp.launch(k_ry_L, n, inputs=[B['Fc'], Y['Gm'], U['Q'], U['Ln'], V0, wp.float64(self.lam), wp.float64(2*self.mu/3), Rg['flag'], gid, Y['be'], Y['Lz'], Y['Cz'], Y['Fz']], outputs=[B['L'], B['Lb'], B['terms']])
+        cv = wp.float64(self.cv)
+        wp.launch(k_ry_L, n, inputs=[B['Fc'], Y['Gm'], U['Q'], U['Ln'], V0, wp.float64(self.lam), wp.float64(2*self.mu/3), Rg['flag'], gid, Y['be'], Y['Lz'], Y['Cz'], Y['Fz'], cv], outputs=[B['L'], B['Lb'], B['terms']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         wp.launch(k_var, Ur['Kw'], inputs=[Ur['wi'], Ur['wj'], Ur['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         hs = [Rg['i'], Rg['j'], Rg['wi'], Rg['wj'], Rg['qi'], Rg['qj']]
         wp.launch(k_ry_A, Rg['K'], inputs=[x]+hs+[gid], outputs=[Rg['Am']])
         wp.launch(k_ry_Aout, n, inputs=[B['Fc'], Y['MoP'], gid], outputs=[Rg['Am']])
         wp.launch(k_ry_Ff, n, inputs=[Rg['Am'], Y['Mti']], outputs=[Y['Ff']])
-        wp.launch(k_ry_cell, n, inputs=[Y['Ff'], Y['Hd'], Y['Rz'], B['Fc'], Y['Ron'], Y['Pc'], Rg['Mo'], Y['be'], Y['br'], ca, gid, Y['vm'], Y['Mtt'], Y['Kt']], outputs=[B['Fb'], B['terms']])
+        if self.cv > 0.:
+            wp.launch(k_ry_visc, n, inputs=[Y['Ff'], Y['Fn'], Y['Fni'], Y['Ms'], Y['Mti'], gid, cv], outputs=[Y['Vz'], B['terms']])
+        wp.launch(k_ry_cell, n, inputs=[Y['Ff'], Y['Hd'], Y['Rz'], B['Fc'], Y['Ron'], Y['Pc'], Rg['Mo'], Y['be'], Y['br'], ca, gid, Y['vm'], Y['Mtt'], Y['Kt'], Y['Vz'], cv], outputs=[B['Fb'], B['terms']])
         wp.launch(k_rf_Fadj, n, inputs=[B['Fb'], S['F0'], Rg['flag']], outputs=[Y['Gbm'], Y['Gbrm']])
-        wp.launch(k_ry_half, Rg['K'], inputs=[x]+hs+[Rg['dni'], Rg['dnj'], gid, Y['Ff'], Y['Hd'], Y['Rz'], Y['be'], Y['br'], ca, Y['vm'], Y['Kt']], outputs=[B['terms'], g])
+        wp.launch(k_ry_half, Rg['K'], inputs=[x]+hs+[Rg['dni'], Rg['dnj'], gid, Y['Ff'], Y['Hd'], Y['Rz'], Y['be'], Y['br'], ca, Y['vm'], Y['Kt'], Y['Vz'], cv], outputs=[B['terms'], g])
         wp.launch(k_ry_Lb, n, inputs=[B['Lb'], U['Q'], Y['Cz'], Rg['flag']], outputs=[Y['Gbm'], Y['Gbrm']])
         bl = self.ball
         if bl is not None:
@@ -614,6 +642,15 @@ class RingYield(RingFlow):
             self.W_tensor = getattr(self, 'W_tensor', 0.)+float(((fti+ftj)*dd_).sum())
             self.W_rem = getattr(self, 'W_rem', 0.)+float(((fri+frj)*dd_).sum())
         self.Wp_cell += wc_; self.Wp_half += wh_; self.Wp += wc_+wh_
+        if self.cv > 0.:                                                                   # (the viscous work over the step: its force . dx = 2 Psi / th, Psi a quadratic of z - x_n)
+            lv = (Ff-Fn)@Y['Fni']
+            Sv = .5*(lv+lv.transpose(1, 2))
+            Sv = Sv-(Sv.diagonal(dim1=1, dim2=2).sum(1)/3)[:, None, None]*I3
+            dzv = self.tx[hi]-self.tx[lo]
+            rvi = dzv-torch.einsum('fab,fb->fa', Ff[g[lo]], qi)-rni_; rvj = dzv-torch.einsum('fab,fb->fa', Ff[g[hi]], qj)-rnj_
+            Rv = self.tFc-Ff[g]@Y['Pc']-R[g]@Y['Ron']
+            dLv = self.tL-t['Ln']
+            self.Wv += self.cv/th*(float((((Sv@Y['Ms'])*Sv).sum((1, 2)))[lead].sum())+float((wi*(rvi*rvi).sum(1)).sum()+(wj*(rvj*rvj).sum(1)).sum())+float(((Rv@T['Mo'])*Rv).sum())+float((self.V0*(self.lam+2*self.mu/3)*dLv*dLv).sum()))
         F0 = s['F0']
         Fgend = (self.tFc-ca*F0)/th
         flag = self._yld

@@ -25,11 +25,15 @@ a_.add_argument('--steps', type=int, default=40)
 a_.add_argument('--loops', type=int, default=3)
 a_.add_argument('--E', type=float, default=23.00838)
 a_.add_argument('--nu', type=float, default=.3008)
+a_.add_argument('--beta', type=float, default=0.)
+a_.add_argument('--dt', type=float, default=1/1200)
 args = a_.parse_args()
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
 X0, r0, V0, C0 = g['points'], cl['radii'], g['masses'], g['contacts']; n = len(X0)
 W = RingYield(X0, r0, V0, g['pairs'], g['areas'], C0, args.E, args.nu, 1e6, theta=.5, kappa=5., eps_cut=args.eps_cut, ledger=True)
 W.set_ball((0., 1., 0.), -100., 0.)
+if args.beta > 0:
+    W.set_viscosity(args.beta, args.dt)
 W.start()
 W.prepare()
 X = W.X.clone()
@@ -54,6 +58,11 @@ def motion(s):
         return Xc+Y*torch.tensor([l, l**-.5, l**-.5], dtype=f64, device=dev)
     if args.mode == 'volume':
         return Xc+Y*math.exp(s*args.amp)
+    if args.mode == 'spin':                                                                # (a stretch, s up to .5, then held and turned: a rigid spin of a strained body)
+        l = math.exp(min(2*s, 1.)*args.amp)
+        a = max(2*s-1, 0.)*math.pi/2
+        F = torch.tensor([[l*math.cos(a), -l**-.5*math.sin(a), 0.], [l*math.sin(a), l**-.5*math.cos(a), 0.], [0., 0., l**-.5]], dtype=f64, device=dev)
+        return Xc+Y@F.T
     if args.mode == 'mixed':                                                               # (s the phase of a loop that encloses an area in shear and volume)
         ph = 2*math.pi*s
         l, v = math.exp(args.amp*.5*(1-math.cos(ph))), math.exp(args.amp*math.sin(ph))
@@ -65,8 +74,14 @@ def motion(s):
 def step(xn, x):
     W.update_ul(xn)
     z = .5*(xn+x)
-    W.grad(z); W.reread(); _, gz = W.grad(z)
+    W.grad(z); W.reread(); e0, gz = W.grad(z)
+    gz = gz.clone()
     w = float((gz*(x-xn)).sum())
+    if args.beta > 0 and not hasattr(W, '_fd'):                                            # (the frozen energy against its force, by differences, once)
+        u = torch.as_tensor(np.random.default_rng(1).normal(size=(n, 3)), device=dev)*1e-7
+        W._fd = (float(W.grad(z+u)[0])-float(W.grad(z-u)[0]))/2, float((gz*u).sum())
+        print('the frozen energy with the viscosity: by differences %.8e, the force %.8e' % W._fd, flush=True)
+        W.grad(z)
     W.end_ul(.5)
     return w
 
@@ -84,8 +99,10 @@ def force(x):
 
 
 path = np.concatenate([np.linspace(0, 1, args.steps+1)[1:], np.linspace(1, 0, args.steps+1)[1:]])
-if args.mode == 'mixed':
+if args.mode in ('mixed', 'spin'):
     path = np.linspace(0, 1, 2*args.steps+1)[1:]
+if args.beta > 0 and args.mode == 'uniform':
+    print('the viscous work of a loop, closed form 2 mu beta |de|^2 / dt over the steps: %.4e' % (2*W.mu*args.beta*1.5*(args.amp/args.steps)**2/args.dt*2*args.steps*float(W.V0.sum())), flush=True)
 if args.mode == 'uniform':
     l_ = math.exp(args.amp)
     print('closed form mu V |U - I|^2: %.4e' % (W.mu*float(W.V0.sum())*((l_-1)**2+2*(l_**-.5-1)**2)), flush=True)
@@ -99,9 +116,13 @@ for lp in range(args.loops):
         x = motion(float(s))
         work += step(xn, x)
         if k == args.steps-1:
+            if args.beta > 0:
+                print('  the viscous work up to the half of the path %.4e' % W.Wv, flush=True)
             peak = stored(x)
             gp = force(x)
             fpeak = gp.norm(dim=1)
+    if args.beta > 0:
+        print('  the viscous work at the end of the path %.4e' % W.Wv, flush=True)
     x = motion(0.)
     g0 = force(x)
     Fe = W._Ft
