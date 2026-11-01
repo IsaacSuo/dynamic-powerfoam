@@ -1,12 +1,14 @@
-"""ring_ul.py with a yield limit (2026-11-01). One formula with the elastic end: beta = 1 is RingUL's force.
-  reading   per half spring in its cell's frame m = R^T d - q; the outer layer's H = R^T F_o - I, its virtual springs. R the whole cell's minimum of the step's start state.
-  split     the cell's spring energy S = 1/2 sum w |m|^2 + 1/2 tr(H Mo H^T) splits exactly: v = (sum w m . q + tr(H Mo)) / T, T = sum w |q|^2 + tr Mo, a volumetric part 1/2 T v^2 and a distortion W = S - 1/2 T v^2 (m - v q orthogonal to q in that sum).
-  limit     rho^2 = W / (mu V_s) <= e_y^2, beta = min(1, e_y / rho), V_s = T / (6 mu) the volume the cell's half springs stand for: each carries half of its wall's two pyramids, so sum V_s = sum V on a closed foam, cell by cell not (with the cell's own V a small cell beside large ones read a uniform strain up to 2.29 times, 1 % 0.85). So rho^2 = 3 tr(e M e) / tr M on a uniform strain,
-            with only M's anisotropy in it. The cell's energy E = psi(W) + 1/2 T v^2, psi = W up to W_y = mu V_s e_y^2, then 2 (W W_y)^1/2 - W_y.
-  force     w R (beta m + (1 - beta) v q) on the half spring, R (beta H + (1 - beta) v I) Mo on F_o: the exact gradient of E at any increment. E stays stationary in R (the torque of the returned force is beta times the elastic one, 0), so nothing for dR, and R need not be read again after the return. The step is symmetric, and convex in x at a frozen R
-            (2026-11-01, first form: the limit on |dev U| of the fit F + 3/2 of the remainder, exact on a uniform flow, ring_checks.py --test 1, 6, 12, but its force is a gradient only to first order in 1 - beta, and in the landing's first impact beta reached 0.01: Newton's ratio -99 to 120, stuck at 0.03 weights. That form's 3/2 is not integrable.)
-  return    at the step's end, from the step's start state: q -> q + (1 - beta)(m - v q), F_o -> R (I + beta H + (1 - beta) v I). The plastic work s_y de = 2 beta (1 - beta) W: what the return lets go, (1 - beta^2) W, less the trial's overshoot
-  price     W in the springs' metric: under a uniform strain rho varies with the direction of e against M, so a uniform flow is not exactly uniform: the mean stress about 1 - Var(3 tr(e M e) / (tr M |e|^2)) / 8 of the limit. The remainder counts once, where its FE share is half: the excess dissipation of a rough motion 1.3-1.8 of the FE's
+"""ring_ul.py with a yield limit (2026-11-01). One formula with the elastic end: no yield is RingUL's force.
+  reading   R the whole cell's minimum of the step's start state; the whole cell's fit F = A M^-1, A = sum w d (x) q + F_o Mo, M = sum w q (x) q + Mo, in its frame H = R^T F - I; per half spring m = R^T d - q = H q + r; the outer layer's H_o = R^T F_o - I = H + r_o.
+  split     the cell's spring energy S = 1/2 tr(H M H^T) + W_r by the fit's normal equations, W_r = 1/2 sum w |r|^2 + 1/2 tr(r_o Mo r_o^T) what the fit leaves: the strain's variation over the cell, and the rotation's. The shape W_e = 1/2 tr((H - v I) M (H - v I)^T) about the true volumetric reading v = J^1/3 - 1, J = exp L, T = tr M: S = W_e + W_r + v tr(H M) - 1/2 T v^2
+            (2026-11-01, v = tr(H M) / T, which splits S orthogonally: a shear reads v != 0 in a cell with M not round, and the return does not touch v, so a flow piled up a false volumetric strain: at the end of the landing the springs held 20 times the limit's energy, spreads y +23 %, x -12 %)
+  limit     W_e + kappa W_r <= W_y = mu V_s e_y^2, V_s = T / (6 mu) the volume the cell's half springs stand for: each carries half of its wall's two pyramids, so sum V_s = sum V on a closed foam, cell by cell not (with the cell's own V a small cell beside large ones read a uniform strain up to 2.29 times, 1 % 0.85). On a uniform strain W_e = mu V_s e^2 up to M's anisotropy only.
+  return    the closest point of that limit in the energy's norm, associated flow: shape by beta_e = 1 / (1 + lam), remainder by beta_r = 1 / (1 + kappa lam), lam from beta_e^2 W_e + kappa beta_r^2 W_r = W_y. So the elastic stiffness is untouched at any kappa
+  energy    the Moreau envelope, E = beta_e (2 - beta_e) W_e + beta_r (2 - beta_r) W_r + v tr(H M) - 1/2 T v^2, whose exact gradient is the force at any increment: w R (beta_e (H - v I) q + v q + beta_r r) on the half spring, R (beta_e (H - v I) + v I + beta_r r_o) Mo on F_o, and (1 - beta_e)(tr(H M) - v T) dv on the pressure's L. E stays stationary in R: the returned force's torque is 0 by the fit's normal equations and skew(H M) = 0, so nothing for dR and no second read. Symmetric
+  kappa     a fluctuating rate D' over a flow of relaxation rate g, at frequency om, x = om / g: the springs' remainder, with twice the FE's energy (beta^2 6 against 3), dissipates over the truth by 2 kappa (1 + x^2) / (kappa^2 + x^2). kappa 2: 1 for slow fluctuations, 1.6 at x = 1. kappa 1: 2 at every x.
+            (2026-11-01, first form, `ring_checks.py`: the limit on |dev U| + 3/2 of the remainder, both by one beta, exact on a uniform flow but not integrable: its force is a gradient only to first order in 1 - beta, and in the landing's first impact beta reached 0.01: Newton's ratio -99 to 120, stuck at 0.03 weights. Lowering the remainder's stiffness instead softens the elastic modes: first .925 at s = 1, .879 at 1/2.)
+  update    at the step's end, from the step's start state: q -> q + (1 - beta_e)(H - v I) q + (1 - beta_r) r, F_o -> R (I + beta_e (H - v I) + v I + beta_r r_o). The plastic work 2 beta_e (1 - beta_e) W_e + 2 beta_r (1 - beta_r) W_r: what the return lets go less the trial's overshoot (s_y de in 1D)
+  price     W_e in the springs' metric: under a uniform strain the read varies with the direction of e against M, so a uniform flow is not exactly uniform: the mean stress about 1 - Var(3 tr(e M e) / (tr M |e|^2)) / 8 of the limit
   cut       the gradient on the current cut, as merged_ul.py: x -> G linear within a step, F_o = (I + G) F_o,n, L = L_n + tr(C^T G), C frozen at Newton's start. Springs at their rest weight while a cell of the pair has not yielded, at the current wall's when both have; gone with their wall, born at r = 0, q = R^T d / (1 + v).
 Self contact not here. set_ball, start(), prepare(); through RingStep. ring_plastic_check.py its checks, ring_drop.py the landing."""
 import math
@@ -25,69 +27,92 @@ f64 = torch.float64
 
 
 @wp.kernel(enable_backward=False)
-def k_rp_R(Am: wp.array(dtype=wp.mat33d), Fc: wp.array(dtype=wp.mat33d), Mo: wp.array(dtype=wp.mat33d), Rc: wp.array(dtype=wp.mat33d)):
+def k_rp_R(Am: wp.array(dtype=wp.mat33d), Fc: wp.array(dtype=wp.mat33d), Mo: wp.array(dtype=wp.mat33d), Mti: wp.array(dtype=wp.mat33d), Rc: wp.array(dtype=wp.mat33d), Hf: wp.array(dtype=wp.mat33d)):
+    """the whole cell's rotation, and its fit in that frame"""
     b = wp.tid()
-    Rc[b] = rot_proper(Am[b]+Fc[b]@Mo[b])
+    A = Am[b]+Fc[b]@Mo[b]
+    R = rot_proper(A)
+    Rc[b] = R
+    Hf[b] = wp.transpose(R)@(A@Mti[b])-wp.identity(n=3, dtype=wp.float64)
 
 
 @wp.kernel(enable_backward=False)
-def k_rp_m(x: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=int), rj: wp.array(dtype=int), rw: wp.array(dtype=wp.float64), qi: wp.array(dtype=wp.vec3d), qj: wp.array(dtype=wp.vec3d), Rc: wp.array(dtype=wp.mat33d),
-           mi: wp.array(dtype=wp.vec3d), mj: wp.array(dtype=wp.vec3d), Sq: wp.array(dtype=wp.float64), Sm: wp.array(dtype=wp.float64)):
-    """each half's reading; per cell sum w m . q, sum w |m|^2"""
+def k_rp_m(x: wp.array(dtype=wp.vec3d), ri_: wp.array(dtype=int), rj_: wp.array(dtype=int), rw: wp.array(dtype=wp.float64), qi: wp.array(dtype=wp.vec3d), qj: wp.array(dtype=wp.vec3d), Rc: wp.array(dtype=wp.mat33d), Hf: wp.array(dtype=wp.mat33d),
+           ri: wp.array(dtype=wp.vec3d), rj: wp.array(dtype=wp.vec3d), Sr: wp.array(dtype=wp.float64)):
+    """each half's remainder in its cell's frame, r = R^T d - q - H q; per cell sum w |r|^2"""
     e = wp.tid()
-    i, j = ri[e], rj[e]
+    i, j = ri_[e], rj_[e]
     if i == j:
         return
     d = x[j]-x[i]
     w = rw[e]
-    a = wp.transpose(Rc[i])@d-qi[e]
-    b = wp.transpose(Rc[j])@d-qj[e]
-    mi[e] = a
-    mj[e] = b
-    wp.atomic_add(Sq, i, w*wp.dot(a, qi[e]))
-    wp.atomic_add(Sm, i, w*wp.dot(a, a))
-    wp.atomic_add(Sq, j, w*wp.dot(b, qj[e]))
-    wp.atomic_add(Sm, j, w*wp.dot(b, b))
+    a = wp.transpose(Rc[i])@d-qi[e]-Hf[i]@qi[e]
+    b = wp.transpose(Rc[j])@d-qj[e]-Hf[j]@qj[e]
+    ri[e] = a
+    rj[e] = b
+    wp.atomic_add(Sr, i, w*wp.dot(a, a))
+    wp.atomic_add(Sr, j, w*wp.dot(b, b))
 
 
 @wp.kernel(enable_backward=False)
-def k_rp_cell(Fc: wp.array(dtype=wp.mat33d), Rc: wp.array(dtype=wp.mat33d), Mo: wp.array(dtype=wp.mat33d), Tm: wp.array(dtype=wp.float64), Sq: wp.array(dtype=wp.float64), Sm: wp.array(dtype=wp.float64), ey: wp.float64,
-              Hr: wp.array(dtype=wp.mat33d), vc: wp.array(dtype=wp.float64), Wd: wp.array(dtype=wp.float64), rho: wp.array(dtype=wp.float64), be: wp.array(dtype=wp.float64), Fb: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64)):
-    """the split, the limit, the cell's energy (term 0) and dE/dF_o"""
+def k_rp_cell(Fc: wp.array(dtype=wp.mat33d), Rc: wp.array(dtype=wp.mat33d), Hf: wp.array(dtype=wp.mat33d), Mo: wp.array(dtype=wp.mat33d), Mt: wp.array(dtype=wp.mat33d), Tm: wp.array(dtype=wp.float64), Sr: wp.array(dtype=wp.float64), L: wp.array(dtype=wp.float64), ey: wp.float64, kappa: wp.float64,
+              ro: wp.array(dtype=wp.mat33d), vc: wp.array(dtype=wp.float64), We: wp.array(dtype=wp.float64), Wr: wp.array(dtype=wp.float64), rho: wp.array(dtype=wp.float64), be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), Fb: wp.array(dtype=wp.mat33d), Lb: wp.array(dtype=wp.float64), terms: wp.array2d(dtype=wp.float64)):
+    """the split, the closest point of the limit, the cell's energy (term 0) and dE/dF_o; the volumetric reading's share of the force into dE/dL"""
     b = wp.tid()
     half = wp.float64(0.5)
     one = wp.float64(1.0)
     I = wp.identity(n=3, dtype=wp.float64)
-    H = wp.transpose(Rc[b])@Fc[b]-I
-    Hr[b] = H
-    Z = H@Mo[b]
-    v = (Sq[b]+wp.trace(Z))/Tm[b]
-    W = wp.max(half*(Sm[b]+wp.ddot(Z, H)-v*v*Tm[b]), wp.float64(0.0))
-    r = wp.sqrt(wp.float64(6.0)*W/Tm[b])
+    H = Hf[b]
+    T = Tm[b]
+    ej = wp.exp(L[b]/wp.float64(3.0))
+    v = ej-one
+    tHM = wp.ddot(H, Mt[b])
+    Hd = H-I*v
+    Rt = wp.transpose(Rc[b])@Fc[b]-I-H
+    ro[b] = Rt
+    a = half*wp.ddot(Hd@Mt[b], Hd)
+    c = half*(Sr[b]+wp.ddot(Rt@Mo[b], Rt))
+    a = wp.max(a, wp.float64(0.0))
+    Wy = ey*ey*T/wp.float64(6.0)
     bb = one
-    E = W
-    if r > ey:
-        bb = ey/r
-        Wy = ey*ey*Tm[b]/wp.float64(6.0)
-        E = wp.float64(2.0)*wp.sqrt(W*Wy)-Wy
+    bc = one
+    E = a+c
+    if a+kappa*c > Wy:
+        lam = wp.sqrt((a+kappa*c)/Wy)-one
+        for it in range(12):
+            d1 = one+lam
+            d2 = one+kappa*lam
+            f = a/(d1*d1)+kappa*c/(d2*d2)-Wy
+            df = -wp.float64(2.0)*(a/(d1*d1*d1)+kappa*kappa*c/(d2*d2*d2))
+            if df == wp.float64(0.0):
+                break
+            lam = wp.max(lam-f/df, wp.float64(0.0))
+        bb = one/(one+lam)
+        bc = one/(one+kappa*lam)
+        E = bb*(wp.float64(2.0)-bb)*a+bc*(wp.float64(2.0)-bc)*c
     vc[b] = v
-    Wd[b] = W
-    rho[b] = r
+    We[b] = a
+    Wr[b] = c
+    rho[b] = wp.sqrt((a+kappa*c)*wp.float64(6.0)/T)
     be[b] = bb
-    wp.atomic_add(terms, 0, b % NSLOT, E+half*Tm[b]*v*v)
-    Fb[b] = Rc[b]@((H*bb+I*((one-bb)*v))@Mo[b])
+    br[b] = bc
+    wp.atomic_add(terms, 0, b % NSLOT, E+v*tHM-half*T*v*v)
+    Fb[b] = Rc[b]@((Hd*bb+I*v+Rt*bc)@Mo[b])
+    if bb < one:
+        wp.atomic_add(Lb, b, (one-bb)*(tHM-v*T)*ej/wp.float64(3.0))
 
 
 @wp.kernel(enable_backward=False)
-def k_rp_force(ri: wp.array(dtype=int), rj: wp.array(dtype=int), rw: wp.array(dtype=wp.float64), qi: wp.array(dtype=wp.vec3d), qj: wp.array(dtype=wp.vec3d), mi: wp.array(dtype=wp.vec3d), mj: wp.array(dtype=wp.vec3d), Rc: wp.array(dtype=wp.mat33d),
-               be: wp.array(dtype=wp.float64), vc: wp.array(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d)):
+def k_rp_force(ri_: wp.array(dtype=int), rj_: wp.array(dtype=int), rw: wp.array(dtype=wp.float64), qi: wp.array(dtype=wp.vec3d), qj: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=wp.vec3d), rj: wp.array(dtype=wp.vec3d), Rc: wp.array(dtype=wp.mat33d), Hf: wp.array(dtype=wp.mat33d),
+               be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), vc: wp.array(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d)):
+    """w R (beta_e (H - v I) q + v q + beta_r r)"""
     e = wp.tid()
-    i, j = ri[e], rj[e]
+    i, j = ri_[e], rj_[e]
     if i == j:
         return
-    one = wp.float64(1.0)
-    fi = be[i]*mi[e]+((one-be[i])*vc[i])*qi[e]
-    fj = be[j]*mj[e]+((one-be[j])*vc[j])*qj[e]
+    qa, qb = qi[e], qj[e]
+    fi = be[i]*(Hf[i]@qa-vc[i]*qa)+vc[i]*qa+br[i]*ri[e]
+    fj = be[j]*(Hf[j]@qb-vc[j]*qb)+vc[j]*qb+br[j]*rj[e]
     f = rw[e]*(Rc[i]@fi+Rc[j]@fj)
     wp.atomic_add(x_adj, j, f)
     wp.atomic_add(x_adj, i, -f)
@@ -158,15 +183,16 @@ class RingStep(MergedStep):
 class RingPlastic(RingUL):
     """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density"""
 
-    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, **kw):
+    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=2., **kw):
         super().__init__(X, r, V0, pairs, A, c, E, nu, theta=theta, sigma_y=sigma_y, **kw)
+        self.kappa = float(kappa)
 
     def start(self):
         n, dev = self.n, self.dev
         z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
         Ks = self.ul['Kw']
-        self.ring = dict(K=Ks, i=z(Ks, wp.int32), j=z(Ks, wp.int32), w=z(Ks, wp.float64), qi=z(Ks, wp.vec3d), qj=z(Ks, wp.vec3d), mi=z(Ks, wp.vec3d), mj=z(Ks, wp.vec3d),
-                         Am=z(n, wp.mat33d), Rc=z(n, wp.mat33d), Mo=z(n, wp.mat33d), Tm=z(n, wp.float64), Sq=z(n, wp.float64), Sm=z(n, wp.float64), Hr=z(n, wp.mat33d), vc=z(n, wp.float64), Wd=z(n, wp.float64), rho=z(n, wp.float64))
+        self.ring = dict(K=Ks, i=z(Ks, wp.int32), j=z(Ks, wp.int32), w=z(Ks, wp.float64), qi=z(Ks, wp.vec3d), qj=z(Ks, wp.vec3d), ri=z(Ks, wp.vec3d), rj=z(Ks, wp.vec3d),
+                         Am=z(n, wp.mat33d), Rc=z(n, wp.mat33d), Hf=z(n, wp.mat33d), ro=z(n, wp.mat33d), Mo=z(n, wp.mat33d), Mt=z(n, wp.mat33d), Mti=z(n, wp.mat33d), Tm=z(n, wp.float64), Sr=z(n, wp.float64), vc=z(n, wp.float64), We=z(n, wp.float64), Wr=z(n, wp.float64), rho=z(n, wp.float64), br=z(n, wp.float64))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tr = {k_: tt(a_) for k_, a_ in self.ring.items() if k_ != 'K'}
         self._qkey = self.tkey.clone()
@@ -198,9 +224,14 @@ class RingPlastic(RingUL):
         T['i'][:ms] = lo.to(torch.int32); T['j'][:ms] = hi.to(torch.int32); T['w'][:ms] = w; T['qi'][:ms] = qi; T['qj'][:ms] = qj
         Mc = t['Mc']
         T['Mo'].copy_(self.mu*(Mc+Mc.transpose(1, 2)))
-        Tm = T['Mo'].diagonal(dim1=1, dim2=2).sum(1).clone()
-        Tm.index_add_(0, lo, w*(qi*qi).sum(1)); Tm.index_add_(0, hi, w*(qj*qj).sum(1))
-        T['Tm'].copy_(Tm)
+        M = T['Mo'].clone()
+        M.index_add_(0, lo, w[:, None, None]*qi[:, :, None]*qi[:, None, :]); M.index_add_(0, hi, w[:, None, None]*qj[:, :, None]*qj[:, None, :])
+        a0, a1, a2 = M[:, :, 0], M[:, :, 1], M[:, :, 2]; c0, c1, c2 = torch.linalg.cross(a1, a2), torch.linalg.cross(a2, a0), torch.linalg.cross(a0, a1)
+        det = (a0*c0).sum(1); sing = det.abs() <= 1e-10*(M*M).sum((1, 2))**1.5
+        Mi = torch.stack([c0, c1, c2], 1)/torch.where(sing, torch.ones_like(det), det)[:, None, None]
+        if bool(sing.any()):
+            Mi[sing] = torch.linalg.pinv(M[sing])
+        T['Mt'].copy_(M); T['Mti'].copy_(Mi); T['Tm'].copy_(M.diagonal(dim1=1, dim2=2).sum(1))
 
     def run(self):
         """E and dE/dx at xw: the gradient; R; the readings; the split, the limit, the force; back through the gradient"""
@@ -208,7 +239,7 @@ class RingPlastic(RingUL):
         x, g = self.xw, self.xw.grad
         for k_ in ('G0', 'Ga', 'Sg', 'Lb', 'Gbe', 'Gb0', 'terms', 'tsum'):
             B[k_].zero_()
-        Rg['Am'].zero_(); Rg['Sq'].zero_(); Rg['Sm'].zero_()
+        Rg['Am'].zero_(); Rg['Sr'].zero_()
         g.zero_()
         wp.launch(k_Gul, 2*Kw, inputs=[x, U['xn'], U['S'], U['O'], U['R']], outputs=[B['G0']])
         wp.launch(k_Aul, Kw, inputs=[B['G0'], U['As'], U['Ao'], U['Aw']], outputs=[B['Ga']])
@@ -217,13 +248,13 @@ class RingPlastic(RingUL):
         wp.launch(k_gg_wall, Kw, inputs=[x, U['xn']]+wall+[B['Ge']], outputs=[B['Sg']])
         wp.launch(k_gg_cell, n, inputs=[x, U['xn'], B['Sg'], B['Ge'], U['a'], U['Mc'], U['Vi']], outputs=[B['G']])
         wp.launch(k_Fs, n, inputs=[B['G'], S['F0']], outputs=[B['Fc']])
-        wp.launch(k_ring_A, Rg['K'], inputs=[x, Rg['i'], Rg['j'], Rg['w'], Rg['qi'], Rg['qj']], outputs=[Rg['Am']])
-        wp.launch(k_rp_R, n, inputs=[Rg['Am'], B['Fc'], Rg['Mo']], outputs=[Rg['Rc']])
-        wp.launch(k_rp_m, Rg['K'], inputs=[x, Rg['i'], Rg['j'], Rg['w'], Rg['qi'], Rg['qj'], Rg['Rc']], outputs=[Rg['mi'], Rg['mj'], Rg['Sq'], Rg['Sm']])
-        wp.launch(k_rp_cell, n, inputs=[B['Fc'], Rg['Rc'], Rg['Mo'], Rg['Tm'], Rg['Sq'], Rg['Sm'], wp.float64(self.ey)], outputs=[Rg['Hr'], Rg['vc'], Rg['Wd'], Rg['rho'], B['be'], B['Fb'], B['terms']])
-        wp.launch(k_rp_force, Rg['K'], inputs=[Rg['i'], Rg['j'], Rg['w'], Rg['qi'], Rg['qj'], Rg['mi'], Rg['mj'], Rg['Rc'], B['be'], Rg['vc']], outputs=[g])
-        wp.launch(k_Fs_adj, n, inputs=[B['Fb'], S['F0']], outputs=[B['Gb']])
         wp.launch(k_Lc, n, inputs=[B['G'], U['Q'], U['Ln'], U['V0'], wp.float64(self.lam)], outputs=[B['L'], B['Lb'], B['terms']])
+        wp.launch(k_ring_A, Rg['K'], inputs=[x, Rg['i'], Rg['j'], Rg['w'], Rg['qi'], Rg['qj']], outputs=[Rg['Am']])
+        wp.launch(k_rp_R, n, inputs=[Rg['Am'], B['Fc'], Rg['Mo'], Rg['Mti']], outputs=[Rg['Rc'], Rg['Hf']])
+        wp.launch(k_rp_m, Rg['K'], inputs=[x, Rg['i'], Rg['j'], Rg['w'], Rg['qi'], Rg['qj'], Rg['Rc'], Rg['Hf']], outputs=[Rg['ri'], Rg['rj'], Rg['Sr']])
+        wp.launch(k_rp_cell, n, inputs=[B['Fc'], Rg['Rc'], Rg['Hf'], Rg['Mo'], Rg['Mt'], Rg['Tm'], Rg['Sr'], B['L'], wp.float64(self.ey), wp.float64(self.kappa)], outputs=[Rg['ro'], Rg['vc'], Rg['We'], Rg['Wr'], Rg['rho'], B['be'], Rg['br'], B['Fb'], B['Lb'], B['terms']])
+        wp.launch(k_rp_force, Rg['K'], inputs=[Rg['i'], Rg['j'], Rg['w'], Rg['qi'], Rg['qj'], Rg['ri'], Rg['rj'], Rg['Rc'], Rg['Hf'], B['be'], Rg['br'], Rg['vc']], outputs=[g])
+        wp.launch(k_Fs_adj, n, inputs=[B['Fb'], S['F0']], outputs=[B['Gb']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         wp.launch(k_Lb, n, inputs=[B['Lb'], U['Q']], outputs=[B['Gb']])
         bl = self.ball
@@ -247,17 +278,18 @@ class RingPlastic(RingUL):
         trG = (t['Q']*self.tG).sum((1, 2))/th
         self.grad((z-(1-th)*self._xs)/th)
         ms = self._m_s
-        be = self.tbe.clone(); yn = be < 1
-        v, W, R, H = T['vc'], T['Wd'], T['Rc'], T['Hr']
-        self.Wp += float((2*be*(1-be)*W).sum())
+        be = self.tbe.clone(); br = T['br'].clone(); yn = be < 1
+        v, We, Wr, R, H, ro = T['vc'], T['We'], T['Wr'], T['Rc'], T['Hf'], T['ro']
+        self.Wp += float((2*be*(1-be)*We+2*br*(1-br)*Wr).sum())
         lo, hi = self.tlo, self.thi
-        qi, qj, mi, mj = T['qi'][:ms], T['qj'][:ms], T['mi'][:ms], T['mj'][:ms]
-        self._qi = qi+(1-be[lo])[:, None]*(mi-v[lo][:, None]*qi)
-        self._qj = qj+(1-be[hi])[:, None]*(mj-v[hi][:, None]*qj)
-        Hn = be[:, None, None]*H+((1-be)*v)[:, None, None]*self.I3
-        self._Fe = R@(self.I3+Hn)
+        qi, qj, ri, rj = T['qi'][:ms], T['qj'][:ms], T['ri'][:ms], T['rj'][:ms]
+        Hd = H-v[:, None, None]*self.I3
+        self._qi = qi+(1-be[lo])[:, None]*torch.einsum('fab,fb->fa', Hd[lo], qi)+(1-br[lo])[:, None]*ri
+        self._qj = qj+(1-be[hi])[:, None]*torch.einsum('fab,fb->fa', Hd[hi], qj)+(1-br[hi])[:, None]*rj
+        self._Fe = R@(self.I3+be[:, None, None]*Hd+v[:, None, None]*self.I3+br[:, None, None]*ro)
         self._Re, self._ve = R.clone(), v.clone()
-        self.store = dict(springs=float((be*be*W+.5*T['Tm']*v*v).sum()), vol=float(self.tsum[1]), var=float(self.tsum[2]), outer=0.)
+        tH = (H*T['Mt']).sum((1, 2))
+        self.store = dict(springs=float((be*be*We+br*br*Wr+be*v*(tH-v*T['Tm'])+.5*T['Tm']*v*v).sum()), vol=float(self.tsum[1]), var=float(self.tsum[2]), outer=0.)
         self._yld = self._yld | yn
         t['Ln'].add_(trG)
         self.ul_stats['flips'] = int((torch.linalg.det(self._Fe) <= 0).sum()); self.ul_stats['yielding'] = int(yn.sum()); self.ul_stats['yielded'] = int(self._yld.sum())

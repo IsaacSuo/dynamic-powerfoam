@@ -29,6 +29,7 @@ a_.add_argument('--frames', type=int, default=15)
 a_.add_argument('--dt', type=float, default=1/1200)
 a_.add_argument('--tol', type=float, default=1e-3)
 a_.add_argument('--mu', type=float, default=10., help="the ground's friction: large for the MPM's sticky ground")
+a_.add_argument('--kappa', type=float, default=2.)
 a_.add_argument('--every', type=int, default=10)
 a_.add_argument('--pre-every', type=int, default=4)
 a_.add_argument('--newton-max', type=int, default=300)
@@ -63,7 +64,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = RingPlastic(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, ys, theta=.5)
+W = RingPlastic(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, ys, theta=.5, kappa=args.kappa)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
@@ -77,8 +78,8 @@ ST.pre_ul = True; ST.pre_every = args.pre_every; ST.smooth_pred = ST.carry_delta
 ST.set_theta(.5, mass)
 ST.set_state(W.X.clone(), torch.tensor(gt['v'], dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
 h = float(np.median(V0))**(1/3)
-print('plasticine 0, ring springs: E %.1f, nu %.4f, yield %.1f Pa (yield strain %.4f, cell limit e_y %.4f), v0 %s; foam %s: %d cells, h %.2f mm; dt 1/%d, tol %g of the weight, friction %g; MPM %d particles' % (
-    gt['E'], nu, gt['ys'], gt['ys']/gt['E'], W.ey, np.round(gt['v'], 4).tolist(), args.foam.name, n, 1e3*h, round(1/args.dt), args.tol, args.mu, len(Gt[0])), flush=True)
+print('plasticine 0, ring springs: E %.1f, nu %.4f, yield %.1f Pa (yield strain %.4f, cell limit e_y %.4f), kappa %g, v0 %s; foam %s: %d cells, h %.2f mm; dt 1/%d, tol %g of the weight, friction %g; MPM %d particles' % (
+    gt['E'], nu, gt['ys'], gt['ys']/gt['E'], W.ey, args.kappa, np.round(gt['v'], 4).tolist(), args.foam.name, n, 1e3*h, round(1/args.dt), args.tol, args.mu, len(Gt[0])), flush=True)
 
 
 def ours():

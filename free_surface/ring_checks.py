@@ -25,6 +25,7 @@ a_.add_argument('--ey', type=float, default=.0095)
 a_.add_argument('--periods', type=float, default=6.)
 a_.add_argument('--forms', default='ABC')
 a_.add_argument('--rule', default=None)                                              # (test 6: one law only, 'C1.5', against the truth already logged)
+a_.add_argument('--shares', type=float, nargs='*', default=None)                     # (test 11: modes with the remainder's share s)
 args = a_.parse_args()
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz')
 X, V, A, pairs = g['points'], g['masses'], g['areas'], g['pairs'].astype(np.int64); n = len(X)
@@ -430,6 +431,19 @@ if set(args.test) & {5, 7, 8, 10, 11, 12}:
         KoF = (Bg.T@sp.block_diag([blk[s_] for s_ in range(n)], format='csr')@Bg).tocsr()
         Kf = (Ks+KoF-Ctot.T@sp.block_diag([Hf_[s_] for s_ in range(n)], format='csr')@Ctot).tocsr()
         print('  rigid spin in the whole cell\'s K: %.1e' % np.abs(Kf@ur).max(), flush=True)
+        if args.shares:
+            # the remainder's share s: E_cell = W_e + s W_r, W_r = sum 1/2 w |r|^2 = sum 1/2 w |du|^2 - 1/2 tr(G M G^T), G the ring's fit. s = 1 the plain springs (beta^2 6), 1/2 the FE's energy on an orthogonal mesh (beta^2 3)
+            B0 = Dg['B0']
+            blk = np.zeros((n, 9, 9))
+            for a in range(3):
+                blk[:, 3*a:3*a+3, 3*a:3*a+3] = Mr
+            Kfit = (B0.T@sp.block_diag([blk[s_] for s_ in range(n)], format='csr')@B0).tocsr()
+            Krem = (Ks-Kfit).tocsr()
+            print('the remainder\'s stiffness on a rigid spin %.1e, on an affine field %.1e; its energy at random u against the springs\' %.3f' % (np.abs(Krem@ur).max(), np.abs(Krem@(Xc@np.array([[.3, .1, -.2], [.05, -.4, .7], [.2, .6, .1]]).T).ravel()).max(), (lambda u_: float(u_@(Krem@u_)/(u_@(Ks@u_))))(np.random.default_rng(0).normal(size=3*n))), flush=True)
+            print('modes at rest on %s, with the remainder\'s share s:' % args.foam.name, flush=True)
+            for s_v in args.shares:
+                report('s = %.3f' % s_v, (Kf-(1-s_v)*Krem+Kl+Kv).tocsr())
+            sys.exit(0)
         if (args.foam/'fem_modes_h0.0015.npz').exists():
             print('modes at rest on %s:' % args.foam.name, flush=True)
             report('read from F + torque, lam, variance', (Kc1+Kl+Kv).tocsr())
