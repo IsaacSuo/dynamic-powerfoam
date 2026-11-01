@@ -311,7 +311,7 @@ if set(args.test) & {5, 7, 8, 10, 11, 12}:
     import sys, time
     sys.path.insert(0, '/home/fangsuo/py/dynamic-powerfoam')
     from scipy.optimize import linear_sum_assignment
-    from scipy.sparse.linalg import LinearOperator, eigsh, gmres, splu
+    from scipy.sparse.linalg import LinearOperator, cg, eigsh, gmres, splu
     from experiments.dem_fem_mode_match import interpolate
     from free_surface.tl_check import build
     E_m, nu_m = 23.00838, .3008
@@ -444,8 +444,11 @@ if set(args.test) & {5, 7, 8, 10, 11, 12}:
             for form, K_ in (('relaxed rotation', Kr), ('F + torque', Kc1), ('whole cell', Kf)):
                 Kt = (K_+Kl+Kv).tocsr()
                 rf = (Kt@ue)[fd]
-                lu = splu(Kt[fd][:, fd].tocsc())
-                du = -lu.solve(rf)
+                Kff = Kt[fd][:, fd].tocsr()
+                if len(fd) > 8000:                                                     # (a direct factor of this stencil would not fit)
+                    du, inf_ = cg(Kff, -rf, M=sp.diags(1/Kff.diagonal()), rtol=1e-7, maxiter=20000)
+                else:
+                    du = -splu(Kff.tocsc()).solve(rf)
                 E0 = .5*ue@(Kt@ue); Er = E0+.5*rf@du
                 u_ = ue.copy(); u_[fd] += du
                 x_ = (X.ravel()+u_).reshape(n, 3)
@@ -456,7 +459,8 @@ if set(args.test) & {5, 7, 8, 10, 11, 12}:
                 Sr = .5*(Fr+Fr.transpose(0, 2, 1))
                 er = np.linalg.norm((Sr-H0)[depth >= 1], axis=(1, 2))/Hn
                 mv = np.linalg.norm(du.reshape(-1, 3), axis=1)/(Hn*h)
-                print('  %-14s %-18s energy %.4f; moved median %.3f, 99%% %.3f; strain read off by median %.3f, 99%% %.3f' % (nm_, form, Er/E0, np.median(mv), np.quantile(mv, .99), np.median(er), np.quantile(er, .99)), flush=True)
+                deep_ = depth[depth >= 1] >= 2
+                print('  %-14s %-18s energy %.4f; moved median %.3f, 99%% %.3f; strain read off by median %.3f, 99%% %.3f; depth 2 and more (%d cells) median %.3f, 99%% %.3f' % (nm_, form, Er/E0, np.median(mv), np.quantile(mv, .99), np.median(er), np.quantile(er, .99), int(deep_.sum()), np.median(er[deep_]) if deep_.any() else 0., np.quantile(er[deep_], .99) if deep_.any() else 0.), flush=True)
     if 10 in args.test or 12 in args.test:
         # free flight from a deformed, spinning start, nothing else, the midpoint. Midpoint conserves angular momentum exactly for a force with no net moment, energy to second order for a gradient. Three forms of R: A polar(A), B polar(F) plain, C polar(F) with its torque's force
         def polar_(F):
@@ -663,13 +667,25 @@ if set(args.test) & {5, 7, 8, 10, 11, 12}:
                 x1 = 2*y-x; v = 4*(y-x)/dt-v; x = x1
                 qi2, qj2, P2, be, Fg, rr_, ee_ = ret_w(x, qi, qj, Pc)
                 Etr = eg_state(x, qi, qj, Pc, Fg)[0]; Eaf = eg_state(x, qi2, qj2, P2, Fg)[0]
+                # the energy the return lets go, E_tr - E_af = (1 - be^2) W_tr, holds the trial's overshoot: in 1D (1/2 k) (e_tr^2 - e_y^2) = s_y de + 1/2 k de^2. The plastic work is s_y de = 2 be (1 - be) W_tr, so per cell by 2 be / (1 + be)
+                d_ = x[j]-x[i]
+                Am_ = np.zeros((n, 3, 3))
+                np.add.at(Am_, i, wm[:, None, None]*d_[:, :, None]*qi[:, None, :]); np.add.at(Am_, j, wm[:, None, None]*d_[:, :, None]*qj[:, None, :])
+                R_, _, _ = polar_(Am_+Fg@Mo@Pc.transpose(0, 2, 1))
+                m0i, m0j = d_-np.einsum('fab,fb->fa', R_[i], qi), d_-np.einsum('fab,fb->fa', R_[j], qj)
+                m1i, m1j = d_-np.einsum('fab,fb->fa', R_[i], qi2), d_-np.einsum('fab,fb->fa', R_[j], qj2)
+                dE = np.zeros(n)
+                np.add.at(dE, i, .5*wm*((m0i*m0i).sum(1)-(m1i*m1i).sum(1))); np.add.at(dE, j, .5*wm*((m0j*m0j).sum(1)-(m1j*m1j).sum(1)))
+                F0_, F1_ = Fg-R_@Pc, Fg-R_@P2
+                dE += .5*(np.einsum('nab,nbc,nac->n', F0_, Mo, F0_)-np.einsum('nab,nbc,nac->n', F1_, Mo, F1_))
+                Wc += float((dE*2*be/(1+be)).sum())
                 Wp += Etr-Eaf
                 qi, qj, Pc = qi2, qj2, P2
                 if k % (N//24) == 0 or k == N:
                     Ke = .5*float((mm*(v*v).sum(1)).sum())
                     cm = (mm[:, None]*x).sum(0)/mm.sum(); vm = (mm[:, None]*v).sum(0)/mm.sum()
                     L_ = (mm[:, None]*np.cross(x-cm, v-vm)).sum(0)
-                    print('  plastic t / T1 %.2f: kinetic %.4e, stored %.3e, let go %.4e; balance / start %.5f; flowing %d of %d cells, strain read median %.3f %%, remainder read median %.3f %%; angular momentum off by %.2e, along it %.5f; Newton per step %.1f, halvings %d, unconverged %d; %.0f s' % (k*dt/T1, Ke, Eaf, Wp, (Ke+Eaf+Wp)/E0, int((be < 1).sum()), n, 100*np.median(ee_), 100*np.median(rr_), np.linalg.norm(L_-L0)/np.linalg.norm(L0), L_@L0/(L0@L0), nit/k, nls, nbad, time.time()-t0), flush=True)
+                    print('  plastic t / T1 %.2f: kinetic %.4e, stored %.3e, let go %.4e, plastic work %.4e; balance by the work / start %.5f, by the energy let go %.5f; flowing %d of %d cells, strain read median %.3f %%, remainder read median %.3f %%; angular momentum off by %.2e, along it %.5f; Newton per step %.1f, halvings %d, unconverged %d; %.0f s' % (k*dt/T1, Ke, Eaf, Wp, Wc, (Ke+Eaf+Wc)/E0, (Ke+Eaf+Wp)/E0, int((be < 1).sum()), n, 100*np.median(ee_), 100*np.median(rr_), np.linalg.norm(L_-L0)/np.linalg.norm(L0), L_@L0/(L0@L0), nit/k, nls, nbad, time.time()-t0), flush=True)
         for form in (args.forms if 10 in args.test else ''):
             x, v = x0.copy(), v0.copy()
             t0 = time.time()
