@@ -13,6 +13,9 @@ import numpy as np
 import torch
 import warp as wp
 from plyfile import PlyData
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
+from scipy.spatial import cKDTree
 
 from free_surface.closure_warp import TrustCG
 from free_surface.ring_yield import RingYield, YieldStep
@@ -38,6 +41,7 @@ a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: a
 a_.add_argument('--scene', type=int, default=0)
 a_.add_argument('--aa', type=int, default=6, help='the outer iteration: Anderson over this many differences (0: none)')
 a_.add_argument('--hold-after', type=int, default=3)
+a_.add_argument('--track-off', action='store_true', help='which cells leave the body, and their last steps')
 a_.add_argument('--save-state', type=int, nargs='*', default=[], help='checkpoints after these steps')
 a_.add_argument('--load-state', type=Path, default=None)
 a_.add_argument('--soft-tol', type=float, default=.1, help='of the weight: a step that ends over the tolerance but under this goes on, counted and logged (.1 is at most a .1 m/s kick to one site)')
@@ -194,6 +198,7 @@ def unpack(o, st):
 
 
 s_first = 1
+hist_, off_ = [], set()
 if args.load_state is not None:
     ck = torch.load(args.load_state, weights_only=False)
     unpack(W, ck['W']); unpack(ST, ck['ST'])
@@ -226,6 +231,25 @@ for s in range(s_first, nsteps+1):
         break
     ST.end()
     nit.append(its); npr.append(e_); nrd.append(ST.stats['outer']); ncl.append(int(W.ul_stats['cut_cells'])); nfe.append(ST.stats['rejected'])
+    if args.track_off and s > 230:
+        i_, j_, _, _, _, m_ = W._w
+        wa_ = W.tul['wa'][:m_]
+        nw_ = torch.zeros(n, dtype=f64, device=dev).index_add(0, i_, torch.ones_like(wa_)).index_add(0, j_, torch.ones_like(wa_))
+        aw_ = torch.zeros(n, dtype=f64, device=dev).index_add(0, i_, wa_).index_add(0, j_, wa_)
+        ns_ = torch.zeros(n, dtype=f64, device=dev).index_add(0, W.tlo, torch.ones(W._m_s, dtype=f64, device=dev)).index_add(0, W.thi, torch.ones(W._m_s, dtype=f64, device=dev))
+        hist_.append(torch.stack([nw_, ns_, aw_/h**2, W._ulr/h, (ST.tx[:, 1]+.05)/h, W.ty['be'][W._gid], W.tul['Ln'], ST.tv.norm(dim=1), W.tbd/h, torch.as_tensor(W.B['bfn'].numpy(), device=dev)/wref, W._stuck.to(f64)], 1).cpu().numpy())
+        hist_ = hist_[-10:]
+        x_, r_ = ST.tx.cpu().numpy(), W._ulr.cpu().numpy()
+        lab_ = np.zeros(n, dtype=int)
+        if s % 3 == 0:
+            p_ = cKDTree(x_).query_pairs(float(2*r_.max()), output_type='ndarray')
+            p_ = p_[np.linalg.norm(x_[p_[:, 0]]-x_[p_[:, 1]], axis=1) < r_[p_[:, 0]]+r_[p_[:, 1]]]
+            _, lab_ = connected_components(coo_matrix((np.ones(len(p_)), (p_[:, 0], p_[:, 1])), shape=(n, n)), directed=False)
+        u_, c_ = np.unique(lab_, return_counts=True)
+        for c__ in np.nonzero(lab_ != u_[np.argmax(c_)])[0].tolist():
+            if c__ not in off_:
+                off_.add(c__)
+                print('OFF step %d t %.4f cell %d V %.2f; last steps walls %s springs %s area/h2 %s r/h %s y/h %s beta %s L %s speed %s d/h %s F %s stuck %d' % (s, s*args.dt, c__, V0[c__]/np.median(V0), *[np.round([a__[c__, k__] for a__ in hist_[::3]], 2).tolist() for k__ in range(10)], int(hist_[-1][c__, 10])), flush=True)
     if s in args.save_state:
         torch.save(dict(W=pack(W), ST=pack(ST), s=s), args.save/('state_%s_%d.pt' % (args.tag, s)))
     if s % args.every == 0:
