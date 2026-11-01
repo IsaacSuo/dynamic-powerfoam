@@ -258,10 +258,10 @@ class RingYield(RingFlow):
     """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's; eps_cut: the plastic strain that takes a cell onto the current cut; agg: cells under this of the median volume are merged (0: none); hold, ledger: as ring_flow.py"""
     C_cap = 4.
 
-    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., eps_cut=-1., agg_merge=.1, eps_fade=0., hold=False, ledger=False, **kw):
+    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., eps_cut=-1., agg_merge=.1, eps_fade=.05, hold=False, ledger=False, **kw):
         super().__init__(X, r, V0, pairs, A, c, E, nu, sigma_y, theta=theta, kappa=kappa, hold=hold, ledger=ledger, **kw)
-        self.eps_cut, self.agg_merge, self.eps_fade = float(eps_cut), float(agg_merge), float(eps_fade)
-        assert self.eps_fade <= 0 or self.eps_cut < 0, 'the rest walls fade only on the cut'
+        self.eps_cut, self.agg_merge = float(eps_cut), float(agg_merge)
+        self.eps_fade = float(eps_fade) if self.eps_cut < 0 else 0.                        # (the rest walls fade only on the cut; eps_fade 0: the cut alone)
         self._k0r = self.tk0.clone()
         self.Wp_cell = self.Wp_half = 0.
         self._Ft = self._Fti = None
@@ -578,19 +578,22 @@ class RingYield(RingFlow):
         wp.launch(k_gg_cell, n, inputs=[x, U['xn'], B['Sg'], B['Ge'], U['a'], U['Mc'], U['Vi']], outputs=[B['G']])
         wp.launch(k_ry_gs, n, inputs=[B['G'], V0, gid], outputs=[Y['Gs']])
         wp.launch(k_ry_gm, n, inputs=[Y['Gs'], Y['Vgi'], gid], outputs=[Y['Gm']])
-        wp.launch(k_Gul, Ur['Kl'], inputs=[x, Ur['xn'], Ur['S'], Ur['O'], Ur['R']], outputs=[Br['G0']])
-        wp.launch(k_Aul, Ur['Ka'], inputs=[Br['G0'], Ur['As'], Ur['Ao'], Ur['Aw']], outputs=[Br['Ga']])
-        wp.launch(k_Ge, n, inputs=[Br['G0'], Br['Ga'], Ur['used']], outputs=[Br['Ge']])
-        wp.launch(k_gg_wall, Ur['Kw'], inputs=[x, Ur['xn']]+wallr+[Br['Ge']], outputs=[Br['Sg']])
-        wp.launch(k_gg_cell, n, inputs=[x, Ur['xn'], Br['Sg'], Br['Ge'], Ur['a'], Ur['Mc'], Ur['Vi']], outputs=[Br['G']])
-        wp.launch(k_ry_gs, n, inputs=[Br['G'], V0, gid], outputs=[Y['Grs']])
-        wp.launch(k_ry_gm, n, inputs=[Y['Grs'], Y['Vgi'], gid], outputs=[Y['Grm']])
+        rest = self.eps_cut >= 0                                                           # (every cell on the cut from the first step: the rest walls' gradient is read by none)
+        if rest:
+            wp.launch(k_Gul, Ur['Kl'], inputs=[x, Ur['xn'], Ur['S'], Ur['O'], Ur['R']], outputs=[Br['G0']])
+            wp.launch(k_Aul, Ur['Ka'], inputs=[Br['G0'], Ur['As'], Ur['Ao'], Ur['Aw']], outputs=[Br['Ga']])
+            wp.launch(k_Ge, n, inputs=[Br['G0'], Br['Ga'], Ur['used']], outputs=[Br['Ge']])
+            wp.launch(k_gg_wall, Ur['Kw'], inputs=[x, Ur['xn']]+wallr+[Br['Ge']], outputs=[Br['Sg']])
+            wp.launch(k_gg_cell, n, inputs=[x, Ur['xn'], Br['Sg'], Br['Ge'], Ur['a'], Ur['Mc'], Ur['Vi']], outputs=[Br['G']])
+            wp.launch(k_ry_gs, n, inputs=[Br['G'], V0, gid], outputs=[Y['Grs']])
+            wp.launch(k_ry_gm, n, inputs=[Y['Grs'], Y['Vgi'], gid], outputs=[Y['Grm']])
         wp.launch(k_rf_F, n, inputs=[Y['Gm'], Y['Grm'], S['F0'], Rg['flag']], outputs=[B['Fc']])
         cv = wp.float64(self.cv)
         wp.launch(k_ry_L, n, inputs=[B['Fc'], Y['Gm'], U['Q'], U['Ln'], V0, wp.float64(self.lam), wp.float64(2*self.mu/3), Rg['flag'], gid, Y['be'], Y['Lz'], Y['Cz'], Y['Fz'], cv], outputs=[B['L'], B['Lb'], B['terms']])
         wp.launch(k_var, Kw, inputs=[U['wi'], U['wj'], U['wv'], B['L']], outputs=[B['Lb'], B['terms']])
-        wp.launch(k_var, Ur['Kw'], inputs=[Ur['wi'], Ur['wj'], Ur['wv'], B['L']], outputs=[B['Lb'], B['terms']])
-        hs = [Rg['i'], Rg['j'], Rg['wi'], Rg['wj'], Rg['qi'], Rg['qj']]
+        if rest:
+            wp.launch(k_var, Ur['Kw'], inputs=[Ur['wi'], Ur['wj'], Ur['wv'], B['L']], outputs=[B['Lb'], B['terms']])
+        hs =[Rg['i'], Rg['j'], Rg['wi'], Rg['wj'], Rg['qi'], Rg['qj']]
         wp.launch(k_ry_A, Rg['K'], inputs=[x]+hs+[gid], outputs=[Rg['Am']])
         wp.launch(k_ry_Aout, n, inputs=[B['Fc'], Y['MoP'], gid], outputs=[Rg['Am']])
         wp.launch(k_ry_Ff, n, inputs=[Rg['Am'], Y['Mti']], outputs=[Y['Ff']])
@@ -606,18 +609,20 @@ class RingYield(RingFlow):
             wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], self.tones], outputs=[g])
         wp.launch(k_ry_as, n, inputs=[Y['Gbm'], gid], outputs=[Y['Ss']])
         wp.launch(k_ry_ab, n, inputs=[Y['Ss'], V0, Y['Vgi'], gid], outputs=[B['Gb']])
-        wp.launch(k_ry_as, n, inputs=[Y['Gbrm'], gid], outputs=[Y['Srs']])
-        wp.launch(k_ry_ab, n, inputs=[Y['Srs'], V0, Y['Vgi'], gid], outputs=[Br['Gb']])
+        if rest:
+            wp.launch(k_ry_as, n, inputs=[Y['Gbrm'], gid], outputs=[Y['Srs']])
+            wp.launch(k_ry_ab, n, inputs=[Y['Srs'], V0, Y['Vgi'], gid], outputs=[Br['Gb']])
         wp.launch(k_gg_cell_adj, n, inputs=[B['Gb'], U['a'], U['Mc'], U['Vi']], outputs=[g, B['Gs'], B['Gbe']])
         wp.launch(k_gg_wall_adj, Kw, inputs=wall+[B['Gs']], outputs=[g, B['Gbe']])
         wp.launch(k_Ge_adj, n, inputs=[B['Gbe'], U['used']], outputs=[B['Gb0']])
         wp.launch(k_Aul_adj2, Kw, inputs=[B['Gbe'], U['As'], U['Ao'], U['Aw']], outputs=[B['Gb0']])
         wp.launch(k_Gul_adj, 2*Kw, inputs=[B['Gb0'], U['S'], U['O'], U['R']], outputs=[g])
-        wp.launch(k_gg_cell_adj, n, inputs=[Br['Gb'], Ur['a'], Ur['Mc'], Ur['Vi']], outputs=[g, Br['Gs'], Br['Gbe']])
-        wp.launch(k_gg_wall_adj, Ur['Kw'], inputs=wallr+[Br['Gs']], outputs=[g, Br['Gbe']])
-        wp.launch(k_Ge_adj, n, inputs=[Br['Gbe'], Ur['used']], outputs=[Br['Gb0']])
-        wp.launch(k_Aul_adj2, Ur['Ka'], inputs=[Br['Gbe'], Ur['As'], Ur['Ao'], Ur['Aw']], outputs=[Br['Gb0']])
-        wp.launch(k_Gul_adj, Ur['Kl'], inputs=[Br['Gb0'], Ur['S'], Ur['O'], Ur['R']], outputs=[g])
+        if rest:
+            wp.launch(k_gg_cell_adj, n, inputs=[Br['Gb'], Ur['a'], Ur['Mc'], Ur['Vi']], outputs=[g, Br['Gs'], Br['Gbe']])
+            wp.launch(k_gg_wall_adj, Ur['Kw'], inputs=wallr+[Br['Gs']], outputs=[g, Br['Gbe']])
+            wp.launch(k_Ge_adj, n, inputs=[Br['Gbe'], Ur['used']], outputs=[Br['Gb0']])
+            wp.launch(k_Aul_adj2, Ur['Ka'], inputs=[Br['Gbe'], Ur['As'], Ur['Ao'], Ur['Aw']], outputs=[Br['Gb0']])
+            wp.launch(k_Gul_adj, Ur['Kl'], inputs=[Br['Gb0'], Ur['S'], Ur['O'], Ur['R']], outputs=[g])
         wp.launch(k_total, (NT, 256), inputs=[B['terms']], outputs=[B['tsum']])
         wp.launch(k_total_loss, 1, inputs=[B['tsum'], self.tw], outputs=[B['loss']])
 
