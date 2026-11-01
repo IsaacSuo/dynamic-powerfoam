@@ -40,6 +40,10 @@ a_.add_argument('--pre-every', type=int, default=4)
 a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
 a_.add_argument('--scene', type=int, default=0)
+a_.add_argument('--trace', action='store_true', help='per step, per inner solve: products, edge, negative, stop, |g|, rho, taken, outer')
+a_.add_argument('--vol-tol', type=float, default=1e-5, help='the radii: the cut volumes to this')
+a_.add_argument('--eta', type=float, default=.01, help='CG to this of |g|')
+a_.add_argument('--eta-out', type=float, default=.1, help='a frozen problem to this of |g|')
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
 a_.add_argument('--aa', type=int, default=6, help='the outer iteration: Anderson over this many differences (0: none)')
 a_.add_argument('--hold-after', type=int, default=3)
@@ -85,7 +89,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = (RingMoment if args.moment else RingYield)(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True)
+W = (RingMoment if args.moment else RingYield)(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True, vol_tol=args.vol_tol)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
@@ -207,6 +211,7 @@ if args.load_state is not None:
     ST.aa_m, ST.hold_after = args.aa, args.hold_after                                       # (the command line over the checkpoint's)
     s_first = ck['s']+1
     print('from step %d of %s' % (ck['s'], args.load_state), flush=True)
+ST.eta, ST.eta_out = args.eta, args.eta_out
 t0 = t_saved = time.time()
 nit, npr, nrd, ncl, nfe = [], [], [], [], []
 nsoft = 0
@@ -215,6 +220,8 @@ H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
 for s in range(s_first, nsteps+1):
     t_s = time.time()
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
+    if args.trace:
+        print('TRACE step %d tol %.3e: ' % (s, tol)+' | '.join('%d e%d n%d stop %.2e g %.2e rho %.2f o%d' % (k_[0], k_[1], k_[2], k_[3], k_[4], k_[5], k_[7]) for k_ in ST.stats['trace']), flush=True)
     if math.isfinite(g2) and tol < math.sqrt(g2) <= args.soft_tol*wref:
         nsoft += 1
         print('  step %d, t %.4f: over the tolerance, |g| / weight %.4f after %d Newton iterations; going on' % (s, s*args.dt, math.sqrt(g2)/wref, its), flush=True)
