@@ -191,6 +191,10 @@ class MergedUL(PlasticUL):
         wp.launch(k_total, (NT, 256), inputs=[B['terms']], outputs=[B['tsum']])
         wp.launch(k_total_loss, 1, inputs=[B['tsum'], self.tw], outputs=[B['loss']])
 
+    def _keep_spring(self):
+        """springs of the list that stay though both cells have yielded and their wall is gone: none here"""
+        return torch.zeros_like(self.tkey, dtype=torch.bool)
+
     def update_ul(self, x):
         """the step's start at x: radii for V0 exp(L_n), the cut; the spring list; the fit and gradient on the connected walls; the springs' rows and the cells' start strains"""
         n = self.n; x = x.detach(); st = self.ul_stats; t, s = self.tul, self.tsp; dev = x.device; yld = self._yld
@@ -209,7 +213,7 @@ class MergedUL(PlasticUL):
         both_w = yld[lo] & yld[hi]
         new = both_w & ~torch.isin(key, self.tkey)
         both_s = yld[self.tlo] & yld[self.thi]
-        stay = ~both_s | torch.isin(self.tkey, key)
+        stay = ~both_s | torch.isin(self.tkey, key) | self._keep_spring()
         st['closed'] = int((~stay).sum()); st['born'] = int(new.sum())
         lo_s = torch.cat([self.tlo[stay], lo[new]]); hi_s = torch.cat([self.thi[stay], hi[new]])
         Fe = self._Fe
@@ -233,6 +237,7 @@ class MergedUL(PlasticUL):
         k_ = k0_.clone(); q_ = both_y & has_wall
         Ls_ = ds.norm(dim=1)
         k_[q_] = self.kshare*2*self.mu*Aw[q_]/Ls_[q_]
+        k_[both_y & ~has_wall] = 0.                                                 # (only a subclass keeps such a spring: not on the cut's stiffness or its gradient)
         self.tP, self.tdl, self.tk0 = p_, dl_.clone(), k_.clone()
         for k2 in ('si', 'sj', 'sP', 'sdn', 'sk'):
             s[k2].zero_()

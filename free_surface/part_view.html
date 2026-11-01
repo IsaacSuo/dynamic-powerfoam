@@ -1,0 +1,114 @@
+<title>后腿折叠过程</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+/* Layout: an instrument: one time bar on top, then the runs side by side in three rows, the count of folded cells beside the bar. */
+:root {
+  --bg: #eef0ee; --panel: #e0e4e1; --fg: #1d2421; --muted: #5a6661; --line: #c5ccc8; --accent: #c7490f; --fold: #c91f1f; --near: #e8860f;
+  --body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #141917; --panel: #1e2522; --fg: #e6ebe8; --muted: #94a19b; --line: #333d38; --accent: #ff8a4c; --fold: #ff5a52; --near: #ffa63d; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #141917; --panel: #1e2522; --fg: #e6ebe8; --muted: #94a19b; --line: #333d38; --accent: #ff8a4c; --fold: #ff5a52; --near: #ffa63d; color-scheme: dark }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); line-height: 1.6; }
+.wrap { max-width: 1320px; margin: 0 auto; padding-block: 20px 36px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); display: grid; gap: 18px; }
+h1 { font-size: 1.45rem; margin: 0; font-weight: 700; text-wrap: balance; }
+.sub { margin: 2px 0 0; color: var(--muted); max-width: 72ch; }
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg); padding-block: 8px; display: grid; gap: 8px; border-bottom: 1px solid var(--line); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.ctl { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+button { font: inherit; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 14px; cursor: pointer; }
+button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type=range] { flex: 1 1 240px; min-width: 0; accent-color: var(--accent); }
+.time { font-family: var(--mono); font-variant-numeric: tabular-nums; min-width: 12ch; }
+.nums { display: flex; flex-wrap: wrap; gap: 4px 22px; font-size: .88rem; font-variant-numeric: tabular-nums; }
+.nums b { font-family: var(--mono); font-weight: 500; color: var(--fold); }
+.nums .k { color: var(--muted); }
+.nums .st { color: var(--accent); }
+.row { display: grid; grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 720px) { .row { grid-template-columns: minmax(0, 1fr); } }
+figure { margin: 0; background: var(--panel); border-radius: 6px; padding: 8px 10px 10px; min-width: 0; }
+figcaption { font-size: .88rem; color: var(--muted); margin-bottom: 4px; }
+figcaption b { color: var(--fg); font-weight: 500; }
+figure img { display: block; width: 100%; height: auto; }
+h2 { font-size: 1rem; font-weight: 500; margin: 6px 0 0; }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font-size: .86rem; color: var(--muted); }
+.ramp { display: inline-block; width: 180px; max-width: 45vw; height: 10px; border-radius: 2px; background: linear-gradient(90deg, rgb(13,8,64), rgb(51,38,133), rgb(23,107,140), rgb(61,168,107), rgb(204,204,64), rgb(252,232,153)); vertical-align: middle; margin: 0 6px; }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 6px; }
+.tabwrap { overflow-x: auto; }
+table { border-collapse: collapse; font-size: .9rem; min-width: 460px; }
+th, td { text-align: right; padding: 4px 14px 4px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; font-family: var(--mono); font-weight: 400; }
+th:first-child, td:first-child { text-align: left; font-family: var(--body); }
+th { font-weight: 500; color: var(--muted); }
+.note { color: var(--muted); font-size: .9rem; max-width: 72ch; margin: 0; }
+</style>
+<div class="wrap">
+  <header>
+    <h1>后腿折叠过程</h1>
+    <p class="sub">狮子后半段切出来的零件，1607 个单元，和全身相同的材料、粘性和地面，每组从同样的高度落下。红色的单元说明用静止时的邻居读出来已经内外翻转，也就是材料折叠的地方。</p>
+  </header>
+  <div class="bar">
+    <div class="ctl">
+      <button id="play" type="button">播放</button>
+      <input id="t" type="range" min="0" step="1" aria-label="帧">
+      <span class="time" id="lab"></span>
+      <span id="grp" class="ctl"></span>
+    </div>
+    <div class="nums" id="nums"></div>
+  </div>
+  <h2>外形</h2>
+  <div class="row" id="ro"></div>
+  <h2>过质心的竖直切片</h2>
+  <div class="row" id="rs"></div>
+  <h2>过后腿的竖直切片</h2>
+  <div class="row" id="rl"></div>
+  <div class="legend">
+    <span>水平速度<span class="ramp"></span>0 到 <span id="vm"></span> m/s</span>
+    <span><span class="swatch" style="background: var(--fold)"></span>翻转（det &lt; 0）</span>
+    <span><span class="swatch" style="background: var(--near)"></span>接近翻转（det &lt; .2）</span>
+  </div>
+  <h2>翻转单元数随时间</h2>
+  <div class="tabwrap"><table id="tab"></table></div>
+  <p class="note">球的半径是 r0 exp(L/3)，每个单元的球都画出来，所以外形偏圆胖。后脚那团大单元半径约 3.6h，只要周围的单元离开，就会显出一个大球。一组提前停下时，画面停在它的最后一帧。</p>
+</div>
+<script>
+const D = /*DATA*/null;
+const $ = (i) => document.getElementById(i);
+const T = D.t, F = D.frames;
+let G = 0, timer = null;
+const s = $("t"), b = $("play");
+s.max = T.length - 1;
+s.value = T.reduce((a, v, i) => Math.abs(v - .6) < Math.abs(T[a] - .6) ? i : a, 0);
+$("vm").textContent = D.vmax;
+function build() {
+  const R = D.groups[G].runs;
+  for (const [id, key, what] of [["ro", "o", "外形"], ["rs", "s", "切片"], ["rl", "l", "后腿切片"]]) {
+    const r = $(id);
+    r.style.setProperty("--cols", R.length);
+    r.innerHTML = R.map((x) => `<figure><figcaption><b>${x.label}</b></figcaption><img id="${id}_${x.tag}" alt="${x.label}这一帧的${what}"></figure>`).join("");
+  }
+  const times = [.35, .4, .45, .5, .55, .6, .65, .7].filter((t) => t <= T[T.length - 1] + 1e-6);
+  const idx = times.map((t) => T.reduce((a, v, i) => Math.abs(v - t) < Math.abs(T[a] - t) ? i : a, 0));
+  $("tab").innerHTML = `<tr><th>t (s)</th>${times.map((t) => `<th>${t.toFixed(2)}</th>`).join("")}</tr>` + R.map((x) => `<tr><td>${x.label}</td>${idx.map((i, j) => `<td>${times[j] <= D.stop[x.tag] + 1e-6 ? F[i][x.tag].out : "–"}</td>`).join("")}</tr>`).join("");
+  $("grp").innerHTML = D.groups.map((g, i) => `<button type="button" data-g="${i}" aria-pressed="${i === G}">${g.name}</button>`).join("");
+  $("grp").querySelectorAll("button").forEach((q) => q.addEventListener("click", () => { G = +q.dataset.g; build(); show(+s.value); }));
+}
+function show(i) {
+  const f = F[i], t = T[i];
+  $("lab").textContent = `t=${t.toFixed(3)} s`;
+  const R = D.groups[G].runs;
+  R.forEach((x) => { const a = f[x.tag]; $("ro_" + x.tag).src = a.o; $("rs_" + x.tag).src = a.s; $("rl_" + x.tag).src = a.l; });
+  $("nums").innerHTML = R.map((x) => { const a = f[x.tag], st = t > D.stop[x.tag] + 1e-6; return `<span><span class="k">${x.label}</span> <b>${a.out}</b> 翻转，${a.near} 接近${st ? `<span class="st">，停在 t=${D.stop[x.tag].toFixed(3)}</span>` : ""}</span>`; }).join("");
+}
+function stop() { clearInterval(timer); timer = null; b.textContent = "播放"; }
+b.addEventListener("click", () => {
+  if (timer) return stop();
+  if (+s.value >= T.length - 1) s.value = 0;
+  b.textContent = "暂停"; show(+s.value);
+  timer = setInterval(() => { const n = +s.value + 1; if (n >= T.length) return stop(); s.value = n; show(n); }, 450);
+});
+s.addEventListener("input", () => { stop(); show(+s.value); });
+build(); show(+s.value);
+</script>

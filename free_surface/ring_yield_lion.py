@@ -27,6 +27,8 @@ a_.add_argument('--aa', type=int, default=6)
 a_.add_argument('--hold-after', type=int, default=3)
 a_.add_argument('--eps-cut', type=float, default=-1.)
 a_.add_argument('--beta', type=float, default=.05)
+a_.add_argument('--sigma-y', type=float, default=1e9)
+a_.add_argument('--eps-fade', type=float, default=0.)
 args = a_.parse_args()
 E, nu, C0, v0 = 10648.614517785627/1000, .3912951704721983, -.2, (0., 0., -.245)
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
@@ -34,7 +36,7 @@ X0, r0, V0 = g['points'], cl['radii'], g['masses']; n = len(X0)
 args.save.mkdir(parents=True, exist_ok=True)
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
 up = torch.tensor([0., 0., 1.], dtype=f64, device=dev)
-W = RingYield(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, 1e9, theta=.5, kappa=5., eps_cut=args.eps_cut)
+W = RingYield(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, args.sigma_y, theta=.5, kappa=5., eps_cut=args.eps_cut, eps_fade=args.eps_fade)
 W.set_ball((0., 0., 1.), C0, 0.)
 if args.beta > 0:
     W.set_viscosity(args.beta, args.dt)
@@ -86,6 +88,14 @@ for s in range(1, nsteps+1):
         Lm = W.tul['Ln']
         sf = torch.linalg.svdvals(W._Ft.cpu())
         bd = W.B['bdelta'].numpy()
+        # the closure of the stencils on the closed cells: all, and where m is between
+        ms_ = W._m_s; lo_, hi_ = W.tlo, W.thi
+        d_ = ST.tx[hi_]-ST.tx[lo_]; wp_ = (W.tr['wi'][:ms_]+W.tr['wj'][:ms_])[:, None]
+        Sc = torch.zeros(n, 3, dtype=f64, device=dev).index_add(0, lo_, wp_*d_).index_add(0, hi_, -wp_*d_)
+        Sn = torch.zeros(n, dtype=f64, device=dev).index_add(0, lo_, wp_[:, 0]*d_.norm(dim=1)).index_add(0, hi_, wp_[:, 0]*d_.norm(dim=1))
+        clo = (Sc.norm(dim=1)/Sn.clamp(min=1e-300))[W.tul['Mc'].abs().sum((1, 2)) == 0]
+        mid = ((W._mem > .1) & (W._mem < .9))[W.tul['Mc'].abs().sum((1, 2)) == 0]
+        print('  closure: median %.4f, 99 %% %.3f; where m is between (%d cells): median %.4f; m median %.3f, under .5: %d; yielded %d; springs %d, walls %d, without a wall %d; e_y %.4f' % (float(clo.median()), float(torch.quantile(clo, .99)), int(mid.sum()), float(clo[mid].median()) if bool(mid.any()) else 0., float(W._mem.median()), int((W._mem < .5).sum()), int((W._eps > 0).sum()), ms_, W.ul_stats.get('walls', 0), W.ul_stats.get('ghost', 0), W.ey), flush=True)
         print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_v %.3e, balance / start %.4f; com up %.5f, lowest %.4f; e^L %.3f..%.3f; F_e singular %.3f..%.3f; touching %d, ground/weight %.2f; walls %d, new %d, closed %d; radii %d (fails %d), flips %d; last %d steps: products %d, outer median %d max %d, rejected %d' % (
             s*args.dt, time.time()-t0, ek, ed, ev, float(W.tsum[6]), W.Wv, (ek+ed+ev+float(W.tsum[6])+W.Wv+eg)/H0, float((M3*ST.tx)[:, 2].sum())/M, float(ST.tx[:, 2].min()), float(torch.exp(Lm).min()), float(torch.exp(Lm).max()), float(sf[:, 2].min()), float(sf[:, 0].max()),
             int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wref, W.ul_stats.get('walls', 0), W.ul_stats.get('born', 0), W.ul_stats.get('closed', 0), W.ul_stats.get('radii_it', 0), W.ul_stats.get('radii_fail', 0), W.ul_stats.get('flips', 0), args.every, sum(npr[-args.every:]), int(np.median(nout[-args.every:])), max(nout[-args.every:]), ST.stats['rejected']), flush=True)
