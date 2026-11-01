@@ -191,6 +191,18 @@ class MergedUL(PlasticUL):
         wp.launch(k_total, (NT, 256), inputs=[B['terms']], outputs=[B['tsum']])
         wp.launch(k_total_loss, 1, inputs=[B['tsum'], self.tw], outputs=[B['loss']])
 
+    def _spring_rule(self, lo, hi, key, yld):
+        """the spring list: a new wall with both cells yielded gets one; a spring whose cells have both yielded goes with its wall"""
+        new = yld[lo] & yld[hi] & ~torch.isin(key, self.tkey)
+        stay = ~(yld[self.tlo] & yld[self.thi]) | torch.isin(self.tkey, key)
+        return new, stay
+
+    def _spring_k(self, x, lo_s, hi_s, key_s, ds, k0_, both_y, has_wall, Aw, wall):
+        """k: of the current wall when both cells have yielded, else kept"""
+        k_ = k0_.clone(); q_ = both_y & has_wall
+        k_[q_] = self.kshare*2*self.mu*Aw[q_]/ds.norm(dim=1)[q_]
+        return k_
+
     def update_ul(self, x):
         """the step's start at x: radii for V0 exp(L_n), the cut; the spring list; the fit and gradient on the connected walls; the springs' rows and the cells' start strains"""
         n = self.n; x = x.detach(); st = self.ul_stats; t, s = self.tul, self.tsp; dev = x.device; yld = self._yld
@@ -205,11 +217,7 @@ class MergedUL(PlasticUL):
         kp = G.wall_A.detach() > 0
         i, j, A, c = G.i[kp].long(), G.j[kp].long(), G.wall_A.detach()[kp], G.wall_c.detach()[kp]
         lo, hi = torch.minimum(i, j), torch.maximum(i, j); key = lo*n+hi
-        # the spring list: a new wall with both cells yielded gets one; a spring whose cells have both yielded goes with its wall
-        both_w = yld[lo] & yld[hi]
-        new = both_w & ~torch.isin(key, self.tkey)
-        both_s = yld[self.tlo] & yld[self.thi]
-        stay = ~both_s | torch.isin(self.tkey, key)
+        new, stay = self._spring_rule(lo, hi, key, yld)
         st['closed'] = int((~stay).sum()); st['born'] = int(new.sum())
         lo_s = torch.cat([self.tlo[stay], lo[new]]); hi_s = torch.cat([self.thi[stay], hi[new]])
         Fe = self._Fe
@@ -230,9 +238,7 @@ class MergedUL(PlasticUL):
         pos = torch.searchsorted(key_s, key).clamp(max=m_s-1); conn = key_s[pos] == key
         order = torch.argsort(key); pw = torch.searchsorted(key[order], key_s).clamp(max=len(key)-1); has_wall = key[order][pw] == key_s
         Aw = torch.zeros(m_s, dtype=f64, device=dev); Aw[has_wall] = A[order][pw[has_wall]]
-        k_ = k0_.clone(); q_ = both_y & has_wall
-        Ls_ = ds.norm(dim=1)
-        k_[q_] = self.kshare*2*self.mu*Aw[q_]/Ls_[q_]
+        k_ = self._spring_k(x, lo_s, hi_s, key_s, ds, k0_, both_y, has_wall, Aw, (i, j, c, order, pw))
         self.tP, self.tdl, self.tk0 = p_, dl_.clone(), k_.clone()
         for k2 in ('si', 'sj', 'sP', 'sdn', 'sk'):
             s[k2].zero_()

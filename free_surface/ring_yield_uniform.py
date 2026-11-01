@@ -11,6 +11,7 @@ import numpy as np
 import torch
 
 from free_surface.ring_yield import RingYield
+from free_surface.ring_moment import RingMoment
 
 f64, dev = torch.float64, 'cuda'
 a_ = argparse.ArgumentParser()
@@ -24,12 +25,13 @@ a_.add_argument('--rotate', type=float, default=0.)
 a_.add_argument('--E', type=float, default=23.00838)
 a_.add_argument('--nu', type=float, default=.3008)
 a_.add_argument('--every', type=int, default=10)
+a_.add_argument('--moment', action='store_true')
 args = a_.parse_args()
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
 X0, r0, V0, C0 = g['points'], cl['radii'], g['masses'], g['contacts']; n = len(X0)
 mu_ = args.E/(2*(1+args.nu))
 sy_ = 2*mu_*args.ey                                                                  # (the code's s_y = (2 / 3)^1/2 sigma_y, e_y = s_y / 2 mu)
-W = RingYield(X0, r0, V0, g['pairs'], g['areas'], C0, args.E, args.nu, sy_/math.sqrt(2/3), theta=.5, kappa=5., eps_cut=args.eps_cut, ledger=True)
+W = (RingMoment if args.moment else RingYield)(X0, r0, V0, g['pairs'], g['areas'], C0, args.E, args.nu, sy_/math.sqrt(2/3), theta=.5, kappa=5., eps_cut=args.eps_cut, ledger=True)
 W.set_ball((0., 1., 0.), -100., 0.)
 W.start()
 W.prepare()
@@ -138,6 +140,8 @@ for k in range(1, len(P)):
         eps = lp
         print('step %3d, ln l %+.4f: analytic |dev log U_e| %.5f, read median %.5f, 1..99 %% %.5f..%.5f; reading / e_y at z median %.3f, max %.2f; deep plastic work / s_y dV %.4f (rest cut would be %.4f at eps %.3f); cut made %s; springs new %d' % (
             k, P[k], a_e, float(dn.median()), float(torch.quantile(dn, .01)), float(torch.quantile(dn, .99)), float(rd.median()), float(rd.max()), ratio, (2*math.exp(2*eps)+math.exp(-eps))/3, eps, ['%.2e' % v for v in W.Ecut_parts], W.ul_stats.get('born', 0)), flush=True)
+    if args.moment and (k % args.every == 0 or k == len(P)-1):
+        print('    moment: %s' % {k_: W.ul_stats[k_] for k_ in W.stat_keys if k_ in W.ul_stats}, flush=True)
     if k >= args.steps+max(args.steps//4, 4):
         loop_w += dw
 print('the loops: the body\'s internal work %.4e' % loop_w, flush=True)
