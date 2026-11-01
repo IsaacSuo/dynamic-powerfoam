@@ -103,8 +103,7 @@ for k in range(1, len(P)):
     R, Ff, M, be = Y['Rz'], Y['Ff'], Y['Mtt'], Y['be']
     Hn = Y['Hn']; He = 2*(R.transpose(1, 2)@Ff-W.I3)-Hn
     trM = M.diagonal(dim1=1, dim2=2).sum(1).clamp(min=1e-300)
-    on = Y['gy'] != 0
-    vd = torch.where(on, (He*M).sum((1, 2))/trM, He.diagonal(dim1=1, dim2=2).sum(1)/3)
+    vd = He.diagonal(dim1=1, dim2=2).sum(1)/3
     Hed = He-vd[:, None, None]*W.I3
     Hnd = Y['Hd']
     wc = .5*(1-be)*(((Hnd@M)*Hed).sum((1, 2))+be*((Hed@M)*Hed).sum((1, 2)))
@@ -118,6 +117,8 @@ for k in range(1, len(P)):
     # a loop's work: -g . dx over the deep cells' interior sites would need the walls' share: the whole body's internal work is read
     dw = float((gz*(x-xn)).sum())
     if k % args.every == 0:
+        gs = gz.norm(dim=1)[deep]/(W.sy*W.V0[deep]**(2/3))
+        print('    the plastic patch test: |g| / (s_y V^2/3) on the deep sites, median %.4f, 90 %% %.4f, 99 %% %.4f, max %.4f; net moment of the whole force %.3e over s_y V^4/3 ... %.3e' % (float(gs.median()), float(torch.quantile(gs, .9)), float(torch.quantile(gs, .99)), float(gs.max()), float(torch.linalg.cross(z-Xc, gz).sum(0).norm()), float(W.sy*W.V0.median()**(4/3))), flush=True)
         Mm = (M[use].sum(0)/(2*W.mu*V_use)).cpu().numpy()
         Hmn = Hnd[use].mean(0).cpu().numpy(); Hme = Hed[use].mean(0).cpu().numpy()
         wcn = float(wc[use].sum())

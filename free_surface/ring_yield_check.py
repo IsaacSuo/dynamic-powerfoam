@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import warp as wp
 
 from free_surface.closure_warp import TrustCG
 from free_surface.ring_ul import RingUL
@@ -23,6 +22,7 @@ a_.add_argument('--foam', type=Path, required=True)
 a_.add_argument('--periods', type=float, default=1.5)
 a_.add_argument('--ey', type=float, default=.0095)
 a_.add_argument('--kappa', type=float, default=5.)
+a_.add_argument('--eps-cut', type=float, default=.15)
 a_.add_argument('--no-merge', action='store_true')
 a_.add_argument('--stop-bad', action='store_true')
 args = a_.parse_args()
@@ -41,7 +41,7 @@ agg = 0. if args.no_merge else .1
 
 
 def model(sig=sigma_y, agg_=agg):
-    W = RingYield(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, sig, theta=.5, kappa=args.kappa, agg_merge=agg_)
+    W = RingYield(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, sig, theta=.5, kappa=args.kappa, agg_merge=agg_, eps_cut=args.eps_cut)
     W.set_ball((0., 0., 1.), -10., 0.)
     W.start()
     W.tbR.fill_(-1.)
@@ -93,21 +93,6 @@ for name, amp_ in (('below and past the limit', .002), ('far past it', .03)):
     Hu = (Wc.grad(xx+e2*u)[1]-Wc.grad(xx-e2*u)[1])/(2*e2); Hv = (Wc.grad(xx+e2*v_)[1]-Wc.grad(xx-e2*v_)[1])/(2*e2)
     print('  the Hessian: v.H u %.6e, u.H v %.6e; u.H u / |u|^2 %.3e' % (float((v_*Hu).sum()), float((u*Hv).sum()), float((u*Hu).sum()/(u*u).sum())), flush=True)
 del Wc
-Wb = RingYield(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, sigma_y, theta=.5, kappa=args.kappa, contact_point=True)
-Wb.set_ball((0., 0., 1.), float(X0[:, 2].min())-.3*h, 1.)
-Wb.start()
-Wb.prepare()
-Wb.tball[0], Wb.tball[1] = 2., .5
-wp.to_torch(Wb.ball['xn'], requires_grad=False).copy_(Wb.X); Wb.tbkt.fill_(E*h); Wb.tbbound.fill_(E*h*h*h)
-xx = Wb.X+.002*ph
-Wb.grad(xx); Wb.reread()
-L_, g_ = Wb.grad(xx)
-fd = (float(Wb.grad(xx+e*u)[0])-float(Wb.grad(xx-e*u)[0]))/(2*e)
-print('the ground on the contact point (%d touching, normal force %.3e, tangent %.3e, |dE/dF| %.3e): the force %.8e, E by differences %.8e, gap %.2e' % (int((Wb.B['bdelta'].numpy() > 0).sum()), float(np.abs(Wb.B['bfn'].numpy()).sum()), float(np.abs(Wb.B['bff'].numpy()).sum()), float(Wb.ty['Bf'].norm()), float((g_*u).sum()), fd, abs(float((g_*u).sum())-fd)/abs(fd)), flush=True)
-v_ = torch.as_tensor(rng.normal(size=X0.shape), dtype=f64, device=dev); e2 = 1e-6*h
-Hu = (Wb.grad(xx+e2*u)[1]-Wb.grad(xx-e2*u)[1])/(2*e2); Hv = (Wb.grad(xx+e2*v_)[1]-Wb.grad(xx-e2*v_)[1])/(2*e2)
-print('  the Hessian: v.H u %.6e, u.H v %.6e; u.H u / |u|^2 %.3e' % (float((v_*Hu).sum()), float((u*Hv).sum()), float((u*Hu).sum()/(u*u).sum())), flush=True)
-del Wb
 closed = W.tul['Mc'].abs().sum((1, 2)) == 0
 Amed = float(np.median(g['areas']))
 i_, j_ = W.tlo, W.thi

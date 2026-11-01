@@ -36,20 +36,10 @@ a_.add_argument('--pre-every', type=int, default=4)
 a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
 a_.add_argument('--scene', type=int, default=0)
-a_.add_argument('--watch', type=int, nargs='*', default=None)
-a_.add_argument('--trace-from', type=int, default=None)
 a_.add_argument('--aa', type=int, default=6, help='the outer iteration: Anderson over this many differences (0: none)')
-a_.add_argument('--ground-mono', action='store_true')
-a_.add_argument('--contact-point', action='store_true')
-a_.add_argument('--contact-alpha', type=float, default=1.)
-a_.add_argument('--br-lag', action='store_true', default=True)
 a_.add_argument('--hold-after', type=int, default=3)
-a_.add_argument('--no-relax', action='store_true', default=True)
 a_.add_argument('--save-state', type=int, nargs='*', default=[], help='checkpoints after these steps')
 a_.add_argument('--load-state', type=Path, default=None)
-a_.add_argument('--first-every', type=int, default=0)
-a_.add_argument('--first-from', type=int, default=240)
-a_.add_argument('--watch-from', type=int, default=0)
 a_.add_argument('--soft-tol', type=float, default=.1, help='of the weight: a step that ends over the tolerance but under this goes on, counted and logged (.1 is at most a .1 m/s kick to one site)')
 a_.add_argument('--no-hold', action='store_true', help="the ground only presses; the MPM's sticky ground holds tension, up to the material's yield here")
 args = a_.parse_args()
@@ -89,7 +79,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = RingYield(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, ground_mono=args.ground_mono, contact_point=args.contact_point, contact_alpha=args.contact_alpha, br_lag=args.br_lag, hold=not args.no_hold, ledger=True)
+W = RingYield(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
@@ -101,20 +91,10 @@ W.grad(W.X); W.reread(); W.grad(W.X)
 ST = YieldStep(W, CG, mass, W.ul_blocks(), fg, args.dt, args.mu)
 ST.pre_ul = True; ST.pre_every = args.pre_every; ST.smooth_pred = ST.carry_delta = True
 ST.set_theta(.5, mass)
-ST.trace_from = args.trace_from
 ST.aa_m = args.aa
-ST.relax_on = not args.no_relax
 ST.hold_after = args.hold_after
 
 
-class _First:
-    s = 0
-
-    def __call__(self):
-        return args.first_every > 0 and self.s >= args.first_from and self.s % args.first_every == 0
-
-
-ST.trace_first = _First()
 ST.set_state(W.X.clone(), torch.tensor(gt['v'], dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
 h = float(np.median(V0))**(1/3)
 print('plasticine, ring springs with the tensor limit: E %.1f, nu %.4f, yield %.1f Pa (yield strain %.4f, cell limit e_y %.4f), kappa %g, v0 %s; foam %s: %d cells, h %.2f mm; dt 1/%d, tol %g of the weight, friction %g; MPM %d particles' % (
@@ -217,8 +197,7 @@ s_first = 1
 if args.load_state is not None:
     ck = torch.load(args.load_state, weights_only=False)
     unpack(W, ck['W']); unpack(ST, ck['ST'])
-    ST.trace_from, ST.aa_m, ST.hold_after, ST.relax_on = args.trace_from, args.aa, args.hold_after, not args.no_relax        # (the command line over the checkpoint's)
-    W.br_lag, W.contact_point, W.ground_mono = args.br_lag, args.contact_point, args.ground_mono
+    ST.aa_m, ST.hold_after = args.aa, args.hold_after                                       # (the command line over the checkpoint's)
     s_first = ck['s']+1
     print('from step %d of %s' % (ck['s'], args.load_state), flush=True)
 t0 = t_saved = time.time()
@@ -226,13 +205,8 @@ nit, npr, nrd, ncl, nfe = [], [], [], [], []
 nsoft = 0
 nf = int(round(1/(24*args.dt))); nsteps = args.steps or args.frames*nf
 H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
-W.watch = args.watch
 for s in range(s_first, nsteps+1):
     t_s = time.time()
-    W.watch_on = bool(args.watch) and s >= args.watch_from
-    ST.trace_first.s = s
-    if W.watch_on:
-        print('  step %d' % s, flush=True)
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
     if math.isfinite(g2) and tol < math.sqrt(g2) <= args.soft_tol*wref:
         nsoft += 1
@@ -260,8 +234,7 @@ for s in range(s_first, nsteps+1):
         i_, j_, Lw, _, _, m = W._w
         ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum()); eb = W.ground_store(ST.tx)
         print('  work of the springs over the steps: the tensor %.4e, the remainder %.4e; plastic work by the formula, cells %.4e, halves %.4e' % (getattr(W, 'W_tensor', 0.), getattr(W, 'W_rem', 0.), W.Wp_cell, W.Wp_half), flush=True)
-        print('  the cut made, tensor volumetric, cross, deviatoric, remainder: on beta under .5 %s; the rest %s' % (['%.2e' % a__ for a__ in W.Ecut_t[:4]], ['%.2e' % a__ for a__ in W.Ecut_t[4:]]), flush=True)
-        print('  the cut made: springs %.3e, outer %.3e, volume %.3e, ground %.3e (without the carried fit: springs %.3e, outer %.3e); T - I median %.4f, max %.3f, reset %d; fit gap %.1e; H_n / e_y median %.2f, max %.1f; springs v against L: gap median %.4f, max %.3f, |v| max %.3f' % (*W.Ecut_parts, *W.Ecut_w, W.ul_stats.get('T_med', 0.), W.ul_stats.get('T_max', 0.), W.ul_stats.get('T_reset', 0), W.ul_stats.get('fit_gap', 0.), W.ul_stats.get('Hn_med', 0.), W.ul_stats.get('Hn_max', 0.), W.ul_stats.get('v_gap_med', 0.), W.ul_stats.get('v_gap_max', 0.), W.ul_stats.get('v_max', 0.)), flush=True)
+        print('  the cut made: springs %.3e, outer %.3e, volume %.3e, ground %.3e; T - I median %.4f, max %.3f, reset %d; fit gap %.1e; H_n / e_y median %.2f, max %.1f; springs v against L: gap median %.4f, max %.3f, |v| max %.3f' % (*W.Ecut_parts, W.ul_stats.get('T_med', 0.), W.ul_stats.get('T_max', 0.), W.ul_stats.get('T_reset', 0), W.ul_stats.get('fit_gap', 0.), W.ul_stats.get('Hn_med', 0.), W.ul_stats.get('Hn_max', 0.), W.ul_stats.get('v_gap_med', 0.), W.ul_stats.get('v_gap_max', 0.), W.ul_stats.get('v_max', 0.)), flush=True)
         bd = W.B['bdelta'].numpy()
         print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_p %.3e, flags made %.2e, cuts made %.2e; left %.4f of the start\'s energy; com y %.4f; flowing %d cells, yielded so far %d, on the cut %d; outer %d; walls %d, springs %d, new %d, closed %d, without a wall %d; J %.3f..%.3f; touching %d, ground/weight %.2f; min wall L / h %.3f, max r / h %.2f, radii %d (fails %d), flips %d; rho / e_y median %.2f, max %.1f, beta min %.3f; products %d, Newton %d, rejected %d, negative %d; %.2f s' % (
             s*args.dt, time.time()-t0, ek, ed, ev, eb, W.Wp, W.Eflag, W.Ecut, 1-(ek+ed+ev+eb+W.Wp+eg-W.Eflag-W.Ecut)/H0, float((M3*ST.tx)[:, 1].sum())/M, W.ul_stats['yielding'], W.ul_stats['yielded'], W.ul_stats['cut_cells'], ST.stats['outer'], m, W._m_s, W.ul_stats['born'], W.ul_stats['closed'], W.ul_stats['ghost'], float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()),
