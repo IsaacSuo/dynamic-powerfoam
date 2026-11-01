@@ -130,8 +130,6 @@ class RingStep(MergedStep):
         wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
         if W.stick:
             W.tbbound.copy_(torch.minimum(W.tbbound, W.tau_y*W.footprint(self.tx, W._ulr)))
-        if getattr(W, 'hold', False):
-            W.hold_start()
         self._eval(0.)
         W.reread(beta=True)
         g2 = self._eval(0.)[PS_GQ2]
@@ -139,6 +137,8 @@ class RingStep(MergedStep):
         evals, its = 2, 0
         st = dict(rejected=0, edge=0, negative=0, trace=[])
         delta, delta0 = (self.delta_start if self.carry_delta and self.delta_start else -1.), None
+        cap = self.cg_cap
+        secant, good = False, 0
         while its < self.newton_max:
             if math.sqrt(g2) <= tol_abs:
                 break
@@ -150,7 +150,13 @@ class RingStep(MergedStep):
             wp.launch(k_mid_pre_ball, bl['k'], inputs=[bl['body'], bl['R'], W.B['bdelta'], bl['ng'], self.e4, bl['kt'], bl['bound'], self.muf], outputs=[A['P']])
             wp.launch(k_mid_inv, n, inputs=[A['P']], outputs=[A['Pinv']])
             stop = max(cg_tol_abs(g2), self.eta*math.sqrt(g2)); g_ = math.sqrt(g2)
-            r = self.CG.solve(A['gz'], delta, stop, self.cg_cap)
+            if secant:
+                W.tbfz.copy_(W.tbe); W.tpic[0] = 1                                       # (W's buffers hold z's evaluation here)
+            r = self.CG.solve(A['gz'], delta, stop, cap)
+            if secant:
+                W.tpic[0] = 0
+            if r['K'] >= cap and not r['EDGE'] and not r['NEG']:                         # (the Newton direction not reached: an ill-conditioned step, on stiff pressure against a flowing shape, otherwise takes hundreds of crude directions)
+                cap = min(2*cap, getattr(self, 'cg_cap_max', self.cg_cap))
             evals += r['K']; st['edge'] += r['EDGE']; st['negative'] += r['NEG']
             delta = r['DELTA']
             if delta0 is None:
@@ -162,6 +168,13 @@ class RingStep(MergedStep):
             ared = s[PS_PZ]-s[PS_PQ] if ok else -math.inf
             rho = ared/pred if pred > noise else (1. if ared >= -noise else -math.inf)
             take = ok and (rho > 1e-4 or s[PS_GQ2] < .81*g2)
+            if hasattr(W, 'tpic'):
+                if not take or rho < .25:
+                    secant, good = True, 0
+                elif secant and rho > .75:
+                    good += 1
+                    if good >= 3:                                                        # (the upper bound converges only linearly: back to Newton once the set of flowing cells has settled)
+                        secant = False
             pM = delta if r['EDGE'] else math.sqrt(max(r['PMP'], 0.))
             if not take or rho < .25 or pred <= noise:
                 delta = .25*pM
@@ -178,7 +191,7 @@ class RingStep(MergedStep):
                 if not delta > 1e-12*delta0:
                     break
         self.stats = st
-        self.delta_start = delta if delta > 0. else None
+        self.delta_start = delta if delta > 0. and its <= 50 else None                   # (a region a hard step has shrunk is not the next step's: 30 Newton iterations of one CG iteration each at |g| 1.4e3)
         return evals, its, g2
 
 

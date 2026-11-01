@@ -14,13 +14,42 @@ import torch
 import warp as wp
 
 from free_surface.closure_warp import k_Aul, k_F8, k_Gul, k_Gul_adj, k_ball_adj, rot_proper
-from free_surface.merged_ul import MergedUL, k_cell_shape
+from free_surface.merged_ul import MergedUL
 from free_surface.ring_plastic import RingStep
 from free_surface.ring_ul import RingUL
 from free_surface.skin_warp import NSLOT, NT, k_total, k_total_loss
 from free_surface.ul_plastic import k_Aul_adj2, k_Ge, k_Ge_adj, k_gg_cell, k_gg_cell_adj, k_gg_wall, k_gg_wall_adj, k_var, polar_batch
 
 f64 = torch.float64
+
+
+@wp.kernel(enable_backward=False)
+def k_rf_shape(Fc: wp.array(dtype=wp.mat33d), Rh: wp.array(dtype=wp.mat33d), en: wp.array(dtype=wp.mat33d), V0: wp.array(dtype=wp.float64), mu: wp.float64, sy: wp.float64, th_: wp.float64, pic: wp.array(dtype=int), bfz: wp.array(dtype=wp.float64),
+               ei: wp.array(dtype=wp.float64), be: wp.array(dtype=wp.float64), er: wp.array(dtype=wp.mat33d), Fb: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64)):
+    """merged_ul.py's k_cell_shape, with the secant for the products: past the limit W = s_y |e| is a cone, its Newton model has no curvature along e and runs through the apex (ratios -.7, .9, -.4 for 300 iterations on a small limit). With pic the force is linear, 2 mu beta(z) r: the quadratic upper bound of the cone at z, so a step of the model lowers W. Equal to the true force at z itself"""
+    b = wp.tid()
+    I = wp.identity(n=3, dtype=wp.float64)
+    A = wp.transpose(Rh[b])@Fc[b]
+    s = wp.float64(0.5)*(A+wp.transpose(A))-I
+    e = s-(wp.trace(s)/wp.float64(3.0))*I
+    ca = wp.float64(1.0)-th_
+    r = (e-ca*en[b])/th_
+    nr = wp.sqrt(wp.ddot(r, r))
+    ei[b] = nr
+    er[b] = r
+    two_mu = wp.float64(2.0)*mu
+    w = mu*nr*nr
+    bb = wp.float64(1.0)
+    if two_mu*nr > sy:
+        w = sy*nr-sy*sy/(wp.float64(2.0)*two_mu)
+        bb = sy/(two_mu*nr)
+    be[b] = bb
+    wp.atomic_add(terms, 0, b % NSLOT, V0[b]*th_*th_*w)
+    if ca > wp.float64(0.0):
+        wp.atomic_add(terms, 3, b % NSLOT, V0[b]*(two_mu*ca*wp.ddot(en[b], e-en[b])+(wp.float64(1.0)-th_*th_)*mu*wp.ddot(en[b], en[b])))
+    if pic[0] != 0:
+        bb = bfz[b]
+    Fb[b] = V0[b]*(Rh[b]@((two_mu*ca)*en[b]+(th_*bb*two_mu)*r))
 
 
 @wp.kernel(enable_backward=False)
@@ -166,7 +195,7 @@ def k_rf_half(x: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), Rc: wp.
 @wp.kernel(enable_backward=False)
 def k_rf_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.array(dtype=wp.float64), xn: wp.array(dtype=wp.vec3d), ng: wp.vec3d, bpar: wp.array(dtype=wp.float64), kt: wp.array(dtype=wp.float64), bound: wp.array(dtype=wp.float64),
               lamt: wp.array(dtype=wp.vec3d), stuck: wp.array(dtype=int), kn: wp.array(dtype=wp.float64), delta: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), ff: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
-    """closure_warp.py's k_ball, with the hold: a ball that has touched pulls back linearly when it leaves. bpar = (cs, wt, c0, E*, mu)"""
+    """closure_warp.py's k_ball, with the hold: a ball that has touched is linear below a sinking of 5 % of its radius, C1 with Hertz there, and so pulls when it leaves, its rest at a third of that (Hertz down to 0 would have the stiffness jump from k_n to 0 at d = 0, where a thousand balls rest: Newton's ratio cycled -.06, .73, .47 for 300 iterations). bpar = (cs, wt, c0, E*, mu)"""
     c = wp.tid()
     B = cbody[c]
     cs, wt, c0, Es, mu = bpar[0], bpar[1], bpar[2], bpar[3], bpar[4]
@@ -174,13 +203,17 @@ def k_rf_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.arr
     d = R[c]-(wp.dot(ng, xe)-c0)
     delta[c] = d
     F = wp.float64(0.0)
-    if d > wp.float64(0.0):
+    dr = wp.float64(0.05)*R[c]
+    if stuck[c] != 0 and R[c] > wp.float64(0.0) and d < dr:
+        sr = wp.sqrt(R[c]*dr)
+        Fr = wp.float64(4.0)/wp.float64(3.0)*Es*sr*dr
+        dd = d-dr
+        F = Fr+kn[c]*dd
+        wp.atomic_add(terms, 6, c % NSLOT, wt*(wp.float64(8.0)/wp.float64(15.0)*Es*sr*dr*dr+Fr*dd+wp.float64(0.5)*kn[c]*dd*dd))
+    elif d > wp.float64(0.0):
         sq = wp.sqrt(R[c]*d)
         F = wp.float64(4.0)/wp.float64(3.0)*Es*sq*d
         wp.atomic_add(terms, 6, c % NSLOT, wt*wp.float64(8.0)/wp.float64(15.0)*Es*sq*d*d)
-    elif stuck[c] != 0:
-        F = kn[c]*d
-        wp.atomic_add(terms, 6, c % NSLOT, wt*wp.float64(0.5)*kn[c]*d*d)
     fn[c] = F
     f = wp.vec3d()
     if mu > wp.float64(0.0) and bound[c] > wp.float64(0.0):
@@ -203,7 +236,8 @@ def k_rf_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.arr
 
 
 class RingFlow(RingUL):
-    """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's (5 at the springs' w); flag_at: the predictor's reading, in e_y, that flags a cell; hold: the ground holds what has touched, the MPM's sticky ground; ledger: account the energy that the flag and the cut change at fixed x"""
+    """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's (5 at the springs' w); flag_at: the predictor's reading, in e_y, that flags a cell; hold: a ball that has touched does not leave the ground (the MPM's sticky ground holds tension; in the plane only the friction, as merged_ul.py: a site stands a ball's radius above the ground, and pinned without a limit it lifts the no-slip plane by that: landing y +20 % against +8 %); ledger: account the energy that the flag and the cut change at fixed x"""
+    C_cap = 4.
 
     def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., flag_at=.5, hold=False, ledger=False, **kw):
         super().__init__(X, r, V0, pairs, A, c, E, nu, theta=theta, sigma_y=sigma_y, **kw)
@@ -240,6 +274,8 @@ class RingFlow(RingUL):
         self._rrows = self._rows_from(i_w, j_w, A_, tw, nn, Vi, ml)
         self._tbR0 = self.tbR.clone() if self.ball is not None else None
         Ks = U['Kw']
+        self.hd = dict(stuck=z(n, wp.int32), kn=z(n, wp.float64), pic=z(1, wp.int32), bfz=z(n, wp.float64))
+        self.tpic, self.tbfz = tt(self.hd['pic']), tt(self.hd['bfz'])
         self.ring = dict(K=Ks, i=z(Ks, wp.int32), j=z(Ks, wp.int32), wi=z(Ks, wp.float64), wj=z(Ks, wp.float64), qi=z(Ks, wp.vec3d), qj=z(Ks, wp.vec3d), dni=z(Ks, wp.vec3d), dnj=z(Ks, wp.vec3d), bi=z(Ks, wp.float64), bj=z(Ks, wp.float64), sri=z(Ks, wp.vec3d), srj=z(Ks, wp.vec3d),
                          Am=z(n, wp.mat33d), Rc=z(n, wp.mat33d), Mo=z(n, wp.mat33d), dL=z(n, wp.mat33d), flag=z(n, wp.int32), kc=z(n, wp.float64), V0f=z(n, wp.float64))
         self.tr = {k_: tt(a_) for k_, a_ in self.ring.items() if k_ != 'K'}
@@ -259,10 +295,9 @@ class RingFlow(RingUL):
         Mr = T['Mo'].clone()
         Mr.index_add_(0, self.tlo, T['wi'][:ms, None, None]*D[:, :, None]*D[:, None, :]); Mr.index_add_(0, self.thi, T['wj'][:ms, None, None]*D[:, :, None]*D[:, None, :])
         self._Mri = torch.linalg.pinv(Mr)
-        self.hd = dict(stuck=z(n, wp.int32), kn=z(n, wp.float64))
         self.tstuck, self.tbkn = tt(self.hd['stuck']), tt(self.hd['kn'])
         self._stuck = torch.zeros(n, dtype=torch.bool, device=dev)
-        self._Rst, self._ktr = torch.zeros(n, dtype=f64, device=dev), torch.zeros(n, dtype=f64, device=dev)
+        self._Rst = torch.zeros(n, dtype=f64, device=dev)
         self.tbkt, self.tbd = tt(self.ball['kt']), tt(self.B['bdelta'])
 
     def _rows_from(self, i, j, A, tw, nn, Vi, ml):
@@ -328,7 +363,7 @@ class RingFlow(RingUL):
         self._set_halves(x)
         if self.ball is not None:
             self.tbR.copy_(torch.where(self._yld, self.tbR, self._tbR0))
-            self.tbR[self._stuck] = self._Rst[self._stuck]                               # (a held ball's radius stays: a new one would change the contact's energy at fixed x)
+            self.tbR[self._stuck] = self._Rst[self._stuck]                               # (a ball that touches keeps its radius: a new one changes the contact's energy at fixed x, 9 % of the start's energy by 0.28 s of the landing against 0.8 %)
         self._wv_masks()
 
     def _start_cells(self):
@@ -414,7 +449,7 @@ class RingFlow(RingUL):
         wp.launch(k_var, Ur['Kw'], inputs=[Ur['wi'], Ur['wj'], Ur['wv'], B['L']], outputs=[B['Lb'], B['terms']])
         wp.launch(k_rf_A, Rg['K'], inputs=[x, Rg['i'], Rg['j'], Rg['wi'], Rg['wj'], Rg['qi'], Rg['qj']], outputs=[Rg['Am']])
         wp.launch(k_rf_R, n, inputs=[Rg['Am'], B['Fc'], Rg['Mo'], Rg['flag']], outputs=[Rg['Rc']])
-        wp.launch(k_cell_shape, n, inputs=[B['Fc'], S['Rh'], S['en'], Rg['V0f'], wp.float64(self.mu), wp.float64(self.sy), th_], outputs=[B['ei'], B['be'], B['er'], B['Fb'], B['terms']])
+        wp.launch(k_rf_shape, n, inputs=[B['Fc'], S['Rh'], S['en'], Rg['V0f'], wp.float64(self.mu), wp.float64(self.sy), th_, self.hd['pic'], self.hd['bfz']], outputs=[B['ei'], B['be'], B['er'], B['Fb'], B['terms']])
         wp.launch(k_rf_outer, n, inputs=[B['Fc'], Rg['Rc'], Rg['Mo'], Rg['flag']], outputs=[B['Fb'], B['terms']])
         wp.launch(k_rf_Fadj, n, inputs=[B['Fb'], S['F0'], Rg['flag']], outputs=[B['Gb'], Br['Gb']])
         wp.launch(k_rf_half, Rg['K'], inputs=[x, B['G'], Rg['Rc'], Rg['flag'], Rg['i'], Rg['j'], Rg['wi'], Rg['wj'], Rg['qi'], Rg['qj'], Rg['dni'], Rg['dnj'], Rg['bi'], Rg['bj'], th_], outputs=[Rg['sri'], Rg['srj'], B['terms'], g, B['Gb']])
@@ -441,6 +476,13 @@ class RingFlow(RingUL):
         if beta and self.flag_new(self.tei > self.flag_at*self.ey):
             wp.capture_launch(self.graph)
         MergedUL.reread(self, beta=False)
+        C = self.tul['Q']
+        big = C.flatten(1).norm(dim=1) > self.C_cap
+        if bool(big.any()):
+            # a cell the predictor flattens in the half step: C = (I + G / 2 th)^-T frozen on it would make it stiff for the whole step, for a flattening that may not come (one cell of volume 0.07 at |C| 25: first |g| 4e4 weights, 300 Newton). C is free as far as the energy goes: at th = 1/2 work = store for any C. So the half step's stretch is read down to 1/4
+            M = self.I3+self.tG[big]/(2*self.th)
+            U, S, Vh = torch.linalg.svd(M.cpu())
+            C[big] = (U*(1/S.clamp(min=.25))[:, None, :]@Vh).to(self.dev)
         if beta:
             T, ms, lo, hi = self.tr, self._m_s, self.tlo, self.thi
             br = 1/(1+self.kappa*(1/self.tbe.clamp(min=1e-6)-1))
@@ -511,16 +553,7 @@ class RingFlow(RingUL):
                 self._stuck = self._stuck | nw
                 self._Rst[nw] = self.tbR[nw]
                 self.tbkn[nw] = 2*self.Es*self.tbR[nw]*.05**.5                           # (Hertz's stiffness at a sinking of 5 % of the radius)
-                self._ktr[nw] = 8*self.Gs*self.tbR[nw]*.05**.5
                 self.tstuck[nw] = 1
-            self.tbd[self._stuck] = self.tbd[self._stuck].clamp(min=1e-30)              # (k_mid_lamt keeps the glue's force of what touches)
-
-    def hold_start(self):
-        """after the balls' step-start data: what the ground holds it holds without a limit, at least at the reference stiffness"""
-        st = self._stuck
-        if bool(st.any()):
-            self.tbkt[st] = torch.maximum(self.tbkt[st], self._ktr[st])
-            self.tbbound[st] = 1e30
 
     def ground_store(self, x):
         """the balls' elastic energy at x: normal, and the glue's as it was kept"""
@@ -530,11 +563,14 @@ class RingFlow(RingUL):
         ng = torch.as_tensor([float(self.ball['ng'][k]) for k in range(3)], dtype=f64, device=self.dev)
         R = self.tbR
         d = R-((x*ng).sum(1)-c0)
-        on = (d > 0) & (R > 0)
+        dr = .05*R
+        lin = self._stuck & (R > 0) & (d < dr) if self.hold else torch.zeros_like(self._stuck)
+        on = (d > 0) & (R > 0) & ~lin
         En = float((8/15*Es*torch.sqrt(R[on])*d[on]**2.5).sum())
-        if self.hold:
-            of = self._stuck & (d <= 0)
-            En += float((.5*self.tbkn[of]*d[of]**2).sum())
+        if self.hold and bool(lin.any()):
+            r_, dd, kn_ = R[lin], (d-dr)[lin], self.tbkn[lin]
+            sr = torch.sqrt(r_*dr[lin])
+            En += float((8/15*Es*sr*dr[lin]**2+4/3*Es*sr*dr[lin]*dd+.5*kn_*dd*dd).sum())
         lt = wp.to_torch(self.ball['lamt'], requires_grad=False)
         kt = self.tbkt
         ok = kt > 0
@@ -607,9 +643,10 @@ class RingFlow(RingUL):
         kb = (wa+wb)[:, None, None]*self.I3
         K.index_add_(0, lo, kb); K.index_add_(0, hi, kb)
         if self.hold and bool(self._stuck.any()):
-            off = self._stuck & (self.tbd <= 1e-29)
+            off = self._stuck & (self.tbR > 0) & (self.tbd < .05*self.tbR)               # (the step's blocks have Hertz's stiffness at d: the rest of k_n)
             ng = torch.as_tensor([float(self.ball['ng'][k]) for k in range(3)], dtype=f64, device=dev)
-            K[off] += (self.tbkn[off]/self.th)[:, None, None]*(ng[:, None]*ng[None, :])
+            hz = 2*self.Es*torch.sqrt(self.tbR[off]*self.tbd[off].clamp(min=0.))
+            K[off] += ((self.tbkn[off]-hz)/self.th)[:, None, None]*(ng[:, None]*ng[None, :])
         return K
 
 
