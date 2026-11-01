@@ -38,11 +38,13 @@ a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: a
 a_.add_argument('--scene', type=int, default=0)
 a_.add_argument('--watch', type=int, nargs='*', default=None)
 a_.add_argument('--trace-from', type=int, default=None)
-a_.add_argument('--aa', type=int, default=0, help='the outer iteration: Anderson over this many differences (0: none)')
+a_.add_argument('--aa', type=int, default=6, help='the outer iteration: Anderson over this many differences (0: none)')
 a_.add_argument('--ground-mono', action='store_true')
 a_.add_argument('--contact-point', action='store_true')
-a_.add_argument('--br-lag', action='store_true')
+a_.add_argument('--contact-alpha', type=float, default=1.)
+a_.add_argument('--br-lag', action='store_true', default=True)
 a_.add_argument('--hold-after', type=int, default=3)
+a_.add_argument('--no-relax', action='store_true', default=True)
 a_.add_argument('--save-state', type=int, nargs='*', default=[], help='checkpoints after these steps')
 a_.add_argument('--load-state', type=Path, default=None)
 a_.add_argument('--first-every', type=int, default=0)
@@ -87,7 +89,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = RingYield(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, ground_mono=args.ground_mono, contact_point=args.contact_point, br_lag=args.br_lag, hold=not args.no_hold, ledger=True)
+W = RingYield(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, ground_mono=args.ground_mono, contact_point=args.contact_point, contact_alpha=args.contact_alpha, br_lag=args.br_lag, hold=not args.no_hold, ledger=True)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
@@ -101,6 +103,7 @@ ST.pre_ul = True; ST.pre_every = args.pre_every; ST.smooth_pred = ST.carry_delta
 ST.set_theta(.5, mass)
 ST.trace_from = args.trace_from
 ST.aa_m = args.aa
+ST.relax_on = not args.no_relax
 ST.hold_after = args.hold_after
 
 
@@ -214,6 +217,8 @@ s_first = 1
 if args.load_state is not None:
     ck = torch.load(args.load_state, weights_only=False)
     unpack(W, ck['W']); unpack(ST, ck['ST'])
+    ST.trace_from, ST.aa_m, ST.hold_after, ST.relax_on = args.trace_from, args.aa, args.hold_after, not args.no_relax        # (the command line over the checkpoint's)
+    W.br_lag, W.contact_point, W.ground_mono = args.br_lag, args.contact_point, args.ground_mono
     s_first = ck['s']+1
     print('from step %d of %s' % (ck['s'], args.load_state), flush=True)
 t0 = t_saved = time.time()
