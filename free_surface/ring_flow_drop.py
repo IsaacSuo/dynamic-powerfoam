@@ -36,6 +36,7 @@ a_.add_argument('--pre-every', type=int, default=4)
 a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
 a_.add_argument('--scene', type=int, default=0)
+a_.add_argument('--no-hold', action='store_true', help='the ground only presses (the MPM here holds what has touched)')
 args = a_.parse_args()
 gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())[str(args.scene)]
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
@@ -73,7 +74,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = RingFlow(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, flag_at=args.flag_at)
+W = RingFlow(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, flag_at=args.flag_at, hold=not args.no_hold, ledger=True)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
@@ -144,10 +145,10 @@ for s in range(1, nsteps+1):
         xs.append(ST.tx.cpu().numpy()); rs.append(W._ulr.cpu().numpy()); Ls.append(W.tul['Ln'].cpu().numpy()); ys_.append(W._yld.cpu().numpy()); ts.append(s*args.dt)
     if s % 20 == 0:
         i_, j_, Lw, _, _, m = W._w
-        ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum())
+        ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum()); eb = W.ground_store(ST.tx)
         bd = W.B['bdelta'].numpy()
-        print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e W_p %.3e, left %.3f of the start\'s energy; com y %.4f; flowing %d cells, yielded so far %d; walls %d, springs %d, new %d, closed %d, without a wall %d; J %.3f..%.3f; touching %d, ground/weight %.2f; min wall L / h %.3f, max r / h %.2f, radii %d (fails %d), flips %d; rho / e_y median %.2f, max %.1f, beta min %.3f; products %d, Newton %d, rejected %d, negative %d; %.2f s' % (
-            s*args.dt, time.time()-t0, ek, ed, ev, W.Wp, 1-(ek+ed+ev+W.Wp+eg)/H0, float((M3*ST.tx)[:, 1].sum())/M, W.ul_stats['yielding'], W.ul_stats['yielded'], m, W._m_s, W.ul_stats['born'], W.ul_stats['closed'], W.ul_stats['ghost'], float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()),
+        print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_p %.3e, flags made %.2e, cuts made %.2e; left %.4f of the start\'s energy; com y %.4f; flowing %d cells, yielded so far %d; walls %d, springs %d, new %d, closed %d, without a wall %d; J %.3f..%.3f; touching %d, ground/weight %.2f; min wall L / h %.3f, max r / h %.2f, radii %d (fails %d), flips %d; rho / e_y median %.2f, max %.1f, beta min %.3f; products %d, Newton %d, rejected %d, negative %d; %.2f s' % (
+            s*args.dt, time.time()-t0, ek, ed, ev, eb, W.Wp, W.Eflag, W.Ecut, 1-(ek+ed+ev+eb+W.Wp+eg-W.Eflag-W.Ecut)/H0, float((M3*ST.tx)[:, 1].sum())/M, W.ul_stats['yielding'], W.ul_stats['yielded'], m, W._m_s, W.ul_stats['born'], W.ul_stats['closed'], W.ul_stats['ghost'], float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()),
             int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wref, float(Lw.min())/h, float(W._ulr.max())/h, W.ul_stats['radii_it'], W.ul_stats['radii_fail'], W.ul_stats['flips'], float(W.tei.median())/W.ey, float(W.tei.max())/W.ey, float(W.tbe.min()), e_, its, ST.stats['rejected'], ST.stats['negative'], time.time()-t_s), flush=True)
     if s % nf == 0:
         rows.append(row(s//nf))

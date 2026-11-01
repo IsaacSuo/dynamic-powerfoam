@@ -130,6 +130,8 @@ class RingStep(MergedStep):
         wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
         if W.stick:
             W.tbbound.copy_(torch.minimum(W.tbbound, W.tau_y*W.footprint(self.tx, W._ulr)))
+        if getattr(W, 'hold', False):
+            W.hold_start()
         self._eval(0.)
         W.reread(beta=True)
         g2 = self._eval(0.)[PS_GQ2]

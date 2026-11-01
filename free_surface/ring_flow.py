@@ -13,7 +13,7 @@ Self contact not here. set_ball, start(), prepare(), update_ul; through FlowStep
 import torch
 import warp as wp
 
-from free_surface.closure_warp import k_Aul, k_F8, k_Gul, k_Gul_adj, k_ball, k_ball_adj, rot_proper
+from free_surface.closure_warp import k_Aul, k_F8, k_Gul, k_Gul_adj, k_ball_adj, rot_proper
 from free_surface.merged_ul import MergedUL, k_cell_shape
 from free_surface.ring_plastic import RingStep
 from free_surface.ring_ul import RingUL
@@ -163,13 +163,54 @@ def k_rf_half(x: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), Rc: wp.
     wp.atomic_add(x_adj, i, -f)
 
 
-class RingFlow(RingUL):
-    """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's (5 at the springs' w); flag_at: the predictor's reading, in e_y, that flags a cell"""
+@wp.kernel(enable_backward=False)
+def k_rf_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.array(dtype=wp.float64), xn: wp.array(dtype=wp.vec3d), ng: wp.vec3d, bpar: wp.array(dtype=wp.float64), kt: wp.array(dtype=wp.float64), bound: wp.array(dtype=wp.float64),
+              lamt: wp.array(dtype=wp.vec3d), stuck: wp.array(dtype=int), kn: wp.array(dtype=wp.float64), delta: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), ff: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
+    """closure_warp.py's k_ball, with the hold: a ball that has touched pulls back linearly when it leaves. bpar = (cs, wt, c0, E*, mu)"""
+    c = wp.tid()
+    B = cbody[c]
+    cs, wt, c0, Es, mu = bpar[0], bpar[1], bpar[2], bpar[3], bpar[4]
+    xe = cs*x[B]-(cs-wp.float64(1.0))*xn[c]
+    d = R[c]-(wp.dot(ng, xe)-c0)
+    delta[c] = d
+    F = wp.float64(0.0)
+    if d > wp.float64(0.0):
+        sq = wp.sqrt(R[c]*d)
+        F = wp.float64(4.0)/wp.float64(3.0)*Es*sq*d
+        wp.atomic_add(terms, 6, c % NSLOT, wt*wp.float64(8.0)/wp.float64(15.0)*Es*sq*d*d)
+    elif stuck[c] != 0:
+        F = kn[c]*d
+        wp.atomic_add(terms, 6, c % NSLOT, wt*wp.float64(0.5)*kn[c]*d*d)
+    fn[c] = F
+    f = wp.vec3d()
+    if mu > wp.float64(0.0) and bound[c] > wp.float64(0.0):
+        dx = xe-xn[c]
+        s = dx-wp.dot(dx, ng)*ng
+        k = kt[c]
+        lt = lamt[c]
+        q = lt-k*s
+        qn = wp.length(q)
+        Rb = bound[c]
+        phi = wp.float64(0.0)
+        if qn <= Rb:
+            f = q
+            phi = (wp.dot(q, q)-wp.dot(lt, lt))/(wp.float64(2.0)*k)
+        else:
+            f = (Rb/qn)*q
+            phi = (Rb*qn-wp.float64(0.5)*Rb*Rb-wp.float64(0.5)*wp.dot(lt, lt))/k
+        wp.atomic_add(terms, 8, c % NSLOT, wt*phi)
+    ff[c] = f
 
-    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., flag_at=.5, **kw):
+
+class RingFlow(RingUL):
+    """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's (5 at the springs' w); flag_at: the predictor's reading, in e_y, that flags a cell; hold: the ground holds what has touched, the MPM's sticky ground; ledger: account the energy that the flag and the cut change at fixed x"""
+
+    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., flag_at=.5, hold=False, ledger=False, **kw):
         super().__init__(X, r, V0, pairs, A, c, E, nu, theta=theta, sigma_y=sigma_y, **kw)
         self.kappa, self.flag_at = float(kappa), float(flag_at)
+        self.hold, self.ledger = bool(hold), bool(ledger)
         self.Wp_half = 0.
+        self.Eflag = self.Ecut = 0.
         self.n_flagged_end = 0
         self._cut_valid = False
 
@@ -214,6 +255,15 @@ class RingFlow(RingUL):
         self._set_halves(self.X)
         self._cut_valid = False
         self._wv_masks()
+        ms = self._m_s
+        Mr = T['Mo'].clone()
+        Mr.index_add_(0, self.tlo, T['wi'][:ms, None, None]*D[:, :, None]*D[:, None, :]); Mr.index_add_(0, self.thi, T['wj'][:ms, None, None]*D[:, :, None]*D[:, None, :])
+        self._Mri = torch.linalg.pinv(Mr)
+        self.hd = dict(stuck=z(n, wp.int32), kn=z(n, wp.float64))
+        self.tstuck, self.tbkn = tt(self.hd['stuck']), tt(self.hd['kn'])
+        self._stuck = torch.zeros(n, dtype=torch.bool, device=dev)
+        self._Rst, self._ktr = torch.zeros(n, dtype=f64, device=dev), torch.zeros(n, dtype=f64, device=dev)
+        self.tbkt, self.tbd = tt(self.ball['kt']), tt(self.B['bdelta'])
 
     def _rows_from(self, i, j, A, tw, nn, Vi, ml):
         """the gradient's direct rows on each cell (sc, kc, r): for the blocks"""
@@ -278,6 +328,7 @@ class RingFlow(RingUL):
         self._set_halves(x)
         if self.ball is not None:
             self.tbR.copy_(torch.where(self._yld, self.tbR, self._tbR0))
+            self.tbR[self._stuck] = self._Rst[self._stuck]                               # (a held ball's radius stays: a new one would change the contact's energy at fixed x)
         self._wv_masks()
 
     def _start_cells(self):
@@ -291,11 +342,17 @@ class RingFlow(RingUL):
 
     def update_ul(self, x):
         """the step's start at x: the cut, once anything has flagged"""
-        self._xs = x.detach().clone()
+        x = x.detach().clone()
+        cut = bool(self._yld.any())
+        e0 = self.energy_at(x) if cut and self.ledger else 0.
         self._cut_valid = False
-        if bool(self._yld.any()):
-            self._cut(self._xs)
+        if cut:
+            self._xs = x
+            self._cut(x)
+            if self.ledger:
+                self.Ecut += self.energy_at(x)-e0
         else:
+            self._xs = x
             self._start_cells()
             self.tr['bi'].fill_(1.); self.tr['bj'].fill_(1.)
 
@@ -305,6 +362,7 @@ class RingFlow(RingUL):
         k = int(new.sum())
         if k == 0:
             return 0
+        e0 = self.energy_at(self._xs) if self.ledger else 0.
         if not self._cut_valid:
             self._cut(self._xs)
         T, ms = self.tr, self._m_s
@@ -313,13 +371,18 @@ class RingFlow(RingUL):
         d = self._xs[hi]-self._xs[lo]
         a, b = new[lo], new[hi]
         qi_, qj_, dni_, dnj_ = T['qi'][:ms], T['qj'][:ms], T['dni'][:ms], T['dnj'][:ms]
-        pa = torch.einsum('fab,fb->fa', F0[lo[a]], qi_[a]); pb = torch.einsum('fab,fb->fa', F0[hi[b]], qj_[b])
+        # p on the whole cell's fit: r = d - F_fit q is what S_i's split calls the remainder; on F_o the difference of the two readings would be charged to it, 1/2 tr((F_fit - F_o) M (F_fit - F_o)^T), never negative
+        Af = (F0@T['Mo']).index_add(0, lo, T['wi'][:ms, None, None]*d[:, :, None]*qi_[:, None, :]).index_add(0, hi, T['wj'][:ms, None, None]*d[:, :, None]*qj_[:, None, :])
+        Ff = Af@self._Mri
+        pa = torch.einsum('fab,fb->fa', Ff[lo[a]], qi_[a]); pb = torch.einsum('fab,fb->fa', Ff[hi[b]], qj_[b])
         qi_[a] = pa; dni_[a] = d[a]-pa
         qj_[b] = pb; dnj_[b] = d[b]-pb
         self._dli[a] = d[a]-pa; self._dlj[b] = d[b]-pb
         self._yld = self._yld | new
         T['Mo'][new] = 0.; T['flag'][new] = 1; T['kc'][new] = self.kap; T['V0f'][new] = self.V0[new]
         self._wv_masks()
+        if self.ledger:
+            self.Eflag += self.energy_at(self._xs)-e0
         return k
 
     def run(self):
@@ -358,7 +421,7 @@ class RingFlow(RingUL):
         wp.launch(k_rf_Lb, n, inputs=[B['Lb'], U['Q'], Rg['dL'], Rg['flag']], outputs=[B['Gb'], Br['Gb']])
         bl = self.ball
         if bl is not None:
-            wp.launch(k_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt']], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
+            wp.launch(k_rf_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt'], self.hd['stuck'], self.hd['kn']], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
             wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], self.tones], outputs=[g])
         wp.launch(k_gg_cell_adj, n, inputs=[B['Gb'], U['a'], U['Mc'], U['Vi']], outputs=[g, B['Gs'], B['Gbe']])
         wp.launch(k_gg_wall_adj, Kw, inputs=wall+[B['Gs']], outputs=[g, B['Gbe']])
@@ -442,12 +505,51 @@ class RingFlow(RingUL):
             self._yld = self._yld | over
             T['Mo'][over] = 0.; T['flag'][over] = 1; T['kc'][over] = self.kap; T['V0f'][over] = self.V0[over]
         self.ul_stats['yielding'] = int(yn.sum()); self.ul_stats['yielded'] = int(self._yld.sum())
+        if self.hold:
+            nw = (self.tbd > 0) & ~self._stuck & (self.tbR > 0)
+            if bool(nw.any()):
+                self._stuck = self._stuck | nw
+                self._Rst[nw] = self.tbR[nw]
+                self.tbkn[nw] = 2*self.Es*self.tbR[nw]*.05**.5                           # (Hertz's stiffness at a sinking of 5 % of the radius)
+                self._ktr[nw] = 8*self.Gs*self.tbR[nw]*.05**.5
+                self.tstuck[nw] = 1
+            self.tbd[self._stuck] = self.tbd[self._stuck].clamp(min=1e-30)              # (k_mid_lamt keeps the glue's force of what touches)
 
-    def stored(self):
-        """the elastic energy of the state after the last end_ul, at the step's end x: shape (springs and outer layer on the elastic cells, the cell and the kept remainders on the flowing), volume"""
+    def hold_start(self):
+        """after the balls' step-start data: what the ground holds it holds without a limit, at least at the reference stiffness"""
+        st = self._stuck
+        if bool(st.any()):
+            self.tbkt[st] = torch.maximum(self.tbkt[st], self._ktr[st])
+            self.tbbound[st] = 1e30
+
+    def ground_store(self, x):
+        """the balls' elastic energy at x: normal, and the glue's as it was kept"""
+        if self.ball is None:
+            return 0.
+        c0, Es = float(self.tball[2]), self.Es
+        ng = torch.as_tensor([float(self.ball['ng'][k]) for k in range(3)], dtype=f64, device=self.dev)
+        R = self.tbR
+        d = R-((x*ng).sum(1)-c0)
+        on = (d > 0) & (R > 0)
+        En = float((8/15*Es*torch.sqrt(R[on])*d[on]**2.5).sum())
+        if self.hold:
+            of = self._stuck & (d <= 0)
+            En += float((.5*self.tbkn[of]*d[of]**2).sum())
+        lt = wp.to_torch(self.ball['lamt'], requires_grad=False)
+        kt = self.tbkt
+        ok = kt > 0
+        return En+float((.5*(lt[ok]*lt[ok]).sum(1)/kt[ok]).sum())
+
+    def energy_at(self, x):
+        a, b = self.stored(x)
+        return a+b+self.ground_store(x)
+
+    def stored(self, x=None):
+        """the elastic energy of the state after the last end_ul, at the step's end x (or at x): shape (springs and outer layer on the elastic cells, the cell and the kept remainders on the flowing), volume"""
         T, ms, lo, hi = self.tr, self._m_s, self.tlo, self.thi
         Fe, flag, t = self._Fe, self._yld, self.tul
-        x = self.tx if self.th == 1. else (self.tx-(1-self.th)*self._xs)/self.th
+        if x is None:
+            x = self.tx if self.th == 1. else (self.tx-(1-self.th)*self._xs)/self.th
         d = x[hi]-x[lo]
         qi, qj, wi, wj = self._qi, self._qj, T['wi'][:ms], T['wj'][:ms]
         Mo = T['Mo']
@@ -504,6 +606,10 @@ class RingFlow(RingUL):
         wa = T['wi'][:ms]*torch.where(flag[lo], T['bi'][:ms], one); wb = T['wj'][:ms]*torch.where(flag[hi], T['bj'][:ms], one)
         kb = (wa+wb)[:, None, None]*self.I3
         K.index_add_(0, lo, kb); K.index_add_(0, hi, kb)
+        if self.hold and bool(self._stuck.any()):
+            off = self._stuck & (self.tbd <= 1e-29)
+            ng = torch.as_tensor([float(self.ball['ng'][k]) for k in range(3)], dtype=f64, device=dev)
+            K[off] += (self.tbkn[off]/self.th)[:, None, None]*(ng[:, None]*ng[None, :])
         return K
 
 
