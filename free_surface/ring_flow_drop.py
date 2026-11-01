@@ -35,20 +35,28 @@ a_.add_argument('--every', type=int, default=10)
 a_.add_argument('--pre-every', type=int, default=4)
 a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
+a_.add_argument('--scene', type=int, default=0)
 args = a_.parse_args()
-gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())['0']
+gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())[str(args.scene)]
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
-X0, r0, V0 = g['points'], cl['radii'], g['masses']; n = len(X0)
+X0, r0, V0, C0 = g['points'], cl['radii'], g['masses'], g['contacts']; n = len(X0)
 args.save.mkdir(parents=True, exist_ok=True)
 Z = zipfile.ZipFile(ROOT/'simulation_data.zip')
 
 
-def truth(k):
-    v = PlyData.read(io.BytesIO(Z.read('simulation_data/plasticine/0/%d.ply' % k)))['vertex']
+def truth(k, scene=None):
+    v = PlyData.read(io.BytesIO(Z.read('simulation_data/plasticine/%d/%d.ply' % (args.scene if scene is None else scene, k))))['vertex']
     return np.stack([v['x'], v['y'], v['z']], 1).astype(np.float64)+OFFSET
 
 
+# every scene starts as scene 0 turned, particle by particle: the foam of scene 0 turned with it
+p0_, pk_ = truth(0, 0), truth(0)
+c0_, ck_ = p0_.mean(0), pk_.mean(0)
+U_, _, Vt_ = np.linalg.svd((pk_-ck_).T@(p0_-c0_))
+R_s = U_@np.diag([1., 1., np.sign(np.linalg.det(U_@Vt_))])@Vt_
+print('scene %d: E %.1f, nu %.4f, yield %.1f; turned from scene 0 by %.1f degrees, particle residual %.1e' % (args.scene, gt['E'], nu, gt['ys'], np.degrees(np.arccos(np.clip((np.trace(R_s)-1)/2, -1, 1))), np.abs((p0_-c0_)@R_s.T-(pk_-ck_)).max()), flush=True)
+X0 = ck_+(X0-c0_)@R_s.T; C0 = ck_+(C0-c0_)@R_s.T
 rng = np.random.default_rng(0)
 Gt = [truth(k) for k in range(args.frames+1)]
 pick = rng.choice(len(Gt[0]), 30000, replace=False)
@@ -65,7 +73,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = RingFlow(X0, r0, V0, g["pairs"], g["areas"], g["contacts"], E, nu, ys, theta=.5, kappa=args.kappa, flag_at=args.flag_at)
+W = RingFlow(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, flag_at=args.flag_at)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()

@@ -13,6 +13,7 @@ OFFSET = np.array([.5, -.05, .5])
 a_ = argparse.ArgumentParser()
 a_.add_argument('--foam', type=Path, required=True)
 a_.add_argument('--frames', type=int, nargs='+', default=[6, 9, 12, 15])
+a_.add_argument('--scene', type=int, default=0)
 a_.add_argument('files', type=Path, nargs='+')
 args = a_.parse_args()
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz')
@@ -20,9 +21,15 @@ X0, V0 = g['points'], g['masses']
 Z = zipfile.ZipFile(ROOT/'simulation_data.zip')
 
 
-def truth(k):
-    v = PlyData.read(io.BytesIO(Z.read('simulation_data/plasticine/0/%d.ply' % k)))['vertex']
+def truth(k, scene=None):
+    v = PlyData.read(io.BytesIO(Z.read('simulation_data/plasticine/%d/%d.ply' % (args.scene if scene is None else scene, k))))['vertex']
     return np.stack([v['x'], v['y'], v['z']], 1).astype(np.float64)+OFFSET
+
+
+p0_, pk_ = truth(0, 0), truth(0)
+c0_, ck_ = p0_.mean(0), pk_.mean(0)
+U_, _, Vt_ = np.linalg.svd((pk_-ck_).T@(p0_-c0_))
+X0 = ck_+(X0-c0_)@(U_@np.diag([1., 1., np.sign(np.linalg.det(U_@Vt_))])@Vt_).T
 
 
 def spread(x, m):

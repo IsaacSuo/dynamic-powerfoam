@@ -12,6 +12,7 @@ import warp as wp
 
 from free_surface.closure_warp import TrustCG
 from free_surface.ring_flow import FlowStep, RingFlow
+from free_surface.ring_ul import RingUL
 
 sys.path.insert(0, '/home/fangsuo/py/dynamic-powerfoam')
 from experiments.dem_fem_mode_match import interpolate
@@ -46,6 +47,18 @@ def model():
     return W
 
 
+# nothing flagged: RingUL itself
+W0 = RingFlow(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, 1e30, theta=.5)
+W0.set_ball((0., 0., 1.), -10., 0.); W0.start(); W0.tbR.fill_(-1.); W0.prepare()
+R0 = RingUL(X0, r0, V0, g['pairs'], g['areas'], g['contacts'], E, nu, theta=.5)
+R0.set_ball((0., 0., 1.), -10., 0.); R0.rest_cut(); R0.tbR.fill_(-1.); R0.prepare()
+Xt = torch.as_tensor(X0, dtype=f64, device=dev)
+th_ = .7; Qz = torch.tensor([[np.cos(th_), -np.sin(th_), 0.], [np.sin(th_), np.cos(th_), 0.], [0., 0., 1.]], dtype=f64, device=dev)
+for name, am in (('small', .002), ('large', .05)):
+    xx = (Xt+am*torch.as_tensor(phi, dtype=f64, device=dev)+am*.05*torch.as_tensor(np.random.default_rng(1).normal(size=X0.shape), dtype=f64, device=dev))@Qz.T
+    e0, g0_ = W0.grad(xx); e1, g1_ = R0.grad(xx)
+    print('no limit against RingUL, %s motion: E %.8e, %.8e, gap %.1e; |g difference| / |g| %.1e' % (name, float(e0), float(e1), abs(float(e0-e1))/abs(float(e1)), float((g0_-g1_).norm()/g1_.norm())), flush=True)
+del W0, R0
 W = model()
 print('%s, %d cells; springs %d; h %.2f mm; T1 %.4f s; yield strain %.2f %%, kappa %g' % (args.foam.name, n, W._m_s, 1e3*h, T1, 100*W.ey, W.kappa), flush=True)
 L0, g0 = W.grad(W.X)
