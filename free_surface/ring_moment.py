@@ -1,8 +1,9 @@
-"""RingYield with the springs not tied to the walls: the cut goes on every step, for the volume, the contact and the candidates; a spring's weight moves only when q does.
-  q does not change under elastic deformation, so neither do M = sum w q q^T or the weights, whatever the walls do
-  a plastic return moves q and so M: each cell's halves go toward the current walls' A / L by the lambda that best undoes this step's change of M
-  a new wall gets a spring of weight 0 if its cells are two springs apart (a fold's two sheets are not: a wall between them is a free surface to both); a spring leaves when it has no wall and next to no weight
-  square lattice in simple shear, plastic shear g: the three pairs are fixed by M, w_old = 1 - g, w_new = g, w_across = 1 - g (1 - g), the wall weights at g"""
+"""RingYield with the springs not tied to the walls: the cut goes on every step, for the volume, the contact and the candidates; a spring's weight moves only with a plastic return.
+  a return gives up the part lam = 1 - c of the cell's deviatoric strain; its halves give up the same part of their distance to the current walls' weights, w' = w + lam (A / L - w)
+    square lattice in simple shear, plastic shear g, elastic e: M fixes the three pairs, w_old = 1 - g, w_new = g, while the walls read g + e: dw / (wall - w) = dg / e = lam, so M does not move
+    uniform flow: lam is the same everywhere, and any mix of closed weights is closed, so the patch test holds
+    no return, lam = 0: the weights do not move, whatever the walls do. e_y to 0: lam to 1, the walls' weights
+  a new wall gets a spring of weight 0 if its cells are two springs apart (a fold's two sheets are not: a wall between them is a free surface to both); a spring leaves when it has no wall and next to no weight"""
 import numpy as np
 import scipy.sparse as sp
 import torch
@@ -73,6 +74,7 @@ class RingMoment(RingYield):
             self._sm = m.clamp(min=1e-9*float(m.median()))
             self._sc = self._sm/self.V0**(1/3)
             self._Mlast = self._Ms.clone()
+            self._ret = torch.zeros(self.n, dtype=f64, device=self.dev)
             self._wgone = 1e-3*float((self._wi+self._wj).median())                         # (a spring without a wall under this carries next to nothing: it leaves)
             return
         ms, lo, hi = self._m_s, self.tlo, self.thi
@@ -94,9 +96,8 @@ class RingMoment(RingYield):
         st, sm = self.ul_stats, self._sm
         M, _ = self._moments(lo, hi, qi, qj, wi, wj)
         Mw, _ = self._moments(lo, hi, qi, qj, wwi, wwj)
-        E, D_ = self._Mlast-M, Mw-M
-        lam = ((E*D_).sum((1, 2))/(D_*D_).sum((1, 2)).clamp(min=1e-300)).clamp(0., 1.)
-        lam[(E/sm[:, None, None]).flatten(1).norm(dim=1) < 1e-13] = 0.
+        E = self._Mlast-M
+        lam = self._ret[self._gid]
         wn_i, wn_j = wi+lam[lo]*(wwi-wi), wj+lam[hi]*(wwj-wj)
         Mn, Cn = self._moments(lo, hi, qi, qj, wn_i, wn_j)
         bg = self.V0 >= self.agg_merge*self.V0.median()
@@ -108,6 +109,17 @@ class RingMoment(RingYield):
         st['gap'] = float((wn_i-wwi).abs().sum()+(wn_j-wwj).abs().sum())/float((wwi+wwj).sum())
         st['ghost_w'] = float((wn_i[~has_wall].sum()+wn_j[~has_wall].sum())/(wn_i.sum()+wn_j.sum()))
         return wn_i, wn_j
+
+    def _v6(self, M):
+        s2 = 2**.5
+        return torch.stack([M[:, 0, 0], M[:, 1, 1], M[:, 2, 2], s2*M[:, 0, 1], s2*M[:, 0, 2], s2*M[:, 1, 2]], 1)
+
+    def _sum6(self, lo, hi, ri, rj, ai, aj):
+        return torch.zeros(self.n, 6, dtype=f64, device=self.dev).index_add(0, lo, ai[:, None]*ri).index_add(0, hi, aj[:, None]*rj)
+
+    def _r6(self, q):
+        s2 = 2**.5
+        return torch.stack([q[:, 0]*q[:, 0], q[:, 1]*q[:, 1], q[:, 2]*q[:, 2], s2*q[:, 0]*q[:, 1], s2*q[:, 0]*q[:, 2], s2*q[:, 1]*q[:, 2]], 1)
 
     def end_ul(self, th=.5):
         T, ms = self.tr, self._m_s

@@ -682,6 +682,7 @@ class RingYield(RingFlow):
             Re[yn] = Rp.to(self.dev)
             eps = torch.zeros(n, dtype=f64, device=self.dev)
             eps[yn] = ((1-sc)*nr)[:, 0].to(self.dev)
+            self._ret = torch.zeros(n, dtype=f64, device=self.dev); self._ret[yn] = (1-sc)[:, 0].to(self.dev)      # (the part of its deviatoric strain each group gave up)
             self._eps = self._eps+eps[g]
             dep = torch.zeros(n, 3, 3, dtype=f64, device=self.dev)
             dep[yn] = (Rp@(V_*((1-sc)*dv)[:, None, :]@V_.transpose(1, 2))@Rp.transpose(1, 2)).to(self.dev)
@@ -692,6 +693,7 @@ class RingYield(RingFlow):
             self._qj = torch.where(yh[:, None], tj, qj)
         else:
             self._qi, self._qj = qi.clone(), qj.clone()
+            self._ret = torch.zeros(n, dtype=f64, device=self.dev)
         # F_g, L
         Ln = t['Ln']
         Ln[flag] = Ln[flag]+((t['Q']*Y['Gm']).sum((1, 2))/th)[flag]
