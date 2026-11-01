@@ -9,7 +9,12 @@ import numpy as np
 import scipy.sparse as sp
 import torch
 
-from free_surface.ring_yield import RingYield
+import math
+
+import warp as wp
+
+from free_surface.closure_warp import k_mid_ball, k_mid_lamt
+from free_surface.ring_yield import RingYield, YieldStep
 
 f64 = torch.float64
 
@@ -210,3 +215,71 @@ def exact_blocks(W, z, g0, cm, h=1e-9):
     Q = Q.to(dev)
     K = (Q*ev[:, None, :])@Q.transpose(1, 2)
     return K, 3*nc
+
+
+class ExplicitStep(YieldStep):
+    """leapfrog between the steps of the model: the cut, the weights and the return every dt as before (theta = 1: the return's stress read at x, q frozen in between, as one implicit step's constitutive update), the forces at substeps dt / ns. ns from the largest frequency of M^-1 K at the step's start (warm power iteration on the frozen forces), to cfl of the stability limit. No CG, no outer iteration"""
+    cfl, ns_max, power_its = .7, 20000, 8
+
+    def _omega2(self, x, g0, m3):
+        W = self.W
+        d = self._pv+.1*torch.randn_like(x) if getattr(self, '_pv', None) is not None else torch.randn_like(x)         # (the noise: a new mode above the old one grows out of it)
+        its = self.power_its if getattr(self, '_pv', None) is not None else 60
+        lam = 0.
+        for _ in range(its):
+            s_ = float(d.abs().max())
+            d = d/s_
+            _, g1 = W.grad(x+1e-9*d)
+            Kd = (g1-g0)/1e-9
+            lam = float((d*Kd).sum()/(m3*d*d).sum())
+            d = Kd/m3
+        self._pv = d/float(d.abs().max())
+        # the ground: not in the frozen forces until it touches. A ball's stiffness at twice its reference depth on its own mass; a cell that may reach it within the step
+        R = W.tbR
+        m = m3[:, 0]
+        near = (R > 0)
+        lg = 0.
+        if bool(near.any()):
+            ng = torch.as_tensor([float(W.ball['ng'][k]) for k in range(3)], dtype=f64, device=W.dev)
+            dep = R-((x*ng).sum(1)-float(W.tball[2]))
+            reach = dep+2*self.dt*self.tv.norm(dim=1) > 0
+            k_ = 2*W.Es*torch.sqrt(R*torch.maximum(dep+2*self.dt*self.tv.norm(dim=1), .1*R).clamp(min=0.))
+            k_ = torch.where(near & reach, k_, torch.zeros_like(k_))
+            lg = float((k_/m).max())
+        self._lam_ground = lg
+        return max(lam, lg, 1.)
+
+    def solve(self, tol_abs, cg_tol_abs):
+        W, A, bl = self.W, self.a, self.W.ball
+        wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
+        if getattr(W, 'hold', False):
+            W.hold_start(self.tx, self.muf)
+        m3 = self._m3; fg = self._fg
+        x, v = self.tx.clone(), self.tv.clone()
+        W.grad(x); W.reread()
+        _, g = W.grad(x); g = g.clone()
+        lam = self._omega2(x, g, m3)
+        ns = min(int(math.ceil(self.dt*math.sqrt(1.15*lam)/(2*self.cfl))), self.ns_max)
+        ds = self.dt/ns
+        W.grad(x)
+        a = (fg-g)/m3
+        for k in range(ns):
+            v = v+.5*ds*a
+            x = x+ds*v
+            _, g = W.grad(x)
+            a = (fg-g)/m3
+            v = v+.5*ds*a
+            W.reread_light()
+        W.reread()
+        _, g = W.grad(x)
+        a = (fg-g.clone())/m3
+        self._xe, self._ve, self._ae = x, v, a
+        self.stats = dict(rejected=0, edge=0, negative=0, trace=[], outer=0, ns=ns, lam=lam)
+        ok = bool(torch.isfinite(x).all()) and bool(torch.isfinite(v).all())
+        return ns, ns, 0. if ok else math.inf
+
+    def end(self):
+        W, A, bl = self.W, self.a, self.W.ball
+        W.end_ul(self.th)
+        wp.launch(k_mid_lamt, bl['k'], inputs=[W.B['bff'], W.B['bdelta']], outputs=[bl['lamt']])
+        self.tx.copy_(self._xe); self.tv.copy_(self._ve); self.ta.copy_(self._ae); self.tz.copy_(self._xe)

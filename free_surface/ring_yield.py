@@ -566,6 +566,11 @@ class RingYield(RingFlow):
             self.ul_stats['v_gap_med'], self.ul_stats['v_gap_max'] = float(gap[lead].median()), float(gap[lead].max())
             self.ul_stats['v_max'] = float(tr_[lead].abs().max())
 
+    def reread_light(self):
+        """beta, R, v at the last evaluation: a substep's reading"""
+        Y, n = self.ry, self.n
+        wp.launch(k_ry_read, n, inputs=[Y['Ff'], Y['Hn'], Y['Mtt'], wp.float64(self.ey), wp.float64(self.th), 0, Y['gid'], Y['gy']], outputs=[Y['Rz'], Y['be'], Y['ei'], Y['vm']])
+
     def _parts(self, x):
         """the springs, the outer layer, volume, the ground at x"""
         _, b = self.stored(x)
@@ -660,7 +665,7 @@ class RingYield(RingFlow):
 
     def end_ul(self, th=.5):
         """after the step (the buffers at the accepted z): the plastic work, the returns on q and P, F_g, L; a cell past eps_cut goes on the cut"""
-        assert th == self.th == .5, 'the plastic work is written for the midpoint'
+        assert th == self.th, 'the model and the step on one theta'
         t, s, T, Y, n, I3, ms = self.tul, self.tsp, self.tr, self.ty, self.n, self.I3, self._m_s
         lo, hi, g = self.tlo, self.thi, self._gid
         ca = 1-th
@@ -672,6 +677,7 @@ class RingYield(RingFlow):
         vd = He.diagonal(dim1=1, dim2=2).sum(1)/3
         Hed = He-vd[:, None, None]*I3
         wc = .5*(1-be)*(((Hnd@M)*Hed).sum((1, 2))+be*((Hed@M)*Hed).sum((1, 2)))
+        wc = wc/th*.5                                                                       # (th = 1: beta (1 - beta) on the return's own stress)
         wc_ = float(wc[lead].sum())
         xe = (self.tx-ca*self._xs)/th
         de = xe[hi]-xe[lo]
@@ -680,7 +686,7 @@ class RingYield(RingFlow):
         ci, cj = br[g[lo]], br[g[hi]]
         rni_ = torch.einsum('fab,fb->fa', R[g[lo]], rni); rnj_ = torch.einsum('fab,fb->fa', R[g[hi]], rnj)
         wh = .5*wi*(1-ci)*((rni_*rei).sum(1)+ci*(rei*rei).sum(1)); wj_ = .5*wj*(1-cj)*((rnj_*rej).sum(1)+cj*(rej*rej).sum(1))
-        wh_ = float(wh.sum()+wj_.sum())
+        wh_ = float(wh.sum()+wj_.sum())*.5/th
         if self.ledger:
             xz = self.tx
             dz_, dd_ = xz[hi]-xz[lo], de-(self._xs[hi]-self._xs[lo])

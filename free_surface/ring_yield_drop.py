@@ -19,7 +19,7 @@ from scipy.spatial import cKDTree
 
 from free_surface.closure_warp import TrustCG
 from free_surface.ring_yield import RingYield, YieldStep
-from free_surface.ring_moment import RingMoment
+from free_surface.ring_moment import RingMoment, ExplicitStep
 
 f64, dev = torch.float64, 'cuda'
 wp_t = lambda a_: wp.to_torch(a_, requires_grad=False)
@@ -48,6 +48,8 @@ a_.add_argument('--probe', action='store_true', help='at the loaded state: ring_
 a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
 a_.add_argument('--no-extrap', action='store_true', help='the radii from the last radii')
 a_.add_argument('--probe-dt', action='store_true', help='at the loaded state: the explicit step limit, then stop')
+a_.add_argument('--explicit', action='store_true', help='leapfrog between the steps: ring_moment.py, ExplicitStep')
+a_.add_argument('--cfl', type=float, default=.7)
 a_.add_argument('--eta', type=float, default=.01, help='CG to this of |g|')
 a_.add_argument('--eta-out', type=float, default=.1, help='a frozen problem to this of |g|')
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
@@ -95,7 +97,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = (RingMoment if args.moment else RingYield)(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True, vol_tol=args.vol_tol)
+W = (RingMoment if args.moment else RingYield)(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=1. if args.explicit else .5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True, vol_tol=args.vol_tol)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
@@ -104,9 +106,10 @@ fg = -9.8*M3*up; wref = float(fg.norm()); tol = args.tol*wref
 CG = TrustCG(W, mass, args.dt, per=2, product_iters=1)
 W.update_ul(W.X)
 W.grad(W.X); W.reread(); W.grad(W.X)
-ST = YieldStep(W, CG, mass, W.ul_blocks(), fg, args.dt, args.mu)
+ST = (ExplicitStep if args.explicit else YieldStep)(W, CG, mass, W.ul_blocks(), fg, args.dt, args.mu)
+ST._m3, ST._fg = M3, fg
 ST.pre_ul = True; ST.pre_every = args.pre_every; ST.smooth_pred = ST.carry_delta = True
-ST.set_theta(.5, mass)
+ST.set_theta(1. if args.explicit else .5, mass)
 ST.aa_m = args.aa
 ST.hold_after = args.hold_after
 
@@ -220,6 +223,7 @@ if args.load_state is not None:
 ST.eta, ST.eta_out = args.eta, args.eta_out
 W.tangent = args.tangent
 W.true_blocks = args.true_blocks
+ST.cfl = args.cfl
 if args.no_extrap:
     W.radii_extrap = False
 ST.pre_every = args.pre_every
@@ -243,6 +247,14 @@ H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
 for s in range(s_first, nsteps+1):
     t_s = time.time()
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
+    if args.explicit and s > 255:
+        sp_ = ST.tv.norm(dim=1); c_ = int(sp_.argmax()); ms_ = W._m_s
+        nb_ = torch.cat([W.thi[W.tlo == c_], W.tlo[W.thi == c_]])
+        d_ = (ST.tx[nb_]-ST.tx[c_]).norm(dim=1)
+        wt_ = torch.cat([W.tr['wi'][:ms_][W.tlo == c_], W.tr['wj'][:ms_][W.thi == c_]])
+        print('FAST step %d: cell %d speed %.1f; V %.3f; group %s; ground depth / R %.2f; springs %d, weights>0 %d, nearest %.3f h; beta %.2f, reading %.2f e_y; F_ singular %s; L %.3f; substeps %d' % (s, c_, float(sp_[c_]), V0[c_]/np.median(V0), int(W._gid[c_]), float(W.tbd[c_]/W.tbR[c_].clamp(min=1e-9)), len(nb_), int((wt_ > 0).sum()), float(d_.min())/h if len(d_) else -1., float(W.ty['be'][W._gid[c_]]), float(W.ty['ei'][W._gid[c_]])/W.ey, np.round(torch.linalg.svdvals(W.ty['Ff'][W._gid[c_]].cpu()).numpy(), 2).tolist(), float(W.tul['Ln'][c_]), ST.stats['ns']), flush=True)
+    if args.explicit and s % args.every == 0:
+        print('EXPLICIT step %d: substeps %d, omega^2 %.3e (limit 1 / %.0f), the ground\'s %.3e; speed max %.2f' % (s, ST.stats['ns'], ST.stats['lam'], math.sqrt(ST.stats['lam'])/2, ST._lam_ground, float(ST.tv.norm(dim=1).max())), flush=True)
     if args.trace:
         print('BLOCK step %d: most negative block / cm %.3e, negative cells %d' % (s, W.ul_stats.get('block_min', 0.), W.ul_stats.get('block_neg', 0)), flush=True)
         print('TRACE step %d tol %.3e: ' % (s, tol)+' | '.join('%d e%d n%d stop %.2e g %.2e rho %.2f o%d' % (k_[0], k_[1], k_[2], k_[3], k_[4], k_[5], k_[7]) for k_ in ST.stats['trace']), flush=True)
