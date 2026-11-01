@@ -16,7 +16,6 @@ from scipy.optimize import linear_sum_assignment, minimize
 from scipy.sparse.linalg import LinearOperator, eigsh, splu
 
 sys.path.insert(0, '/home/fangsuo/py/dynamic-powerfoam')
-resource.setrlimit(resource.RLIMIT_AS, (10*2**30, 10*2**30))
 E_, NU = 23.00838, .3008
 mu = E_/(2*(1+NU)); lam = E_*NU/((1+NU)*(1-2*NU)); kap = lam+2*mu/3
 
@@ -25,12 +24,17 @@ def coo(rows, cols, vals, shape):
     return sp.coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))), shape=shape).tocsr()
 
 
-def build(out):
+def build(out, poor=0., tc=None):
+    """poor: a cell whose ring sees a direction less than this (M / 2V's smallest eigenvalue, 1 = a full ring) lends its neighbours' fit in Fe, as a tiny cell does.
+    tc: the wall's value read on the segment between the sites, t in [tc, 1 - tc], what is left over going through the fits with tau: a site beyond its own wall extrapolates otherwise; still exact on an affine field, the two sides still the same value"""
     g = np.load(out/'dem_exact_single'/'geometry.npz'); cl = np.load(out/'dem_exact_single'/'cells.npz')
     X, V, A, c, r0 = g['points'], g['masses'], g['areas'], g['contacts'], cl['radii']; n = len(X)
     i, j = g['pairs'][:, 0].astype(np.int64), g['pairs'][:, 1].astype(np.int64); m = len(i)
     d = X[j]-X[i]; L = np.linalg.norm(d, axis=1); nh = d/L[:, None]
-    hi = ((c-X[i])*nh).sum(1); t = hi/L; tau = c-(X[i]+hi[:, None]*nh)
+    hi = ((c-X[i])*nh).sum(1); t = hi/L
+    if tc is not None:
+        t = np.clip(t, tc, 1-tc)
+    tau = c-(X[i]+(t*L)[:, None]*nh)
     w = A/L
     q = w[:, None, None]*d[:, :, None]*d[:, None, :]
     M = np.zeros((n, 3, 3)); np.add.at(M, i, q); np.add.at(M, j, q)
@@ -44,6 +48,8 @@ def build(out):
             rw += [ga, ga]; cl_ += [3*O_+a, 3*S_+a]; vl += [R_[:, b], -R_[:, b]]
     B0 = coo(rw, cl_, vl, (9*n, 3*n))
     tiny = V < .1*np.median(V)
+    if poor > 0:
+        tiny = tiny | (np.linalg.eigvalsh(M)[:, 0]/(2*V) < poor)
     m1, m2 = tiny[i] & ~tiny[j], tiny[j] & ~tiny[i]
     as_, ao_ = np.concatenate([i[m1], j[m2]]), np.concatenate([j[m1], i[m2]])
     va = V[ao_]; den = np.zeros(n); np.add.at(den, as_, va)
@@ -161,6 +167,7 @@ def psi_P(F):
 
 
 def main():
+    resource.setrlimit(resource.RLIMIT_AS, (10*2**30, 10*2**30))                     # (CPU only here; importers on CUDA must not get it)
     part, deep = Path(sys.argv[1]), Path(sys.argv[2])
     D = build(part)
     X, V, A, n, m = D['X'], D['V'], D['A'], D['n'], D['m']
