@@ -193,6 +193,9 @@ class MergedUL(PlasticUL):
 
     ghost_in_fit = True
 
+    def _radii_start(self):
+        return self._ulr
+
     def _spring_rule(self, lo, hi, key, yld):
         """the spring list: a new wall with both cells yielded gets one; a spring whose cells have both yielded goes with its wall"""
         new = yld[lo] & yld[hi] & ~torch.isin(key, self.tkey)
@@ -210,7 +213,7 @@ class MergedUL(PlasticUL):
         n = self.n; x = x.detach(); st = self.ul_stats; t, s = self.tul, self.tsp; dev = x.device; yld = self._yld
         J = torch.exp(t['Ln']); st['floored'] = int((J < .02).sum())
         try:
-            r, G, S_, it, nrep = self._recut.solve_radii(x, self._ulr, self.V0*J.clamp(min=.02), tol=self._ul_tol, r_base=self._rr0)
+            r, G, S_, it, nrep = self._recut.solve_radii(x, self._radii_start(), self.V0*J.clamp(min=.02), tol=self._ul_tol, r_base=self._rr0)
             st['radii_it'] = it
         except RuntimeError:
             st['radii_fail'] += 1

@@ -42,6 +42,11 @@ a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: a
 a_.add_argument('--scene', type=int, default=0)
 a_.add_argument('--trace', action='store_true', help='per step, per inner solve: products, edge, negative, stop, |g|, rho, taken, outer')
 a_.add_argument('--vol-tol', type=float, default=1e-5, help='the radii: the cut volumes to this')
+a_.add_argument('--perturb', type=float, default=0., help='after loading: the sites moved by this of h, at random')
+a_.add_argument('--tangent', action='store_true', help='the outer iteration on the return\'s tangent')
+a_.add_argument('--probe', action='store_true', help='at the loaded state: ring_moment_probe.py, then stop')
+a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
+a_.add_argument('--no-extrap', action='store_true', help='the radii from the last radii')
 a_.add_argument('--eta', type=float, default=.01, help='CG to this of |g|')
 a_.add_argument('--eta-out', type=float, default=.1, help='a frozen problem to this of |g|')
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
@@ -212,6 +217,19 @@ if args.load_state is not None:
     s_first = ck['s']+1
     print('from step %d of %s' % (ck['s'], args.load_state), flush=True)
 ST.eta, ST.eta_out = args.eta, args.eta_out
+W.tangent = args.tangent
+W.true_blocks = args.true_blocks
+if args.no_extrap:
+    W.radii_extrap = False
+ST.pre_every = args.pre_every
+ST._pre_age = 0
+if args.probe:
+    from free_surface.ring_moment_probe import probe
+    probe(W, ST, mass, tol, wref, V0)
+    raise SystemExit
+if args.perturb > 0.:
+    torch.manual_seed(0)
+    ST.tx.add_(args.perturb*float(mass.median()**(1/3))*torch.randn_like(ST.tx))
 t0 = t_saved = time.time()
 nit, npr, nrd, ncl, nfe = [], [], [], [], []
 nsoft = 0
@@ -221,6 +239,7 @@ for s in range(s_first, nsteps+1):
     t_s = time.time()
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
     if args.trace:
+        print('BLOCK step %d: most negative block / cm %.3e, negative cells %d' % (s, W.ul_stats.get('block_min', 0.), W.ul_stats.get('block_neg', 0)), flush=True)
         print('TRACE step %d tol %.3e: ' % (s, tol)+' | '.join('%d e%d n%d stop %.2e g %.2e rho %.2f o%d' % (k_[0], k_[1], k_[2], k_[3], k_[4], k_[5], k_[7]) for k_ in ST.stats['trace']), flush=True)
     if math.isfinite(g2) and tol < math.sqrt(g2) <= args.soft_tol*wref:
         nsoft += 1

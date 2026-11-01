@@ -109,7 +109,7 @@ def k_ry_Ff(Am: wp.array(dtype=wp.mat33d), Mti: wp.array(dtype=wp.mat33d), Ff: w
 
 @wp.kernel(enable_backward=False)
 def k_ry_cell(Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Rz: wp.array(dtype=wp.mat33d), Fc: wp.array(dtype=wp.mat33d), Ron: wp.array(dtype=wp.mat33d), Pc: wp.array(dtype=wp.mat33d), Mo: wp.array(dtype=wp.mat33d),
-              be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), ca: wp.float64, gid: wp.array(dtype=int), vm: wp.array(dtype=wp.float64), Mtt: wp.array(dtype=wp.mat33d), Kt: wp.array(dtype=wp.mat33d), Vz: wp.array(dtype=wp.mat33d), cv: wp.float64, Fb: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64)):
+              be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), ca: wp.float64, gid: wp.array(dtype=int), vm: wp.array(dtype=wp.float64), Mtt: wp.array(dtype=wp.mat33d), Kt: wp.array(dtype=wp.mat33d), Vz: wp.array(dtype=wp.mat33d), cv: wp.float64, tg: wp.array(dtype=wp.float64), Nm: wp.array(dtype=wp.mat33d), s0: wp.array(dtype=wp.float64), Px: wp.array(dtype=wp.mat33d), Fb: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64)):
     """the tensor's energy once per group, term 0; the outer layer's remainder, term 5, with its viscous part; dE/dF_g, Vz the fit's viscous part"""
     b = wp.tid()
     half = wp.float64(0.5)
@@ -119,13 +119,20 @@ def k_ry_cell(Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Rz: 
     Xn = Rz[g]@Hn[g]
     bb = be[g]
     cc = br[g]
+    Pt = wp.mat33d()
+    if tg[g] > wp.float64(0.0):
+        ds = wp.ddot((X-ca*Xn)@Mtt[g], Nm[g])-s0[g]
+        Pt = -tg[g]*ds*Nm[g]
+        if g == b:
+            wp.atomic_add(terms, 0, b % NSLOT, -half*tg[g]*ds*ds)
+    Px[b] = Pt
     if g == b:
         wp.atomic_add(terms, 0, b % NSLOT, half*bb*wp.ddot(X@Mtt[b], X)+(one-bb)*ca*wp.ddot(Xn@Mtt[b], X))
     R0 = Fc[b]-Ff[g]@Pc[b]
     Rn = Rz[g]@Ron[b]
     Rv = R0-Rn
     wp.atomic_add(terms, 5, b % NSLOT, half*cc*wp.ddot(R0@Mo[b], R0)+(one-cc)*ca*wp.ddot(Rn@Mo[b], R0)+half*cv*wp.ddot(Rv@Mo[b], Rv))
-    Fb[b] = (((bb*X+((one-bb)*ca)*Xn)@(Kt[g]@Pc[b]))+(Vz[g]@Pc[b])+cc*R0+((one-cc)*ca)*Rn+cv*Rv)@Mo[b]
+    Fb[b] = (((bb*X+((one-bb)*ca)*Xn+Pt)@(Kt[g]@Pc[b]))+(Vz[g]@Pc[b])+cc*R0+((one-cc)*ca)*Rn+cv*Rv)@Mo[b]
 
 
 @wp.kernel(enable_backward=False)
@@ -149,7 +156,7 @@ def k_ry_visc(Ff: wp.array(dtype=wp.mat33d), Fn: wp.array(dtype=wp.mat33d), Fni:
 
 @wp.kernel(enable_backward=False)
 def k_ry_half(x: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=int), rj: wp.array(dtype=int), wi: wp.array(dtype=wp.float64), wj: wp.array(dtype=wp.float64), qi: wp.array(dtype=wp.vec3d), qj: wp.array(dtype=wp.vec3d), dni: wp.array(dtype=wp.vec3d), dnj: wp.array(dtype=wp.vec3d), gid: wp.array(dtype=int),
-              Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Rz: wp.array(dtype=wp.mat33d), be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), ca: wp.float64, vm: wp.array(dtype=wp.float64), Kt: wp.array(dtype=wp.mat33d), Vz: wp.array(dtype=wp.mat33d), cv: wp.float64, terms: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d)):
+              Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Rz: wp.array(dtype=wp.mat33d), be: wp.array(dtype=wp.float64), br: wp.array(dtype=wp.float64), ca: wp.float64, vm: wp.array(dtype=wp.float64), Kt: wp.array(dtype=wp.mat33d), Vz: wp.array(dtype=wp.mat33d), cv: wp.float64, Px: wp.array(dtype=wp.mat33d), terms: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d)):
     """each half's force, the springs carry it; the remainder's energy, term 4"""
     e = wp.tid()
     i, j = ri[e], rj[e]
@@ -166,7 +173,7 @@ def k_ry_half(x: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=int), rj: wp.array
     r = d-Ff[gi]@q
     rn = Rz[gi]@dni[e]
     qk = Kt[gi]@q
-    f = w*(bb*((Ff[gi]-vm[gi]*Rz[gi])@qk)+((one-bb)*ca)*(Rz[gi]@(Hn[gi]@qk))+cc*r+((one-cc)*ca)*rn+Vz[gi]@q+cv*(r-rn))
+    f = w*(bb*((Ff[gi]-vm[gi]*Rz[gi])@qk)+((one-bb)*ca)*(Rz[gi]@(Hn[gi]@qk))+Px[gi]@qk+cc*r+((one-cc)*ca)*rn+Vz[gi]@q+cv*(r-rn))
     wp.atomic_add(terms, 4, e % NSLOT, half*cc*w*wp.dot(r, r)+(one-cc)*ca*w*wp.dot(rn, r)+half*cv*w*wp.dot(r-rn, r-rn))
     gj = gid[j]
     q = qj[e]
@@ -176,7 +183,7 @@ def k_ry_half(x: wp.array(dtype=wp.vec3d), ri: wp.array(dtype=int), rj: wp.array
     r = d-Ff[gj]@q
     rn = Rz[gj]@dnj[e]
     qk = Kt[gj]@q
-    f = f+w*(bb*((Ff[gj]-vm[gj]*Rz[gj])@qk)+((one-bb)*ca)*(Rz[gj]@(Hn[gj]@qk))+cc*r+((one-cc)*ca)*rn+Vz[gj]@q+cv*(r-rn))
+    f = f+w*(bb*((Ff[gj]-vm[gj]*Rz[gj])@qk)+((one-bb)*ca)*(Rz[gj]@(Hn[gj]@qk))+Px[gj]@qk+cc*r+((one-cc)*ca)*rn+Vz[gj]@q+cv*(r-rn))
     wp.atomic_add(terms, 4, e % NSLOT, half*cc*w*wp.dot(r, r)+(one-cc)*ca*w*wp.dot(rn, r)+half*cv*w*wp.dot(r-rn, r-rn))
     wp.atomic_add(x_adj, j, f)
     wp.atomic_add(x_adj, i, -f)
@@ -229,6 +236,29 @@ def k_ry_read(Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Mt: 
 
 
 @wp.kernel(enable_backward=False)
+def k_ry_tan(Ff: wp.array(dtype=wp.mat33d), Hn: wp.array(dtype=wp.mat33d), Hd: wp.array(dtype=wp.mat33d), Mt: wp.array(dtype=wp.mat33d), Rz: wp.array(dtype=wp.mat33d), be: wp.array(dtype=wp.float64), vm: wp.array(dtype=wp.float64), th_: wp.float64, gid: wp.array(dtype=int), tg: wp.array(dtype=wp.float64), Nm: wp.array(dtype=wp.mat33d), s0: wp.array(dtype=wp.float64)):
+    """a flowing cell's flow direction, unit in M's norm, and where the frozen problem stands on it: the energy's quadratic loses -1/2 beta (Y - Y0 : n)^2, beta (I - n n), the return's tangent, the force at Y0 as it was"""
+    b = wp.tid()
+    tg[b] = wp.float64(0.0)
+    if gid[b] != b or be[b] >= wp.float64(1.0):
+        return
+    one = wp.float64(1.0)
+    I = wp.identity(n=3, dtype=wp.float64)
+    R = Rz[b]
+    H = (wp.transpose(R)@Ff[b]-I-(one-th_)*Hn[b])/th_
+    s = wp.float64(0.5)*(H+wp.transpose(H))
+    e = s-(wp.trace(s)/wp.float64(3.0))*I
+    N = R@e
+    n2 = wp.ddot(N@Mt[b], N)
+    if n2 <= wp.float64(1e-300):
+        return
+    n_ = N/wp.sqrt(n2)
+    Nm[b] = n_
+    s0[b] = wp.ddot((Ff[b]-vm[b]*R-(one-th_)*(R@Hd[b]))@Mt[b], n_)
+    tg[b] = be[b]
+
+
+@wp.kernel(enable_backward=False)
 def k_ry_readL(Fc: wp.array(dtype=wp.mat33d), flag: wp.array(dtype=int), Lz: wp.array(dtype=wp.float64), Cz: wp.array(dtype=wp.mat33d), Fz: wp.array(dtype=wp.mat33d)):
     """an elastic cell's L = ln det F_g, linearised at the last evaluation (at J under 0.05 continued linearly in J)"""
     b = wp.tid()
@@ -256,6 +286,8 @@ def k_ry_readL(Fc: wp.array(dtype=wp.mat33d), flag: wp.array(dtype=int), Lz: wp.
 class RingYield(RingFlow):
     """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's; eps_cut: the plastic strain that takes a cell onto the current cut; agg: cells under this of the median volume are merged (0: none); hold, ledger: as ring_flow.py"""
     C_cap = 4.
+    true_blocks = False                                                                # (the preconditioner on the Hessian's true diagonal blocks, by coloured products)
+    tangent = False                                                                    # (the outer iteration on the return's tangent: the same fixed point)
 
     def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., eps_cut=-1., agg_merge=.1, hold=False, ledger=False, **kw):
         super().__init__(X, r, V0, pairs, A, c, E, nu, sigma_y, theta=theta, kappa=kappa, hold=hold, ledger=ledger, **kw)
@@ -269,7 +301,7 @@ class RingYield(RingFlow):
         z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
         Ks = self.ul['Kw']
         self.ry = dict(Ff=z(n, wp.mat33d), Fn=z(n, wp.mat33d), Rn=z(n, wp.mat33d), Hn=z(n, wp.mat33d), Hd=z(n, wp.mat33d), gy=z(n, wp.int32), vm=z(n, wp.float64), Mtt=z(n, wp.mat33d), Kt=z(n, wp.mat33d), Vz=z(n, wp.mat33d), Fni=z(n, wp.mat33d), Ms=z(n, wp.mat33d), Ron=z(n, wp.mat33d), Rz=z(n, wp.mat33d), Mt=z(n, wp.mat33d), Mti=z(n, wp.mat33d), MoP=z(n, wp.mat33d), Pc=z(n, wp.mat33d), be=z(n, wp.float64), br=z(n, wp.float64), ei=z(n, wp.float64), Lz=z(n, wp.float64), Cz=z(n, wp.mat33d), Fz=z(n, wp.mat33d),
-                       gid=z(n, wp.int32), Vgi=z(n, wp.float64), Gs=z(n, wp.mat33d), Grs=z(n, wp.mat33d), Gm=z(n, wp.mat33d), Grm=z(n, wp.mat33d), Gbm=z(n, wp.mat33d), Gbrm=z(n, wp.mat33d), Ss=z(n, wp.mat33d), Srs=z(n, wp.mat33d))
+                       gid=z(n, wp.int32), Vgi=z(n, wp.float64), Gs=z(n, wp.mat33d), Grs=z(n, wp.mat33d), Gm=z(n, wp.mat33d), Grm=z(n, wp.mat33d), Gbm=z(n, wp.mat33d), Gbrm=z(n, wp.mat33d), Ss=z(n, wp.mat33d), Srs=z(n, wp.mat33d), tg=z(n, wp.float64), Nm=z(n, wp.mat33d), s0=z(n, wp.float64), Px=z(n, wp.mat33d))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.ty = {k_: tt(a_) for k_, a_ in self.ry.items()}
         Y = self.ty
@@ -579,9 +611,9 @@ class RingYield(RingFlow):
         wp.launch(k_ry_Ff, n, inputs=[Rg['Am'], Y['Mti']], outputs=[Y['Ff']])
         if self.cv > 0.:
             wp.launch(k_ry_visc, n, inputs=[Y['Ff'], Y['Fn'], Y['Fni'], Y['Ms'], Y['Mti'], gid, cv], outputs=[Y['Vz'], B['terms']])
-        wp.launch(k_ry_cell, n, inputs=[Y['Ff'], Y['Hd'], Y['Rz'], B['Fc'], Y['Ron'], Y['Pc'], Rg['Mo'], Y['be'], Y['br'], ca, gid, Y['vm'], Y['Mtt'], Y['Kt'], Y['Vz'], cv], outputs=[B['Fb'], B['terms']])
+        wp.launch(k_ry_cell, n, inputs=[Y['Ff'], Y['Hd'], Y['Rz'], B['Fc'], Y['Ron'], Y['Pc'], Rg['Mo'], Y['be'], Y['br'], ca, gid, Y['vm'], Y['Mtt'], Y['Kt'], Y['Vz'], cv, Y['tg'], Y['Nm'], Y['s0'], Y['Px']], outputs=[B['Fb'], B['terms']])
         wp.launch(k_rf_Fadj, n, inputs=[B['Fb'], S['F0'], Rg['flag']], outputs=[Y['Gbm'], Y['Gbrm']])
-        wp.launch(k_ry_half, Rg['K'], inputs=[x]+hs+[Rg['dni'], Rg['dnj'], gid, Y['Ff'], Y['Hd'], Y['Rz'], Y['be'], Y['br'], ca, Y['vm'], Y['Kt'], Y['Vz'], cv], outputs=[B['terms'], g])
+        wp.launch(k_ry_half, Rg['K'], inputs=[x]+hs+[Rg['dni'], Rg['dnj'], gid, Y['Ff'], Y['Hd'], Y['Rz'], Y['be'], Y['br'], ca, Y['vm'], Y['Kt'], Y['Vz'], cv, Y['Px']], outputs=[B['terms'], g])
         wp.launch(k_ry_Lb, n, inputs=[B['Lb'], U['Q'], Y['Cz'], Rg['flag']], outputs=[Y['Gbm'], Y['Gbrm']])
         bl = self.ball
         if bl is not None:
@@ -609,6 +641,8 @@ class RingYield(RingFlow):
         Y, n = self.ry, self.n
         wp.launch(k_ry_read, n, inputs=[Y['Ff'], Y['Hn'], Y['Mtt'], wp.float64(self.ey), wp.float64(self.th), int(hold), Y['gid'], Y['gy']], outputs=[Y['Rz'], Y['be'], Y['ei'], Y['vm']])
         wp.launch(k_ry_readL, n, inputs=[self.B['Fc'], self.ring['flag']], outputs=[Y['Lz'], Y['Cz'], Y['Fz']])
+        if self.tangent:
+            wp.launch(k_ry_tan, n, inputs=[Y['Ff'], Y['Hn'], Y['Hd'], Y['Mtt'], Y['Rz'], Y['be'], Y['vm'], wp.float64(self.th), Y['gid']], outputs=[Y['tg'], Y['Nm'], Y['s0']])
         if bool(self._yld.any()):
             t = self.ty
             M = self.I3+t['Gm']/(2*self.th)
@@ -879,10 +913,23 @@ class YieldStep(MidpointStep):
                 its += 1
                 if outer == 1 and its == 1 and self.pre_ul and self._pre_age <= 0:
                     self._pre_age = self.pre_every
-                    self.tK.copy_(W.ul_blocks())
-                wp.launch(k_mid_pre, n, inputs=[W.B['R'], A['K'], self.c1, A['cm']], outputs=[A['P']])
-                wp.launch(k_mid_pre_ball, bl['k'], inputs=[bl['body'], bl['R'], W.B['bdelta'], bl['ng'], self.e4, bl['kt'], bl['bound'], self.muf], outputs=[A['P']])
-                wp.launch(k_mid_inv, n, inputs=[A['P']], outputs=[A['Pinv']])
+                    if W.true_blocks:
+                        from free_surface.ring_moment import exact_blocks
+                        z_ = self.tz.clone()
+                        _, g0_ = W.grad(z_)
+                        K_, npr_ = exact_blocks(W, z_, g0_.clone(), wp.to_torch(A['cm'], requires_grad=False))
+                        evals += npr_
+                        self._Pix = torch.linalg.inv(K_.cpu()).to(z_.device)
+                        g2 = self._eval(0.)[PS_GQ2]; evals += 1
+                        self._accept()
+                    else:
+                        self.tK.copy_(W.ul_blocks())
+                if W.true_blocks:
+                    wp.to_torch(A['Pinv'], requires_grad=False).copy_(self._Pix)
+                else:
+                    wp.launch(k_mid_pre, n, inputs=[W.B['R'], A['K'], self.c1, A['cm']], outputs=[A['P']])
+                    wp.launch(k_mid_pre_ball, bl['k'], inputs=[bl['body'], bl['R'], W.B['bdelta'], bl['ng'], self.e4, bl['kt'], bl['bound'], self.muf], outputs=[A['P']])
+                    wp.launch(k_mid_inv, n, inputs=[A['P']], outputs=[A['Pinv']])
                 stop = max(cg_tol_abs(g2), self.eta*math.sqrt(g2)); gi_ = math.sqrt(g2)
                 r = self.CG.solve(A['gz'], delta, stop, cap)
                 if r['K'] >= cap and not r['EDGE'] and not r['NEG']:

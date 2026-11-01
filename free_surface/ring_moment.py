@@ -23,6 +23,16 @@ class RingMoment(RingYield):
 
     ghost_in_fit = False                                                                   # (a spring without a wall has no flux: the volume is the walls')
 
+    def _radii_start(self):
+        """the weights r^2 extrapolated over the last step: the same solve, fewer cuts"""
+        r1, r0 = self._ulr, getattr(self, '_ulr_last', None)
+        self._ulr_last = r1.clone()
+        if not self.radii_extrap or r0 is None:
+            return r1
+        return torch.sqrt((2*r1*r1-r0*r0).clamp(min=(.25*r1)**2))
+
+    radii_extrap = False                                                               # (on the 30 steps: the same time, no gain)
+
     def _skin(self, Mq, Mo_old, yld):
         """the outer layer is a set of unseen halves: Mo their weights, carried by the return as q (end_ul), toward the current cut's by the same part. At the first cut, the cut's"""
         if not self._skin_set:
@@ -166,3 +176,37 @@ class RingMoment(RingYield):
         if bool(m.any()):
             Tr = self._inv(self._Ft[m])@Fe[m]                                              # (the return on the outer layer, as on q)
             T['Mo'][m] = Tr@T['Mo'][m]@Tr.transpose(1, 2)
+
+
+def exact_blocks(W, z, g0, cm, h=1e-9):
+    """the diagonal 3 x 3 blocks of the frozen problem's Hessian, cm on the diagonal included: by products on the colours of the springs' graph squared, nothing assumed of the terms. Returns the blocks and the products used"""
+    n, dev = W.n, W.dev
+    a_, b_ = np.array(W.tlo.cpu()), np.array(W.thi.cpu())
+    A = sp.csr_matrix((np.ones(len(a_)), (a_, b_)), shape=(n, n)); A = A+A.T
+    A2 = (A+A@A).tocsr()
+    col = np.full(n, -1)
+    ip, jx = A2.indptr, A2.indices
+    for i in np.argsort(-np.diff(ip)):                                                     # (greedy, the largest first)
+        c = col[jx[ip[i]:ip[i+1]]]
+        used = set(c[c >= 0].tolist())
+        k = 0
+        while k in used:
+            k += 1
+        col[i] = k
+    nc = int(col.max())+1
+    col_t = torch.as_tensor(col, device=dev)
+    K = torch.zeros(n, 3, 3, dtype=f64, device=dev)
+    for c in range(nc):
+        m = col_t == c
+        for ax in range(3):
+            d = torch.zeros(n, 3, dtype=f64, device=dev); d[m, ax] = 1.
+            _, g1 = W.grad(z+h*d)
+            K[m, :, ax] = ((g1-g0)/h)[m]
+    K = .5*(K+K.transpose(1, 2))
+    K = K.nan_to_num(0., 0., 0.)
+    ev, Q = torch.linalg.eigh(K.cpu())                                                     # (a preconditioner: positive; near a contact's kink or a flipped cell a block may not be)
+    W.ul_stats['block_min'] = float((ev.to(dev)[:, 0]/cm).min()); W.ul_stats['block_neg'] = int((ev.to(dev)[:, 0] < 0).sum())
+    ev = ev.to(dev).clamp(min=0.)+cm[:, None]
+    Q = Q.to(dev)
+    K = (Q*ev[:, None, :])@Q.transpose(1, 2)
+    return K, 3*nc
