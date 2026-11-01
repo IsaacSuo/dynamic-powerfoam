@@ -346,6 +346,7 @@ class RingYield(RingFlow):
         T['Mo'].copy_(self._Mo0)
         Fi_, Pc = self._Fti[yld], Y['Pc'][yld]
         Mq = Fi_@(self.mu*(Mc[yld]+Mc[yld].transpose(1, 2)))@Fi_.transpose(1, 2)
+        Mq = self._skin(Mq, Mo_old[yld], yld)
         T['Mo'][yld] = Mq
         tr3 = lambda a_: a_.diagonal(dim1=1, dim2=2).sum(1)
         tn = tr3(Mq)
@@ -356,17 +357,32 @@ class RingYield(RingFlow):
             self.tbR.copy_(torch.where(yld, self.tbR, self._tbR0))
             self.tbkn.copy_(2*self.Es*self.tbR.clamp(min=0.)*.05**.5)
         if self.agg_merge > 0:
-            V = self.V0.cpu().numpy()
-            tiny = V < self.agg_merge*np.median(V)
-            i_w, j_w, _, _, _, m = self._w
-            i_n, j_n, a_ = i_w.cpu().numpy(), j_w.cpu().numpy(), t['wa'][:m].cpu().numpy()
-            o = np.argsort(a_); i_n, j_n = i_n[o], j_n[o]
-            gid = self._gid.cpu().numpy().copy(); y_ = yld.cpu().numpy()
-            m1 = tiny[i_n] & ~tiny[j_n] & y_[i_n]; gid[i_n[m1]] = j_n[m1]
-            m2 = tiny[j_n] & ~tiny[i_n] & y_[j_n]; gid[j_n[m2]] = i_n[m2]
-            self._set_gid(torch.as_tensor(gid, device=self.dev))
+            self._regroup(yld)
         self._wv_masks()
         self._carry_fit(x)
+
+    def _skin(self, Mq, Mo_old, yld):
+        """a cut cell's outer layer: the current cut's"""
+        return Mq
+
+    def _regroup(self, yld):
+        """a tiny cell with its largest current wall"""
+        t = self.tul
+        V = self.V0.cpu().numpy()
+        tiny = V < self.agg_merge*np.median(V)
+        i_w, j_w, _, _, _, m = self._w
+        i_n, j_n, a_ = i_w.cpu().numpy(), j_w.cpu().numpy(), t['wa'][:m].cpu().numpy()
+        o = np.argsort(a_); i_n, j_n = i_n[o], j_n[o]
+        gid = self._gid.cpu().numpy().copy(); y_ = yld.cpu().numpy()
+        m1 = tiny[i_n] & ~tiny[j_n] & y_[i_n]; gid[i_n[m1]] = j_n[m1]
+        m2 = tiny[j_n] & ~tiny[i_n] & y_[j_n]; gid[j_n[m2]] = i_n[m2]
+        self._set_gid(torch.as_tensor(gid, device=self.dev))
+
+    def _fit_on(self):
+        """the groups whose fit is carried across"""
+        on = torch.zeros(self.n, dtype=torch.bool, device=self.dev)
+        on[self._gid[self._yld | (self._eps > 0)]] = True
+        return on
 
     def _inv(self, A):
         """the inverse of 3 x 3 matrices, the pseudo-inverse where near singular"""
@@ -384,8 +400,7 @@ class RingYield(RingFlow):
         wi, wj = T['wi'][:ms], T['wj'][:ms]
         d = x[hi]-x[lo]
         qi, qj = self._qi, self._qj
-        on = torch.zeros(n, dtype=torch.bool, device=self.dev)
-        on[g[self._yld | (self._eps > 0)]] = True
+        on = self._fit_on()
         ch = ((self._Ft-self._Ft[g]).abs().sum((1, 2)) > 0) & on[g]
         self.ul_stats['frames'] = int(ch.sum())
         if bool(ch.any()):
@@ -424,7 +439,7 @@ class RingYield(RingFlow):
             self._Fe[rc & y] = self._Ft[g[rc & y]]
         self._qi, self._qj = qi2, qj2
         T['qi'][:ms] = qi2; T['qj'][:ms] = qj2
-        if self.ledger:
+        if self.ledger and len(k) > 0:
             dT = (Tk-self.I3).flatten(1).norm(dim=1)
             self.ul_stats['T_med'], self.ul_stats['T_max'], self.ul_stats['T_reset'] = float(dT.median()), float(dT.max()), int(bad.sum())
 
@@ -465,10 +480,7 @@ class RingYield(RingFlow):
         if bool(on_.any()):
             Us_, Ss_, Vh_ = torch.linalg.svd(Fn[on_].cpu())
             Un_ = ((Vh_.transpose(1, 2)*Ss_[:, None, :])@Vh_).to(self.dev)
-            Mt_ = Un_@M[on_]@Un_
-            Vc_ = torch.zeros(n, dtype=f64, device=self.dev).index_add(0, g, 1/self.tul['Vi'])
-            self._sj[on_] = (1/(Y['Vgi']*Vc_))[on_]
-            Mt_ = self._sj[on_][:, None, None]*Mt_
+            Mt_ = self._metric(Un_, M[on_], on_)
             Y['Mtt'][on_] = .5*(Mt_+Mt_.transpose(1, 2))
             Y['Kt'][on_] = Y['Mtt'][on_]@Mi[on_]
         self._mark_groups()
@@ -480,6 +492,13 @@ class RingYield(RingFlow):
         T['dni'][:ms] = torch.einsum('fba,fb->fa', Rn[lo], d-torch.einsum('fab,fb->fa', Fn[g[lo]], qi)); T['dnj'][:ms] = torch.einsum('fba,fb->fa', Rn[hi], d-torch.einsum('fab,fb->fa', Fn[g[hi]], qj))
         Y['Ron'].copy_(Rn.transpose(1, 2)@(Fe-Fn[g]@P))
         self.tsp['F0'].copy_(Fe)
+
+    def _metric(self, Un_, M_, on_):
+        """M_t: the metric of the current cut in the fit's frame, on the rest volume"""
+        g = self._gid
+        Vc_ = torch.zeros(self.n, dtype=f64, device=self.dev).index_add(0, g, 1/self.tul['Vi'])
+        self._sj[on_] = (1/(self.ty['Vgi']*Vc_))[on_]
+        return self._sj[on_][:, None, None]*(Un_@M_@Un_)
 
     def update_ul(self, x):
         """the step's start at x: the cut, once a cell has gone on it"""
@@ -756,7 +775,7 @@ class RingYield(RingFlow):
             Hg = R[on].transpose(1, 2)@Fg_-self.I3
             Sg_ = torch.linalg.svd(Fg_.cpu())
             Ug_ = ((Sg_[2].transpose(1, 2)*Sg_[1][:, None, :])@Sg_[2]).to(self.dev)
-            Mg_ = self._sj[on][:, None, None]*(Ug_@M[on]@Ug_)
+            Mg_ = self._metric(Ug_, M[on], on)
             Ht_ = Ug_-self.I3
             vg = Ht_.diagonal(dim1=1, dim2=2).sum(1)/3
             eg_ = Ht_-vg[:, None, None]*self.I3

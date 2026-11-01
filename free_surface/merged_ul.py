@@ -191,6 +191,8 @@ class MergedUL(PlasticUL):
         wp.launch(k_total, (NT, 256), inputs=[B['terms']], outputs=[B['tsum']])
         wp.launch(k_total_loss, 1, inputs=[B['tsum'], self.tw], outputs=[B['loss']])
 
+    ghost_in_fit = True
+
     def _spring_rule(self, lo, hi, key, yld):
         """the spring list: a new wall with both cells yielded gets one; a spring whose cells have both yielded goes with its wall"""
         new = yld[lo] & yld[hi] & ~torch.isin(key, self.tkey)
@@ -254,6 +256,8 @@ class MergedUL(PlasticUL):
         # the fit: the connected walls, and the springs without a wall at their rest weight
         gh = ~has_wall
         st['ghost'] = int(gh.sum())
+        if not self.ghost_in_fit:
+            gh = torch.zeros_like(gh)
         li, lj, dd, ww = torch.cat([ic, lo_s[gh]]), torch.cat([jc, hi_s[gh]]), torch.cat([d, ds[gh]]), torch.cat([w, k_[gh]/(self.kshare*2*self.mu)])
         q = ww[:, None, None]*dd[:, :, None]*dd[:, None, :]
         M = torch.zeros(n, 3, 3, dtype=f64, device=dev).index_add(0, li, q).index_add(0, lj, q)

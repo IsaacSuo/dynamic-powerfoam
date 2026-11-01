@@ -1,8 +1,9 @@
 """RingYield with the springs not tied to the walls: the cut goes on every step, for the volume, the contact and the candidates; a spring's weight moves only with a plastic return.
-  a return gives up the part lam = 1 - c of the cell's deviatoric strain; its halves give up the same part of their distance to the current walls' weights, w' = w + lam (A / L - w)
-    square lattice in simple shear, plastic shear g, elastic e: M fixes the three pairs, w_old = 1 - g, w_new = g, while the walls read g + e: dw / (wall - w) = dg / e = lam, so M does not move
+  a return gives up the part lam = 1 - c of the cell's deviatoric strain; its halves give up the same part of their distance to the current walls' weights, w' = w + lam (A / L - w); the outer layer as a set of halves
+    square lattice in simple shear, plastic shear g, elastic e: M fixes the three pairs, w_old = 1 - g, w_new = g, while the walls read g + e: dw / (wall - w) = dg / e = lam
     uniform flow: lam is the same everywhere, and any mix of closed weights is closed, so the patch test holds
-    no return, lam = 0: the weights do not move, whatever the walls do. e_y to 0: lam to 1, the walls' weights
+    no return, lam = 0: q, weights, outer layer, group do not move, whatever the walls do; the springs' energy 1/2 sum w |d - (1 + v) R q|^2 does not see the cut. e_y to 0: lam to 1, the walls' weights
+  force: K = I, the plain derivative of 1/2 tr(X M X^T); R = polar(F), the same in all cells under the same F; a torque of M's non-roundness times e is the price (the theorem)
   a new wall gets a spring of weight 0 if its cells are two springs apart (a fold's two sheets are not: a wall between them is a free surface to both); a spring leaves when it has no wall and next to no weight"""
 import numpy as np
 import scipy.sparse as sp
@@ -20,14 +21,48 @@ class RingMoment(RingYield):
         super().__init__(*a, **kw)
         self._wi = None
 
+    ghost_in_fit = False                                                                   # (a spring without a wall has no flux: the volume is the walls')
+
+    def _skin(self, Mq, Mo_old, yld):
+        """the outer layer is a set of unseen halves: Mo their weights, carried by the return as q (end_ul), toward the current cut's by the same part. At the first cut, the cut's"""
+        if not self._skin_set:
+            self._skin_set = True
+            return Mq
+        lam = self._ret[self._gid][yld][:, None, None]
+        return Mo_old+lam*(Mq-Mo_old)
+
+    def _regroup(self, yld):
+        """a tiny cell with its heaviest half: its own weights do not move without a return of its own"""
+        ms, lo, hi = self._m_s, self.tlo, self.thi
+        tiny = self.V0 < self.agg_merge*self.V0.median()
+        own = torch.cat([lo, hi]); oth = torch.cat([hi, lo]); w_ = torch.cat([self._wi, self._wj])
+        k = tiny[own] & ~tiny[oth] & (w_ > 0)
+        o = torch.argsort(w_[k]).cpu()
+        gid = np.array(self._gid.cpu())
+        gid[np.array(own[k].cpu())[o]] = np.array(oth[k].cpu())[o]                         # (numpy, in order: the last, the heaviest, stands)
+        self._set_gid(torch.as_tensor(gid, device=self.dev))
+
+    def _fit_on(self):
+        """only a group with a return: its weights moved; a cell without one is not touched"""
+        on = torch.zeros(self.n, dtype=torch.bool, device=self.dev)
+        on[self._ret > 0] = True
+        return on
+
+    def _metric(self, Un_, M_, on_):
+        """the weights hold M where the rest had it, so the force is the plain derivative of 1/2 tr(X M X^T): K = I"""
+        return M_
+
     def start(self):
         super().start()
         self._wi = None                                                                    # (the rest weights: the first cut's, as RingYield's on the cut)
+        self._skin_set = False
 
     def _spring_rule(self, lo, hi, key, yld):
         if self._wi is None:
             return super()._spring_rule(lo, hi, key, yld)
-        stay = torch.isin(self.tkey, key) | (self._wi+self._wj > self._wgone)
+        wt = self._wi+self._wj
+        ret = (self._ret[self._gid[self.tlo]] > 0) | (self._ret[self._gid[self.thi]] > 0)
+        stay = torch.isin(self.tkey, key) | (wt > self._wgone) | ((wt > 0) & ~ret)          # (next to no weight: it leaves, in a return only)
         new = ~torch.isin(key, self.tkey)
         if bool(new.any()):
             a_, b_ = np.array(self.tlo.cpu()), np.array(self.thi.cpu())
@@ -49,7 +84,8 @@ class RingMoment(RingYield):
         wi[kept], wj[kept] = self._wi[pos[kept]], self._wj[pos[kept]]
         Fti = self._inv(self._Ft)
         qi, qj = torch.einsum('fab,fb->fa', Fti[lo_s], ds), torch.einsum('fab,fb->fa', Fti[hi_s], ds)
-        qi[kept], qj[kept] = self._qi[pos[kept]], self._qj[pos[kept]]
+        ki, kj = kept & (wi > 0), kept & (wj > 0)                                          # (a half of weight 0 has no memory: q reads no remainder until it has weight)
+        qi[ki], qj[kj] = self._qi[pos[ki]], self._qj[pos[kj]]
         i, j, c, order, pw = wall
         dw = x[j]-x[i]; Lw = dw.norm(dim=1)
         tw = ((c-x[i])*dw).sum(1)/Lw**2
@@ -122,6 +158,11 @@ class RingMoment(RingYield):
         return torch.stack([q[:, 0]*q[:, 0], q[:, 1]*q[:, 1], q[:, 2]*q[:, 2], s2*q[:, 0]*q[:, 1], s2*q[:, 0]*q[:, 2], s2*q[:, 1]*q[:, 2]], 1)
 
     def end_ul(self, th=.5):
-        T, ms = self.tr, self._m_s
+        T, ms, Y = self.tr, self._m_s, self.ty
         self._Mlast, _ = self._moments(self.tlo, self.thi, T['qi'][:ms], T['qj'][:ms], T['wi'][:ms], T['wj'][:ms])     # (M before this step's return)
+        Fe = ((Y['Ff']-(1-th)*Y['Fn'])/th)[self._gid].clone()
         super().end_ul(th)
+        m = self._ret[self._gid] > 0
+        if bool(m.any()):
+            Tr = self._inv(self._Ft[m])@Fe[m]                                              # (the return on the outer layer, as on q)
+            T['Mo'][m] = Tr@T['Mo'][m]@Tr.transpose(1, 2)
