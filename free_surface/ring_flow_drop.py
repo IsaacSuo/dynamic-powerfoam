@@ -37,7 +37,7 @@ a_.add_argument('--newton-max', type=int, default=300)
 a_.add_argument('--steps', type=int, default=0, help='stop after this step (0: at the last frame)')
 a_.add_argument('--scene', type=int, default=0)
 a_.add_argument('--soft-tol', type=float, default=.1, help='of the weight: a step that ends over the tolerance but under this goes on, counted and logged (.1 is at most a .1 m/s kick to one site)')
-a_.add_argument('--hold', action='store_true', help='a ball that has touched does not leave: the MPM holds tension, but landing y +16 % against +8 % without')
+a_.add_argument('--no-hold', action='store_true', help="the ground only presses; the MPM's sticky ground holds tension, up to the material's yield here")
 args = a_.parse_args()
 gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())[str(args.scene)]
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
@@ -75,7 +75,7 @@ def chamfer(a, b, chunk=1024):
 
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
-W = RingFlow(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, flag_at=args.flag_at, hold=args.hold, ledger=True)
+W = RingFlow(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=.5, kappa=args.kappa, flag_at=args.flag_at, hold=not args.no_hold, ledger=True)
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()

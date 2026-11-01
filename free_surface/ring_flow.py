@@ -10,6 +10,8 @@ dP/dD = (e_y / |D|)(I - D^ (x) D^), symmetric for every direction only if M_i is
   shares        between two flowing cells the wall's spring 2 mu A / L goes by t = h / L (clipped .02 .. .98): the one-sided reading has the cell's gradient in it, and a tiny cell's gradient is its gain; on the rest list halves, as the ring
   cut           none while nothing is flagged, then each step: as merged_ul.py, x -> G linear within a step on the current cut. Rest list while a cell of the pair has not flagged, current walls when both have, born at r = 0, gone with their wall. Ground balls: the rest radii on elastic cells, the cut's on flowing ones
 Self contact not here. set_ball, start(), prepare(), update_ul; through FlowStep. ring_flow_check.py its checks, ring_flow_drop.py the landing."""
+import math
+
 import torch
 import warp as wp
 
@@ -194,8 +196,8 @@ def k_rf_half(x: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), Rc: wp.
 
 @wp.kernel(enable_backward=False)
 def k_rf_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.array(dtype=wp.float64), xn: wp.array(dtype=wp.vec3d), ng: wp.vec3d, bpar: wp.array(dtype=wp.float64), kt: wp.array(dtype=wp.float64), bound: wp.array(dtype=wp.float64),
-              lamt: wp.array(dtype=wp.vec3d), stuck: wp.array(dtype=int), kn: wp.array(dtype=wp.float64), delta: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), ff: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
-    """closure_warp.py's k_ball, with the hold: a ball that has touched is linear below a sinking of 5 % of its radius, C1 with Hertz there, and so pulls when it leaves, its rest at a third of that (Hertz down to 0 would have the stiffness jump from k_n to 0 at d = 0, where a thousand balls rest: Newton's ratio cycled -.06, .73, .47 for 300 iterations). bpar = (cs, wt, c0, E*, mu)"""
+              lamt: wp.array(dtype=wp.vec3d), stuck: wp.array(dtype=int), kn: wp.array(dtype=wp.float64), sig: wp.float64, delta: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), ff: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
+    """closure_warp.py's k_ball, with the hold: a ball that has touched is linear below a sinking of 5 % of its radius, C1 with Hertz there, and so pulls when it leaves, its rest at a third of that. Its pull is what the material can pass on: at most sigma_y pi R^2 (unlimited: scene 0's landing y +12 % against +8 %, as the site stands a ball's radius above the ground; a limit on a strong material leaves it held: scene 1 does not hop and roll). bpar = (cs, wt, c0, E*, mu)"""
     c = wp.tid()
     B = cbody[c]
     cs, wt, c0, Es, mu = bpar[0], bpar[1], bpar[2], bpar[3], bpar[4]
@@ -209,7 +211,13 @@ def k_rf_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.arr
         Fr = wp.float64(4.0)/wp.float64(3.0)*Es*sr*dr
         dd = d-dr
         F = Fr+kn[c]*dd
-        wp.atomic_add(terms, 6, c % NSLOT, wt*(wp.float64(8.0)/wp.float64(15.0)*Es*sr*dr*dr+Fr*dd+wp.float64(0.5)*kn[c]*dd*dd))
+        fm = sig*wp.float64(3.141592653589793)*R[c]*R[c]
+        if F < -fm:
+            dc = (-fm-Fr)/kn[c]
+            wp.atomic_add(terms, 6, c % NSLOT, wt*(wp.float64(8.0)/wp.float64(15.0)*Es*sr*dr*dr+Fr*dc+wp.float64(0.5)*kn[c]*dc*dc-fm*(dd-dc)))
+            F = -fm
+        else:
+            wp.atomic_add(terms, 6, c % NSLOT, wt*(wp.float64(8.0)/wp.float64(15.0)*Es*sr*dr*dr+Fr*dd+wp.float64(0.5)*kn[c]*dd*dd))
     elif d > wp.float64(0.0):
         sq = wp.sqrt(R[c]*d)
         F = wp.float64(4.0)/wp.float64(3.0)*Es*sq*d
@@ -236,7 +244,7 @@ def k_rf_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.arr
 
 
 class RingFlow(RingUL):
-    """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's (5 at the springs' w); flag_at: the predictor's reading, in e_y, that flags a cell; hold: a ball that has touched does not leave the ground (the MPM's sticky ground holds tension; in the plane only the friction, as merged_ul.py: a site stands a ball's radius above the ground, and pinned without a limit it lifts the no-slip plane by that: landing y +20 % against +8 %); ledger: account the energy that the flag and the cut change at fixed x"""
+    """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's (5 at the springs' w); flag_at: the predictor's reading, in e_y, that flags a cell; hold: a ball that has touched is held to the ground up to the material's yield over its plan view (the MPM's sticky ground holds tension; in the plane only the friction, as merged_ul.py: a site stands a ball's radius above the ground, and pinned without a limit it lifts the no-slip plane by that: landing y +20 % against +8 %); ledger: account the energy that the flag and the cut change at fixed x"""
     C_cap = 4.
 
     def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., flag_at=.5, hold=False, ledger=False, **kw):
@@ -297,7 +305,6 @@ class RingFlow(RingUL):
         self._Mri = torch.linalg.pinv(Mr)
         self.tstuck, self.tbkn = tt(self.hd['stuck']), tt(self.hd['kn'])
         self._stuck = torch.zeros(n, dtype=torch.bool, device=dev)
-        self._Rst = torch.zeros(n, dtype=f64, device=dev)
         self.tbkt, self.tbd = tt(self.ball['kt']), tt(self.B['bdelta'])
 
     def _rows_from(self, i, j, A, tw, nn, Vi, ml):
@@ -363,7 +370,7 @@ class RingFlow(RingUL):
         self._set_halves(x)
         if self.ball is not None:
             self.tbR.copy_(torch.where(self._yld, self.tbR, self._tbR0))
-            self.tbR[self._stuck] = self._Rst[self._stuck]                               # (a ball that touches keeps its radius: a new one changes the contact's energy at fixed x, 9 % of the start's energy by 0.28 s of the landing against 0.8 %)
+            self.tbkn.copy_(2*self.Es*self.tbR.clamp(min=0.)*.05**.5)                    # (Hertz's stiffness at a sinking of 5 % of the radius. The radii as the cut's: frozen at the first touch they make .8 % of the start's energy at fixed x against 9 %, but stand the lowest sites a first radius above the ground: landing y +16 %)
         self._wv_masks()
 
     def _start_cells(self):
@@ -456,7 +463,7 @@ class RingFlow(RingUL):
         wp.launch(k_rf_Lb, n, inputs=[B['Lb'], U['Q'], Rg['dL'], Rg['flag']], outputs=[B['Gb'], Br['Gb']])
         bl = self.ball
         if bl is not None:
-            wp.launch(k_rf_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt'], self.hd['stuck'], self.hd['kn']], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
+            wp.launch(k_rf_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt'], self.hd['stuck'], self.hd['kn'], wp.float64(self.sy*1.5**.5)], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
             wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], self.tones], outputs=[g])
         wp.launch(k_gg_cell_adj, n, inputs=[B['Gb'], U['a'], U['Mc'], U['Vi']], outputs=[g, B['Gs'], B['Gbe']])
         wp.launch(k_gg_wall_adj, Kw, inputs=wall+[B['Gs']], outputs=[g, B['Gbe']])
@@ -551,9 +558,19 @@ class RingFlow(RingUL):
             nw = (self.tbd > 0) & ~self._stuck & (self.tbR > 0)
             if bool(nw.any()):
                 self._stuck = self._stuck | nw
-                self._Rst[nw] = self.tbR[nw]
-                self.tbkn[nw] = 2*self.Es*self.tbR[nw]*.05**.5                           # (Hertz's stiffness at a sinking of 5 % of the radius)
+                self.tbkn[nw] = 2*self.Es*self.tbR[nw]*.05**.5
                 self.tstuck[nw] = 1
+
+    def hold_start(self, x, muf):
+        """after the balls' step-start data: a held ball's friction limit on its own normal force at the step's start, mu F (d), not Hertz's: it rests at d > 0 with no force (with Hertz's limit the balls at rest stayed pinned, twice as many touching, landing y +13 %)"""
+        R = self.tbR
+        ng = torch.as_tensor([float(self.ball['ng'][k]) for k in range(3)], dtype=f64, device=self.dev)
+        d = R-((x*ng).sum(1)-float(self.tball[2]))
+        dr = .05*R
+        lin = self._stuck & (R > 0) & (d < dr)
+        if bool(lin.any()):
+            Fr = 4/3*self.Es*torch.sqrt(R[lin]*dr[lin])*dr[lin]
+            self.tbbound[lin] = muf*(Fr+self.tbkn[lin]*(d-dr)[lin]).clamp(min=0.)
 
     def ground_store(self, x):
         """the balls' elastic energy at x: normal, and the glue's as it was kept"""
@@ -570,7 +587,11 @@ class RingFlow(RingUL):
         if self.hold and bool(lin.any()):
             r_, dd, kn_ = R[lin], (d-dr)[lin], self.tbkn[lin]
             sr = torch.sqrt(r_*dr[lin])
-            En += float((8/15*Es*sr*dr[lin]**2+4/3*Es*sr*dr[lin]*dd+.5*kn_*dd*dd).sum())
+            Fr = 4/3*Es*sr*dr[lin]
+            fm = self.sy*1.5**.5*math.pi*r_*r_
+            dc = (-fm-Fr)/kn_
+            cl = Fr+kn_*dd < -fm
+            En += float((8/15*Es*sr*dr[lin]**2+torch.where(cl, Fr*dc+.5*kn_*dc*dc-fm*(dd-dc), Fr*dd+.5*kn_*dd*dd)).sum())
         lt = wp.to_torch(self.ball['lamt'], requires_grad=False)
         kt = self.tbkt
         ok = kt > 0
