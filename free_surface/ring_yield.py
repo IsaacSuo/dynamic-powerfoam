@@ -235,7 +235,7 @@ class RingYield(RingFlow):
     """X, r, V0: the foam at rest; pairs, A, c: its walls (geometry.npz); E, nu, sigma_y per unit density; kappa: the remainder's rate over the cell's; eps_cut: the plastic strain that takes a cell onto the current cut; agg: cells under this of the median volume are merged (0: none); hold, ledger: as ring_flow.py"""
     C_cap = 4.
 
-    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., eps_cut=.15, agg_merge=.1, hold=False, ledger=False, **kw):
+    def __init__(self, X, r, V0, pairs, A, c, E, nu, sigma_y, theta=.5, kappa=5., eps_cut=0., agg_merge=.1, hold=False, ledger=False, **kw):
         super().__init__(X, r, V0, pairs, A, c, E, nu, sigma_y, theta=theta, kappa=kappa, hold=hold, ledger=ledger, **kw)
         self.eps_cut, self.agg_merge = float(eps_cut), float(agg_merge)
         self.Wp_cell = self.Wp_half = 0.
