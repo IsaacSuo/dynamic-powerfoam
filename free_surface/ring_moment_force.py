@@ -174,3 +174,65 @@ def equil(W, ST, mass, V0, X0, P):
                 line.append('%.2f: dE %+.1e, end to end %.4f' % (s, sum(e)-sum(e0), e2e(y, bins)))
             print('    (K + %5.0f M) step: |dx| / h median %.2f, max %.1f; along it %s' % (c, float(nr.median())/h_, float(nr.max())/h_, '; '.join(line)), flush=True)
         print('    end to end now %.4f; energies tensor, volume, var, remainder, outer, ground %s' % (e2e(x, bins), ['%.2e' % v for v in e0]), flush=True)
+
+
+def lock(W, ST, mass, V0, X0, P, tag):
+    """the leg's lowest modes at a real state, viscosity out: which energy term carries each, where it lives; the same with the weightless springs' walls as free surfaces"""
+    n = W.n
+    zr = X0[:, 2]-X0[:, 2].min(); low = zr < .18
+    idx = -np.ones(n, int); idx[low] = np.arange(low.sum())
+    m = low[P[:, 0]] & low[P[:, 1]]; p = idx[P[m]]
+    _, lab = connected_components(coo_matrix((np.ones(len(p)), (p[:, 0], p[:, 1])), shape=(low.sum(), low.sum())), directed=False)
+    ids = np.nonzero(low)[0]
+    legs = sorted([ids[lab == k] for k in np.argsort(-np.bincount(lab))[:4]], key=lambda a_: X0[a_, 0].mean())
+    a0 = legs[0]; a_ = a0[zr[a0] < .15]
+    at = torch.as_tensor(a_, device=dev); N = len(a_)
+    Mv = np.repeat(V0[a_], 3)
+    x = ST.tx.clone()
+    names = {0: 'tensor', 1: 'volume', 2: 'var', 4: 'remainder', 5: 'outer', 6: 'ground'}
+
+    def force(y):
+        W.grad(y); W.reread_light(); _, g_ = W.grad(y)
+        return g_[at].flatten().clone()
+
+    def energy(y):
+        W.grad(y); W.reread_light(); W.grad(y)
+        t = W.tsum.clone(); t = t.sum(1) if t.dim() > 1 else t
+        return np.array([float(t[k]) for k in names])
+
+    for trim in (False, True):
+        W.update_ul(x)
+        if trim:
+            W.elastic_births = False
+            keep = (W._wi+W._wj > 0)
+            W.tlo, W.thi, W.tkey, W._wi, W._wj, W._qkey, W._qi, W._qj, W.tk0, W.tdl = W.tlo[keep], W.thi[keep], W.tkey[keep], W._wi[keep], W._wj[keep], W._qkey[keep], W._qi[keep], W._qj[keep], W.tk0[keep], W.tdl[keep]
+            W.update_ul(x)
+        W.grad(x); W.reread(); W.grad(x)
+        lo_, hi_ = W.tlo, W.thi
+        inleg = torch.zeros(n, dtype=torch.bool, device=dev); inleg[at] = True
+        wt = W._wi+W._wj
+        rest = torch.as_tensor(X0, device=dev, dtype=f64)
+        i_w, j_w = W._w[0], W._w[1]
+        touch = inleg[i_w] | inleg[j_w]
+        rd = (rest[i_w[touch]]-rest[j_w[touch]]).norm(dim=1)/float(np.median(V0)**(1/3))
+        f0 = force(x)
+        K = torch.zeros(3*N, 3*N, dtype=f64)
+        for j in range(3*N):
+            y = x.clone(); y[at[j//3], j % 3] += 1e-7
+            K[:, j] = ((force(y)-f0)/1e-7).cpu()
+        K = K.numpy()
+        w, Q = np.linalg.eig(K/Mv[:, None]); o = np.argsort(w.real); w, Q = w.real[o], Q.real[:, o]
+        print('%s %s: lowest real omega^2 %s; connected walls touching the leg %d, of them more than 3 h apart at rest %d; springs on the leg with weight %d, weightless %d' % (tag, 'no weightless' if trim else 'as run       ', np.round(w[:6], 0).tolist(), int(touch.sum()), int((rd > 3).sum()), int((wt[inleg[lo_] | inleg[hi_]] > 0).sum()), int((wt[inleg[lo_] | inleg[hi_]] == 0).sum())), flush=True)
+        if trim:
+            continue
+        e0 = energy(x)
+        for i in range(3):
+            u = torch.as_tensor(Q[:, i].reshape(N, 3), device=dev, dtype=f64)
+            u = u/float(u.abs().max())
+            eps = 1e-4*float(np.median(V0)**(1/3))
+            xp, xm = x.clone(), x.clone(); xp[at] += eps*u; xm[at] -= eps*u
+            q_ = (energy(xp)+energy(xm)-2*e0)/eps**2
+            Mu = float((torch.as_tensor(V0[a_], device=dev)[:, None]*u*u).sum())
+            sh = (torch.as_tensor(V0[a_], device=dev)[:, None]*u*u).sum(1); sh = sh/sh.sum()
+            s_ = zr[a_]
+            print('    mode %d, omega^2 %.0f: by term %s; lives on %.0f cells, mean rest height %.3f (leg is 0 .. .15)' % (i, w[i], {names[k]: round(float(q_[j_])/Mu, 0) for j_, k in enumerate(names)}, 1/float((sh*sh).sum()), float((sh.cpu().numpy()*s_).sum())), flush=True)
