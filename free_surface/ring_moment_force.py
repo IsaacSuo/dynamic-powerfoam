@@ -590,3 +590,79 @@ def ground_check(W, ST, V0):
             Ep, _ = W.grad(x1+e*dd); Em, _ = W.grad(x1-e*dd)
             fd = float(Ep-Em)/(2*e); an = float((g0*dd).sum())
             print('  %s, step %.0e h: central difference %.8e, gradient %.8e, rel. error %.2e' % (name, e/h_, fd, an, abs(fd-an)/max(abs(an), 1e-300)), flush=True)
+
+
+
+@wp.kernel(enable_backward=False)
+def k_contact_end(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: wp.array(dtype=int), sk: wp.array(dtype=int), Rs: wp.array(dtype=wp.float64), Kc: wp.array(dtype=wp.float64),
+                  bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), nv: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
+    """the pair's column read at the step's end (ring_yield.k_ry_contact before 11-03), for the timing against the AVF only"""
+    c = wp.tid()
+    i, k = si[c], sk[c]
+    fn[c] = wp.float64(0.0)
+    nv[c] = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
+    if i == k:
+        return
+    cs, wt = bpar[0], bpar[1]
+    dv = (cs*x[k]-(cs-wp.float64(1.0))*xn[k])-(cs*x[i]-(cs-wp.float64(1.0))*xn[i])
+    L = wp.length(dv)
+    nv[c] = dv/L
+    if L < Rs[c]:
+        lg = wp.log(L/Rs[c])
+        fn[c] = -wp.float64(2.0)*Kc[c]*lg/L
+        wp.atomic_add(terms, 7, c % 256, wt*Kc[c]*lg*lg)
+
+
+def kernel_times(W, ST, V0, reps=10):
+    """one evaluation at a real state, kernel by kernel on the GPU (warp's event timing): the step's start lists at x, then W.run() at a point off the start (the
+    contacts read with D != 0), against the captured graph's replay; and the pair contact as the AVF against the end-point read alone on the same list"""
+    import time
+    from collections import defaultdict
+    from free_surface.ring_yield import k_ry_contact
+    x = ST.tx.clone()
+    h_ = float(np.median(V0)**(1/3))
+    W.update_ul(x)
+    if W.selfc is not None:
+        W.update_self(x)
+    W.grad(x); W.reread()
+    torch.manual_seed(2)
+    ht = x@W._recut.ng-W._recut.c0 if W.ground_cut else x[:, 2]
+    d1 = torch.randn_like(x); d1 = d1/d1.norm(dim=1).max()
+    x1 = x+.02*h_*d1*(ht < 2*h_)[:, None]
+    W.tx.copy_(x1)
+    for _ in range(2):
+        W.run()
+    torch.cuda.synchronize()
+    acc, cnt = defaultdict(float), defaultdict(int)
+    with wp.ScopedTimer('evaluation', print=False, cuda_filter=wp.TIMING_KERNEL, synchronize=True) as tm:
+        for _ in range(reps):
+            W.run()
+    for r_ in tm.timing_results:
+        acc[r_.name] += r_.elapsed; cnt[r_.name] += 1
+    tot = sum(acc.values())/reps
+    for _ in range(3):
+        W.grad(x1)
+    torch.cuda.synchronize(); t_ = time.perf_counter()
+    for _ in range(50):
+        W.grad(x1)
+    torch.cuda.synchronize(); tg = (time.perf_counter()-t_)/50
+    print('one evaluation: the graph replays in %.3f ms; its kernels on the GPU %.3f ms (%d launches)' % (1e3*tg, tot, sum(cnt.values())//reps), flush=True)
+    for nm, v in sorted(acc.items(), key=lambda kv: -kv[1])[:14]:
+        print('  %6.4f ms  %5.1f %%  x%d  %s' % (v/reps, 100*v/reps/tot, cnt[nm]//reps, nm[:60]), flush=True)
+    if W.selfc is not None:
+        sc, bl = W.selfc, W.ball
+        U = W.ul
+        terms = wp.zeros((9, 256), dtype=wp.float64, device=W.dev)
+        Ec = wp.zeros(sc['K'], dtype=wp.float64, device=W.dev)
+        a1 = [W.xw, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['Kc'], bl['par']]
+        runs = dict(avf=lambda: wp.launch(k_ry_contact, sc['K'], inputs=a1+[sc['gq']], outputs=[sc['fn'], sc['nv'], Ec, terms]),
+                    end=lambda: wp.launch(k_contact_end, sc['K'], inputs=a1, outputs=[sc['fn'], sc['nv'], terms]))
+        for nm, f in runs.items():
+            for _ in range(5):
+                f()
+            torch.cuda.synchronize(); t_ = time.perf_counter()
+            for _ in range(200):
+                f()
+            torch.cuda.synchronize()
+            print('  the pair contact alone, %s: %.4f ms a launch over the capacity %d (%d pairs listed)' % (nm, 1e3*(time.perf_counter()-t_)/200, sc['K'], int((W.tsc['i'] != W.tsc['k']).sum())), flush=True)
+        W.grad(x1)

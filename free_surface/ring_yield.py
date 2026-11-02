@@ -832,6 +832,7 @@ class RingYield(RingFlow):
         hg = x@ng-c0
         rho = self._rho0*torch.einsum('fba,b->fa', self.ty['Fn'][self._gid], ng).norm(dim=1)
         near = torch.nonzero(hg < rho+.5*self._h)[:, 0]
+        near = near[torch.argsort(hg[near]/rho[near])]                                    # (the pressing ones first: their threads together in whole warps)
         m = len(near)
         t['i'].zero_(); t['Rs'].zero_(); t['Kc'].zero_()
         if m:

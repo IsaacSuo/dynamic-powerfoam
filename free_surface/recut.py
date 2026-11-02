@@ -7,6 +7,8 @@ A_patch,i / (2 r_i) (a volume moves only by its boundary's normal velocity; chec
 retess_check.py), solved by CG preconditioned by its diagonal; the full step halved until every cell keeps a positive
 volume and the residual falls; it stops when the volumes hold to tol or the step reaches the rounding. A hidden site
 (no volume: no derivative) first gets the weight that makes it own its position (w_i = max_j (w_j - |p_i - p_j|^2))."""
+import math
+
 import numpy as np
 import torch
 
@@ -139,14 +141,36 @@ class Recut:
         self.stats['cg'] += k+1
         return x
 
-    def repair(self, p, r, hid):
-        """each hidden site's weight raised until it owns its own position (over the sites whose balls could reach it)"""
+    def repair(self, p, r, hid, room=1.5):
+        """the hidden or empty sites freed, and every site their raise in turn dominates: a site i that some j dominates at its own position, w_j - |p_i - p_j|^2 > w_i
+        (so i is not in its cell), is raised to just above, w_i = max(w_i, max_j (w_j - |p_i - p_j|^2) (1 + 1e-9) + 1e-12 max w), the rule as before, now for all such
+        sites at once in rounds to the fixed point with no cut between (the rounds relax the difference constraints w_j - w_i <= |p_i - p_j|^2: a raise can dominate a
+        neighbour); the flagged ones (hid, the cut's hidden or empty) in the first round whatever their excess (ties, as before). The pairs: j's ball reaching p_i with
+        room, rebuilt when a radius outgrows it. (11-03 the lion's impact: a site at a time with a cut each round, 40 rounds, 88 cuts, 8.8 s for 3 hidden sites whose
+        raises dominated 3551 others; here 83 rounds on the GPU and no cut, the same radii to 1.6e-7)"""
+        n, dev = len(p), p.device
         w = r*r
-        for i_ in torch.nonzero(hid).flatten().tolist():
-            d2 = ((p-p[i_])**2).sum(1)
-            reach = (d2 < (r.max()+r[i_])**2); reach[i_] = False
-            need = float((w[reach]-d2[reach]).max())
-            w[i_] = max(float(w[i_]), need*(1+1e-9)+1e-12*float(w.max()))
+        tiny = 1e-12*float(w.max())
+        first = hid.clone()
+        I = rl = None
+        for _ in range(10*n+10):
+            rr = torch.sqrt(w)
+            if I is None or bool((rr > rl).any()):
+                rl = room*rr
+                I_, J_, D_ = [], [], []
+                for c0 in range(0, n, 1024):
+                    D = torch.cdist(p[c0:c0+1024], p)
+                    a, b = torch.nonzero(D < rl[None, :], as_tuple=True)
+                    k = a+c0 != b
+                    I_.append(a[k]+c0); J_.append(b[k]); D_.append(D[a[k], b[k]]**2)
+                I, J, d2 = torch.cat(I_), torch.cat(J_), torch.cat(D_)
+            m = torch.full((n,), -math.inf, dtype=w.dtype, device=dev).scatter_reduce(0, I, w[J]-d2, 'amax', include_self=True)
+            ex = m-w
+            bad = (ex > -tiny) | first
+            first = torch.zeros_like(first)
+            if not bool(bad.any()):
+                break
+            w = torch.where(bad, torch.maximum(w, (w+ex)*(1+1e-9)+tiny), w)
         return torch.sqrt(w)
 
     def solve_radii(self, p, r, Vt, tol=1e-9, maxit=200, r_base=None):
@@ -192,8 +216,8 @@ class Recut:
             if float((dw/w).abs().max()) <= 4*torch.finfo(w.dtype).eps:            # the step changes no weight: converged
                 break                                                              # (10-24: a 1e-10 bound stopped tiny cells, big
                                                                                    # radii, at 6e-9 volume error)
-            st, nr = 1., float(res.norm())
-            while True:
+            st, nr = min(1., .5/float((dw/w).abs().max())), float(res.norm())   # (the first trial moves no weight more than half itself: 11-03 the lion's impact, a step of
+            while True:                                                            #  dw / w up to 2e15 halved from 1, each trial a cut; 88 cuts -> 18 with the repair above)
                 wt = w+st*dw
                 if bool((wt > 0).all()):
                     try:

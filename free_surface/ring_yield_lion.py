@@ -53,6 +53,8 @@ a_.add_argument('--colour', type=float, default=0., help='ring_moment.py\'s colo
 a_.add_argument('--jump', action='store_true', help='with --colour: a wall without a spring counts by the jump test (RingMoment.set_jump_share), no weightless springs')
 a_.add_argument('--ground-cut', action='store_true', help='the ground as a plane of the cut (MergedUL.set_ground_cut), the Hertz ground off')
 a_.add_argument('--watch-ground', action='store_true', help='with --ground-cut: after every step, the centre points under the plane and what their cells had at the step\'s start')
+a_.add_argument('--probe-kernels', action='store_true', help='at the loaded state: one evaluation kernel by kernel (ring_moment_force.kernel_times), then stop')
+a_.add_argument('--cuda-profile', action='store_true', help='cudaProfilerStart / Stop around the steps (nsys --capture-range=cudaProfilerApi)')
 args = a_.parse_args()
 E, nu, C0, v0 = 10648.614517785627/1000, .3912951704721983, -.2, (0., 0., -.245)
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
@@ -125,6 +127,8 @@ def rest_radii():
     W._rr0.copy_(r0_t)
     if getattr(W, 'jump_share', False):
         W._site_blend = W._blend(W.X)
+    if getattr(W, 'selfc', None) is not None:                                              # (the contact list's capacity is its arrays': a checkpoint's K of another capacity, 262144
+        W.selfc['K'] = W.selfc['i'].shape[0]                                               #  before 11-03, read over 65536 arrays was an illegal access)
 
 
 if args.probe_jump:
@@ -170,6 +174,10 @@ if args.probe_ground:
     from free_surface.ring_moment_force import ground_check
     ground_check(W, ST, V0)
     raise SystemExit
+if args.probe_kernels:
+    from free_surface.ring_moment_force import kernel_times
+    kernel_times(W, ST, V0)
+    raise SystemExit
 if args.probe_contact:
     from free_surface.ring_moment_force import contact_check
     contact_check(W, ST, V0)
@@ -192,10 +200,15 @@ if args.probe_leg:
     raise SystemExit
 print('the ground: Hertz modulus %.3f (x %g), in the kernel %.3f' % (W.Es, args.ground_k, float(W.tball[3])), flush=True)
 t0 = t_saved = time.time()
+if args.cuda_profile:
+    torch.cuda.synchronize(); torch.cuda.cudart().cudaProfilerStart()
 nit, npr, nout = [], [], []
+tbeg, tsol, rcg = [], [], [W._recut.stats['cg']]
 nsteps = int(round(args.T/args.dt))
 for s in range(s_first, nsteps+1):
-    e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
+    tb_ = time.time(); ST.begin(); ts_ = time.time()                                       # (the step's start, the cut and the lists, apart from the solve)
+    e_, its, g2 = ST.solve(tol, lambda g_: .5*tol)
+    tbeg.append(ts_-tb_); tsol.append(time.time()-ts_); rcg.append(W._recut.stats['cg'])
     if not math.isfinite(g2) or math.sqrt(g2) > tol:
         tr_ = ST.stats['trace']
         gz = wp_t(ST.a['gz']).norm(dim=1); top = torch.argsort(gz, descending=True)[:6]
@@ -260,11 +273,13 @@ for s in range(s_first, nsteps+1):
             if W.jump_share:
                 us_ = W.ul_stats
                 print('  share: walls without a spring %d, over .5 %d, between .1 and .9 %d, mean %.3f' % (us_.get('share_n', 0), us_.get('share_hi', 0), us_.get('share_mid', 0), us_.get('share_mean', 0.)), flush=True)
-        print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_v %.3e, balance / start %.4f; com up %.5f, lowest %.4f; e^L %.3f..%.3f; F_e singular %.3f..%.3f; touching %d, ground/weight %.2f; walls %d, new %d, closed %d; radii %d (fails %d), flips %d; last %d steps: products %d, outer median %d max %d, rejected %d' % (
+        print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_v %.3e, balance / start %.4f; com up %.5f, lowest %.4f; e^L %.3f..%.3f; F_e singular %.3f..%.3f; touching %d, ground/weight %.2f; walls %d, new %d, closed %d; radii %d (fails %d), flips %d; last %d steps: products %d, outer median %d max %d, rejected %d; the starts %.1f s, the solves %.1f s, radii CG iterations %d' % (
             s*args.dt, time.time()-t0, ek, ed, ev, e6_, W.Wv, (ek+ed+ev+e6_+e7_+W.Wv+eg)/H0, float((M3*ST.tx)[:, 2].sum())/M, float(ST.tx[:, 2].min()), float(torch.exp(Lm).min()), float(torch.exp(Lm).max()), float(sf[:, 2].min()), float(sf[:, 0].max()),
-            int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wtot, W.ul_stats.get('walls', 0), W.ul_stats.get('born', 0), W.ul_stats.get('closed', 0), W.ul_stats.get('radii_it', 0), W.ul_stats.get('radii_fail', 0), W.ul_stats.get('flips', 0), args.every, sum(npr[-args.every:]), int(np.median(nout[-args.every:])), max(nout[-args.every:]), ST.stats['rejected']), flush=True)
+            int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wtot, W.ul_stats.get('walls', 0), W.ul_stats.get('born', 0), W.ul_stats.get('closed', 0), W.ul_stats.get('radii_it', 0), W.ul_stats.get('radii_fail', 0), W.ul_stats.get('flips', 0), args.every, sum(npr[-args.every:]), int(np.median(nout[-args.every:])), max(nout[-args.every:]), ST.stats['rejected'], sum(tbeg[-args.every:]), sum(tsol[-args.every:]), rcg[-1]-rcg[max(len(rcg)-1-args.every, 0)]), flush=True)
         if time.time()-t_saved > 60:
             save(); t_saved = time.time()
+if args.cuda_profile:
+    torch.cuda.synchronize(); torch.cuda.cudart().cudaProfilerStop()
 save()
 ni, no, np_ = np.array(nit), np.array(nout), np.array(npr)
 print('steps %d of %d; outer per step: median %d, 99 %% %d, max %d; products per step: median %d, max %d, total %d' % (len(ni), nsteps, np.median(no), np.percentile(no, 99), no.max(), np.median(np_), np_.max(), np_.sum()), flush=True)

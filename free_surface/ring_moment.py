@@ -120,7 +120,7 @@ class RingMoment(RingYield):
         st['share_mean'] = float(mw[k].mean()) if len(k) else 0.
         return mw
 
-    def set_colour_contact(self, sigma, K=262144):
+    def set_colour_contact(self, sigma, K=65536):
         """the colour code on the rest cut, each cell's rho0 and the contact list's buffers, before prepare(); K the list's capacity. E* of two like bodies, E / 2 (1 - nu^2), as closure_warp.py"""
         n, dev = self.n, self.dev
         self._col_Q = color_code(self, self._rr0, sigma)
@@ -181,6 +181,8 @@ class RingMoment(RingYield):
         x = x.detach()
         F = self.ty['Fn'][self._gid]
         a, b, ra, rb, pw, L = self.contact_pairs(x, F, (.5 if self.jump_share else 1.)*self._h)   # (a step's relative motion is under .3 h; with the share every near pair is a candidate)
+        o = torch.argsort(L/(ra+rb))                                                       # (the pressing pairs first: k_ry_contact's AVF runs in their threads only, so packed they fill
+        a, b, ra, rb, pw, L = a[o], b[o], ra[o], rb[o], pw[o], L[o]                        #  whole warps; scattered, 648 of 12166 at the lion's impact, it took .17 ms a launch, .035 at the end)
         m = len(a); K = self.selfc['K']
         if m > K:
             raise RuntimeError('update_self: %d contact pairs over the capacity %d' % (m, K))
