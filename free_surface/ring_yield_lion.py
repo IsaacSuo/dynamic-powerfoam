@@ -93,6 +93,10 @@ if args.load_state is not None:
     W.true_blocks = args.true_blocks; ST._pre_age = 0; ST.aa_m = args.aa
     fg.copy_(-args.g*M3*up); wp.to_torch(ST.a['fg'], requires_grad=False).copy_(-args.g*M3*up)      # (the command line's gravity over the checkpoint's: fg shares the array the state was just written into)
     print('gravity on the sites now: %.4e, asked %.4e' % (float(wp.to_torch(ST.a['fg'], requires_grad=False).sum(0)[2]), -args.g*float(M3.sum())), flush=True)
+    if args.no_elastic_births:                                                              # (the checkpoint's weightless springs out: their walls are free surfaces)
+        W.elastic_births = False
+        keep_ = W._wi+W._wj > 0
+        W.tlo, W.thi, W.tkey, W._wi, W._wj, W._qkey, W._qi, W._qj, W.tk0, W.tdl = W.tlo[keep_], W.thi[keep_], W.tkey[keep_], W._wi[keep_], W._wj[keep_], W._qkey[keep_], W._qi[keep_], W._qj[keep_], W.tk0[keep_], W.tdl[keep_]
     s_first = ck_['s']+1
     print('from step %d' % ck_['s'], flush=True)
 if args.probe_lock:
