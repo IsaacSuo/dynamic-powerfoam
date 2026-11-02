@@ -33,6 +33,7 @@ a_.add_argument('--start-frames', type=Path, default=None, help='restart from a 
 a_.add_argument('--start-k', type=int, default=0)
 a_.add_argument('--save-state', type=int, nargs='*', default=[])
 a_.add_argument('--load-state', type=Path, default=None)
+a_.add_argument('--rest-ground', action='store_true', help='the ground on the rest radii, not the cut\'s')
 a_.add_argument('--probe-unstable', action='store_true', help='at the loaded state: each leg\'s lowest modes, then stop')
 a_.add_argument('--probe-lock', action='store_true', help='at the loaded state: what stiffens the leg, then stop')
 a_.add_argument('--probe-equil', action='store_true', help='at the loaded state: is a leg at an equilibrium, then stop')
@@ -64,6 +65,7 @@ ST.aa_m = args.aa
 ST.hold_after = args.hold_after
 W.true_blocks = args.true_blocks
 ST._pre_age = 0
+W.rest_ground = args.rest_ground
 ST.set_state(W.X.clone(), torch.tensor(v0, dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
 if args.no_elastic_births:
     W.elastic_births = False

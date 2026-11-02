@@ -28,6 +28,14 @@ class RingMoment(RingYield):
 
     ghost_in_fit = False                                                                   # (a spring without a wall has no flux: the volume is the walls')
 
+    rest_ground = False                                                                    # (the ground's radius a cell's at rest, not the cut's: the ground's energy a function of x alone)
+
+    def _cut(self, x):
+        super()._cut(x)
+        if self.rest_ground and self.ball is not None:
+            self.tbR.copy_(self._tbR0)
+            self.tbkn.copy_(2*self.Es*self.tbR.clamp(min=0.)*.05**.5)
+
     def _radii_start(self):
         """the weights r^2 extrapolated over the last step: the same solve, fewer cuts"""
         r1, r0 = self._ulr, getattr(self, '_ulr_last', None)
