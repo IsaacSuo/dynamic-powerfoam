@@ -57,3 +57,44 @@ def probe(W, ST, mass, fg, V0, X0, P, dt):
             xp, xm = x.clone(), x.clone(); xp[below] += e_*rot; xm[below] -= e_*rot
             ep, em = terms(xp), terms(xm)
             print('    joint at slice %d in the ground plane, torque, + straightens: %s; viscous torque the left force gives %+.1e; angular speed there %+.2f' % (j, {k: float('%+.1e' % (-(ep[k]-em[k])/(2*e_))) for k in ep}, float((res[below]*rot).sum()), float((m3[below]*v[below]*rot).sum()/(m3[below]*rot*rot).sum())), flush=True)
+
+
+def slices(W, ST, mass, V0, X0, P):
+    """slice by slice along a leg at a real state: the volume state, the fit, whether each cell's R follows the slice's own turn, the energy in the tensor and in the remainder"""
+    n = W.n
+    x = ST.tx.clone(); W.update_ul(x); W.grad(x); W.reread(); W.grad(x)
+    Y, T = W.ty, W.tr
+    zr = X0[:, 2]-X0[:, 2].min(); low = zr < .18
+    idx = -np.ones(n, int); idx[low] = np.arange(low.sum())
+    m = low[P[:, 0]] & low[P[:, 1]]; p = idx[P[m]]
+    _, lab = connected_components(coo_matrix((np.ones(len(p)), (p[:, 0], p[:, 1])), shape=(low.sum(), low.sum())), directed=False)
+    ids = np.nonzero(low)[0]
+    legs = sorted([ids[lab == k] for k in np.argsort(-np.bincount(lab))[:4]], key=lambda a_: X0[a_, 0].mean())
+    ed = np.linspace(0., .17, 8)
+    Xm = Y['Ff']-Y['vm'][:, None, None]*Y['Rz']
+    lead = W._gid == torch.arange(n, device=dev)
+    e = .5*((Xm@Y['Mtt'])*Xm).sum((1, 2))*lead
+    ms = W._m_s; lo, hi = W.tlo, W.thi; g = W._gid
+    d = x[hi]-x[lo]
+    wi, wj, qi, qj = T['wi'][:ms], T['wj'][:ms], T['qi'][:ms], T['qj'][:ms]
+    ri = d-torch.einsum('fab,fb->fa', Y['Ff'][g[lo]], qi); rj = d-torch.einsum('fab,fb->fa', Y['Ff'][g[hi]], qj)
+    er = torch.zeros(n, dtype=f64, device=dev).index_add(0, lo, .5*wi*(ri*ri).sum(1)).index_add(0, hi, .5*wj*(rj*rj).sum(1))
+    rel = torch.zeros(n, dtype=f64, device=dev).index_add(0, lo, (ri*ri).sum(1)).index_add(0, hi, (rj*rj).sum(1))
+    den = torch.zeros(n, dtype=f64, device=dev).index_add(0, lo, (qi*qi).sum(1)).index_add(0, hi, (qj*qj).sum(1))
+    Xr = torch.as_tensor(X0, device=dev, dtype=f64)
+    print('whole body: tensor %.3e, remainder %.3e; e^L %.3f..%.3f; lowest z %.3f, KE %.3e' % (float(e.sum()), float(er.sum()), float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()), float(x[:, 2].min()), float(.5*(mass[:, None]*ST.tv**2).sum())), flush=True)
+    sv = torch.linalg.svdvals(Y['Ff'].cpu()).to(dev); dt = torch.linalg.det(Y['Ff'])
+    for li, a_ in enumerate(legs[:3]):
+        bins = [a_[(zr[a_] >= ed[i]) & (zr[a_] < ed[i+1])] for i in range(7)]
+        print('leg %d: end to end %.4f' % (li, float((x[torch.as_tensor(bins[-1], device=dev)].mean(0)-x[torch.as_tensor(bins[0], device=dev)].mean(0)).norm())), flush=True)
+        for i, b in enumerate(bins):
+            bt = torch.as_tensor(b, device=dev)
+            c0, c1 = Xr[bt].mean(0), x[bt].mean(0)
+            U, _, Vt = torch.linalg.svd(((x[bt]-c1).T@(Xr[bt]-c0)).cpu())
+            S = torch.diag(torch.tensor([1., 1., float(torch.linalg.det(U@Vt))], dtype=f64))
+            Rg = (U@S@Vt).to(dev)
+            Rc = Y['Rz'][g[bt]]
+            cs = (((Rc.transpose(1, 2)@Rg).diagonal(dim1=1, dim2=2).sum(1)-1)/2).clamp(-1., 1.)
+            ang = torch.rad2deg(torch.arccos(cs))
+            seg = float((x[torch.as_tensor(bins[i+1], device=dev)].mean(0)-c1).norm()/(Xr[torch.as_tensor(bins[i+1], device=dev)].mean(0)-c0).norm()) if i < 6 else 0.
+            print('   slice %d: length ratio %.2f; slice turned %.0f deg from rest; cell R off the slice\'s turn: median %.0f, 90 %% %.0f deg; e^L median %.2f (%.2f..%.2f); det F median %.2f, min %.2f; sv median %.2f %.2f; tensor %.2e, remainder %.2e; |r| / |q| rms %.2f' % (i, seg, float(torch.rad2deg(torch.arccos(((Rg.diagonal().sum()-1)/2).clamp(-1., 1.)))), float(ang.median()), float(torch.quantile(ang, .9)), float(torch.exp(W.tul['Ln'][bt]).median()), float(torch.exp(W.tul['Ln'][bt]).min()), float(torch.exp(W.tul['Ln'][bt]).max()), float(dt[bt].median()), float(dt[bt].min()), float(sv[bt, 0].median()), float(sv[bt, 2].median()), float(e[bt].sum()), float(er[bt].sum()), float((rel[bt].sum()/den[bt].sum()).sqrt())), flush=True)

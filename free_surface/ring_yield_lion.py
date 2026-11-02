@@ -94,8 +94,8 @@ if args.load_state is not None:
     s_first = ck_['s']+1
     print('from step %d' % ck_['s'], flush=True)
 if args.probe_leg:
-    from free_surface.ring_moment_force import probe
-    probe(W, ST, mass, fg, V0, X0, g['pairs'], args.dt)
+    from free_surface.ring_moment_force import probe, slices
+    slices(W, ST, mass, V0, X0, g['pairs'])
     raise SystemExit
 t0 = t_saved = time.time()
 nit, npr, nout = [], [], []
