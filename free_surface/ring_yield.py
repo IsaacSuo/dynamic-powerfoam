@@ -31,45 +31,190 @@ from free_surface.ul_plastic import k_Aul_adj2, k_Ge, k_Ge_adj, k_gg_cell, k_gg_
 f64 = torch.float64
 
 
+GL8 = np.polynomial.legendre.leggauss(8)
+GL8 = np.concatenate([.5*(1+GL8[0]), .5*GL8[1]])                                       # (Gauss-Legendre on [0, 1], nodes then weights: as an array, since warp 1.10 writes a
+                                                                                        # kernel's float literal in single precision, wp.float64(0.96028985649753) read 0.96028983593)
+
+
+@wp.func
+def w_over_expm1(w: wp.float64):
+    """w / (e^w - 1), its series near 0"""
+    if wp.abs(w) < wp.float64(1e-4):
+        return wp.float64(1.0)-wp.float64(0.5)*w+w*w/wp.float64(12.0)
+    return w/(wp.exp(w)-wp.float64(1.0))
+
+
+@wp.func
+def avf_col(a: wp.float64, b: wp.float64, ss: wp.float64, gq: wp.array(dtype=wp.float64)):
+    """int_a^b (s + ss) (s - ss) / (1 - e^(ss - s)) ds, s = ln lambda: the column's AVF potential over Kc, (s^2 - ss^2) / (e^s - e^ss) e^s with the pole at s = ss
+    taken out, so the integrand is smooth on the real line (its poles at ss + 2 pi i k) and 8 nodes reach the double precision"""
+    acc = wp.float64(0.0)
+    for k in range(8):
+        s = a+(b-a)*gq[k]
+        acc = acc+gq[8+k]*(s+ss)*w_over_expm1(ss-s)
+    return (b-a)*acc
+
+
+@wp.func
+def asinh_(v: wp.float64):
+    av = wp.abs(v)
+    r = wp.log(av+wp.sqrt(av*av+wp.float64(1.0)))
+    if v < wp.float64(0.0):
+        r = -r
+    return r
+
+
+@wp.func
+def avf_pair_piece(xa: wp.float64, xb: wp.float64, tu: wp.float64, Lp: wp.float64, a: wp.float64, dp: wp.vec3d, Dh: wp.vec3d, R: wp.float64, K: wp.float64, Es: wp.float64,
+                   gq: wp.array(dtype=wp.float64)):
+    """one piece of the pair's path inside the column, in xi: tau = tu + (Lp / a) sinh xi, L = Lp cosh xi (tu the line's nearest point, Lp its distance), so the
+    integrands are smooth even where the path passes near the centre: grad E dtau = (2 K / a) ln(L / R) d^ dxi, (E - Es) / tau dtau with Es the inside law's own value
+    at the start, K ln(L_s / R)^2 (so tau = 0 is no pole, even for a start outside); Gauss-Legendre 8"""
+    F = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
+    P = wp.float64(0.0)
+    for j in range(8):
+        xi = xa+(xb-xa)*gq[j]
+        sh = wp.sinh(xi)
+        ch = wp.cosh(xi)
+        L = Lp*ch
+        dh = (dp+(Lp*sh)*Dh)/L
+        lg = wp.log(L/R)
+        tau = tu+(Lp/a)*sh
+        F = F+(gq[8+j]*wp.float64(2.0)*K/a*lg)*dh
+        P = P+gq[8+j]*(K*lg*lg-Es)/tau*(Lp/a)*ch
+    return (xb-xa)*F, (xb-xa)*P
+
+
 @wp.kernel(enable_backward=False)
 def k_ry_contact(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: wp.array(dtype=int), sk: wp.array(dtype=int), Rs: wp.array(dtype=wp.float64), Kc: wp.array(dtype=wp.float64),
-                 bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), nv: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
-    """a contact (i, k) on term 7 (6 is the ground's), at the step-end centres: the two half cells along their line as a column under uniaxial strain, lambda = |d| / Rs < 1,
-    E = Kc (ln lambda)^2 (Kc = 1/2 M V_c, ring_moment.py), infinite as the centres meet; fn = -dE/d|d| = -2 Kc ln(lambda) / |d|, the push; padding i == k"""
+                 bpar: wp.array(dtype=wp.float64), gq: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), nv: wp.array(dtype=wp.vec3d), Ec: wp.array(dtype=wp.float64),
+                 terms: wp.array2d(dtype=wp.float64)):
+    """a contact (i, k) on term 7 (6 is the ground's): the two half cells along their line as a column under uniaxial strain, lambda = |d| / Rs < 1, E = Kc (ln lambda)^2
+    (Kc = 1/2 M V_c, ring_moment.py), infinite as the centres meet. Read over the step as the average vector field (11-03): the force int_0^1 grad E(d_s + tau D) dtau,
+    D = d_e - d_s, the gradient of Phi = int_0^1 (E(d_s + tau D) - E(d_s)) / tau dtau, so its work F . D is E(d_e) - E(d_s) exactly and the solve stays a minimisation
+    (Gonzalez's form along (d_s + d_e) conserves angular momentum too but is no gradient). The path split where it enters and leaves the column and at its nearest
+    point, each part in xi (avf_pair_piece) cut to lengths <= 1; a path through the centre reads non-finite (a refused trial). fn |F|, nv -F / |F| (the push and its
+    line, i to k), Ec = E(d_e) the stored energy; padding i == k"""
     c = wp.tid()
     i, k = si[c], sk[c]
     fn[c] = wp.float64(0.0)
     nv[c] = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
+    Ec[c] = wp.float64(0.0)
     if i == k:
         return
     cs, wt = bpar[0], bpar[1]
-    dv = (cs*x[k]-(cs-wp.float64(1.0))*xn[k])-(cs*x[i]-(cs-wp.float64(1.0))*xn[i])
-    L = wp.length(dv)
-    nv[c] = dv/L
-    if L < Rs[c]:
-        lg = wp.log(L/Rs[c])
-        fn[c] = -wp.float64(2.0)*Kc[c]*lg/L
-        wp.atomic_add(terms, 7, c % NSLOT, wt*Kc[c]*lg*lg)
+    one = wp.float64(1.0)
+    zero = wp.float64(0.0)
+    R, K = Rs[c], Kc[c]
+    ds = xn[k]-xn[i]
+    de = (cs*x[k]-(cs-one)*xn[k])-(cs*x[i]-(cs-one)*xn[i])
+    D = de-ds
+    Ls = wp.length(ds)
+    Le = wp.length(de)
+    Es = zero
+    if Ls < R:
+        Es = K*wp.log(Ls/R)*wp.log(Ls/R)
+    if Le < R:
+        Ec[c] = K*wp.log(Le/R)*wp.log(Le/R)
+    a2 = wp.dot(D, D)
+    F = wp.vec3d(zero, zero, zero)
+    phi = zero
+    if a2 <= wp.float64(1e-24)*R*R:                                                 # (no relative motion: the end's gradient)
+        if Le < R:
+            F = (wp.float64(2.0)*K*wp.log(Le/R)/(Le*Le))*de
+            phi = wp.dot(F, D)
+    else:
+        a = wp.sqrt(a2)
+        Dh = D/a
+        tu = -wp.dot(ds, D)/a2
+        dp = ds+tu*D
+        Lp = wp.length(dp)
+        tc = wp.clamp(tu, zero, one)
+        if wp.length(ds+tc*D) < R:
+            if Lp < wp.float64(1e-12)*a and tu > zero and tu < one:
+                phi = wp.log(zero)*zero                                                 # (through the centre: NaN, refused)
+                F = wp.vec3d(phi, phi, phi)
+            else:
+                Lp = wp.max(Lp, wp.float64(1e-12)*a)
+                hw = wp.sqrt(R*R-Lp*Lp)/a
+                q1 = wp.clamp(tu-hw, zero, one)
+                q3 = wp.clamp(tu+hw, zero, one)
+                Ex = K*wp.log(Ls/R)*wp.log(Ls/R)                                        # (the inside law at the start; Es where it is inside)
+                if q1 > zero:                                                           # (a start outside: (Ex - Es) / tau over the inside part in closed form)
+                    phi = phi+(Ex-Es)*wp.log(q3/q1)
+                for side in range(2):
+                    ta = q1
+                    tb = tc
+                    if side == 1:
+                        ta = tc
+                        tb = q3
+                    if tb > ta:
+                        xa = asinh_(a*(ta-tu)/Lp)
+                        xb = asinh_(a*(tb-tu)/Lp)
+                        m = wp.min(int(wp.ceil(wp.abs(xb-xa))), 64)
+                        if m < 1:
+                            m = 1
+                        for p in range(m):
+                            Fp, Pp = avf_pair_piece(xa+(xb-xa)*wp.float64(p)/wp.float64(m), xa+(xb-xa)*wp.float64(p+1)/wp.float64(m), tu, Lp, a, dp, Dh, R, K, Ex, gq)
+                            F = F+Fp
+                            phi = phi+Pp
+                if Es > zero and q3 < one:                                              # (after leaving: E = 0, the start's part -E_s / tau)
+                    phi = phi+Es*wp.log(q3)
+    f = wp.length(F)
+    if f > zero or f != f:
+        fn[c] = f
+        nv[c] = -F/f
+    wp.atomic_add(terms, 7, c % NSLOT, wt*phi)
 
 
 @wp.kernel(enable_backward=False)
 def k_ry_ground(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), gi: wp.array(dtype=int), Rs: wp.array(dtype=wp.float64), Kc: wp.array(dtype=wp.float64),
-                gpl: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), terms: wp.array2d(dtype=wp.float64)):
-    """the ground (RingYield.set_ground_cut) on term 6: a cell against its own mirror image, k_ry_contact's column on the pair (i, i') at the step-end centre, |d| = 2 h,
-    Rs = rho_i: lambda = h / rho_i, and the real body's half of the pair, E = Kc (ln lambda)^2, Kc = 1/4 M V0_i; along the plane's normal only, so frictionless; infinite
-    as the centre reaches the plane (h <= 0 reads non-finite, a refused trial); fn = -dE/dh, the push. gpl = (n, c0); padding Kc = 0"""
+                gpl: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64), gq: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), Eg: wp.array(dtype=wp.float64),
+                terms: wp.array2d(dtype=wp.float64)):
+    """the ground (RingYield.set_ground_cut) on term 6: a cell against its own mirror image, the self contact's column on the pair (i, i'), |d| = 2 h, Rs = rho_i:
+    lambda = h / rho_i, and the real body's half of the pair, E = Kc (ln lambda)^2, Kc = 1/4 M V0_i; along the plane's normal only, so frictionless. Read over the step
+    as the average vector field (11-03): the force the secant -(E(h_e) - E(h_s)) / (h_e - h_s), so its work f (h_e - h_s) is the energy's fall exactly (the midpoint
+    rule's dKE = F . dx; read at the end, -E'(h_e), each step lost E's Bregman gap, 5.65 % of the lion's energy over the landing), and in the objective its potential
+    Phi(h_e) = int_hs^he (E(u) - E(h_s)) / (u - h_s) du: in s = ln lambda avf_col on the part in contact, the touch s = 0 split off, and the pole at u = h_s of a start
+    outside or an end outside in closed form, K s_s^2 ln. Infinite as h_e -> 0, so no centre reaches the plane (h_e <= 0 reads non-finite, a refused trial). fn = the
+    push -dPhi/dh_e, Eg = E(h_e) the stored energy. gpl = (n, c0); gq = GL8; padding Kc = 0"""
     c = wp.tid()
     fn[c] = wp.float64(0.0)
-    if Kc[c] == wp.float64(0.0):
+    Eg[c] = wp.float64(0.0)
+    K = Kc[c]
+    if K == wp.float64(0.0):
         return
     i = gi[c]
     cs, wt = bpar[0], bpar[1]
-    y = cs*x[i]-(cs-wp.float64(1.0))*xn[i]
-    h = y[0]*gpl[0]+y[1]*gpl[1]+y[2]*gpl[2]-gpl[3]
-    if h < Rs[c]:
-        lg = wp.log(h/Rs[c])
-        fn[c] = -wp.float64(2.0)*Kc[c]*lg/h
-        wp.atomic_add(terms, 6, c % NSLOT, wt*Kc[c]*lg*lg)
+    one = wp.float64(1.0)
+    y = cs*x[i]-(cs-one)*xn[i]
+    he = y[0]*gpl[0]+y[1]*gpl[1]+y[2]*gpl[2]-gpl[3]
+    hs = xn[i][0]*gpl[0]+xn[i][1]*gpl[1]+xn[i][2]*gpl[2]-gpl[3]
+    rho = Rs[c]
+    le, ls = he/rho, hs/rho
+    if le >= one and ls >= one:
+        return
+    phi = wp.float64(0.0)
+    sec = wp.float64(0.0)
+    ss = wp.log(ls)
+    if le < one and ls < one:                                                       # (in contact over the whole step)
+        se = wp.log(le)
+        w = se-ss
+        sec = K*(w+wp.float64(2.0)*ss)*w_over_expm1(w)/hs
+        phi = K*avf_col(ss, se, ss, gq)
+        Eg[c] = K*se*se
+    elif le < one:                                                                  # (touching during the step: E = 0 from h_s to rho)
+        se = wp.log(le)
+        sec = K*se*se/(he-hs)
+        phi = K*avf_col(wp.float64(0.0), se, ss, gq)
+        if ss > wp.float64(0.0):
+            phi = phi+K*ss*ss*wp.log((hs-he)/(hs-rho))
+        Eg[c] = K*se*se
+    else:                                                                           # (leaving during the step: E = 0 from rho to h_e)
+        sec = -K*ss*ss/(he-hs)
+        phi = K*avf_col(ss, wp.float64(0.0), ss, gq)-K*ss*ss*wp.log((he-hs)/(rho-hs))
+    fn[c] = -sec
+    wp.atomic_add(terms, 6, c % NSLOT, wt*phi)
 
 
 @wp.kernel(enable_backward=False)
@@ -658,9 +803,9 @@ class RingYield(RingFlow):
         self._h = float(self.V0.median())**(1/3)
         ng = self._recut.ng
         z = lambda dt_: wp.zeros(n, dtype=dt_, device=dev)
-        self.gcon = dict(i=z(wp.int32), Rs=z(wp.float64), Kc=z(wp.float64), fn=z(wp.float64),
-                         pl=wp.array([float(ng[0]), float(ng[1]), float(ng[2]), float(c0)], dtype=wp.float64, device=dev))
-        self.tgc = {k_: wp.to_torch(self.gcon[k_], requires_grad=False) for k_ in ('i', 'Rs', 'Kc', 'fn')}
+        self.gcon = dict(i=z(wp.int32), Rs=z(wp.float64), Kc=z(wp.float64), fn=z(wp.float64), E=z(wp.float64),
+                         pl=wp.array([float(ng[0]), float(ng[1]), float(ng[2]), float(c0)], dtype=wp.float64, device=dev), gq=wp.array(GL8, dtype=wp.float64, device=dev))
+        self.tgc = {k_: wp.to_torch(self.gcon[k_], requires_grad=False) for k_ in ('i', 'Rs', 'Kc', 'fn', 'E')}
         self.ground_stats.update(near=0, pushing=0, lam_min=1.)
 
     def ground_start(self, z, xn):
@@ -754,11 +899,11 @@ class RingYield(RingFlow):
             wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], self.tones], outputs=[g])
         sc = self.selfc
         if sc is not None:                                                                 # (the contacts of ring_moment.py's colour code, after set_colour_contact)
-            wp.launch(k_ry_contact, sc['K'], inputs=[x, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['Kc'], bl['par']], outputs=[sc['fn'], sc['nv'], B['terms']])
+            wp.launch(k_ry_contact, sc['K'], inputs=[x, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['Kc'], bl['par'], sc['gq']], outputs=[sc['fn'], sc['nv'], sc['E'], B['terms']])
             wp.launch(k_ry_contact_adj, sc['K'], inputs=[sc['i'], sc['k'], bl['par'], sc['fn'], sc['nv']], outputs=[g])
         if self.ground_cut:                                                                # (the ground: each cell against its mirror image, set_ground_cut)
             gc = self.gcon
-            wp.launch(k_ry_ground, n, inputs=[x, U['xn'], gc['i'], gc['Rs'], gc['Kc'], gc['pl'], bl['par']], outputs=[gc['fn'], B['terms']])
+            wp.launch(k_ry_ground, n, inputs=[x, U['xn'], gc['i'], gc['Rs'], gc['Kc'], gc['pl'], bl['par'], gc['gq']], outputs=[gc['fn'], gc['E'], B['terms']])
             wp.launch(k_ry_ground_adj, n, inputs=[gc['i'], gc['pl'], bl['par'], gc['fn']], outputs=[g])
         wp.launch(k_ry_as, n, inputs=[Y['Gbm'], gid], outputs=[Y['Ss']])
         wp.launch(k_ry_ab, n, inputs=[Y['Ss'], V0, Y['Vgi'], gid], outputs=[B['Gb']])

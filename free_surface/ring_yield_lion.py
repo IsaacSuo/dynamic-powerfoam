@@ -75,6 +75,7 @@ if args.ground_cut:
     print('the ground in the cut at z = %g (mirror sites), one-sided faces; no Hertz ground' % C0, flush=True)
 W.prepare()
 fg = -args.g*M3*up; wref = float((9.8*M3*up).norm()); tol = args.tol*wref
+wtot = 9.8*M                                                                         # (pushes over the whole weight; wref, the sites' weights' norm, about it / sqrt(n), scales the gradient's tolerance)
 CG = TrustCG(W, mass, args.dt, per=2, product_iters=1)
 W.update_ul(W.X)
 W.grad(W.X); W.reread(); W.grad(W.X)
@@ -233,7 +234,7 @@ for s in range(s_first, nsteps+1):
         k3_ = torch.argsort(h1_)[:3]
         print('watch step %d: under the plane %d, under .05 h %d; lowest %s h (cells %s, a face in the cut %s); lambda at the end: min %.3f, under .5 %d, under .2 %d; push / weight %.2f' % (
             s, int((h1_ < 0).sum()), int((h1_ < .05).sum()), np.array2string(h1_[k3_].cpu().numpy(), precision=4), k3_.tolist(), W._g_face[k3_].tolist(),
-            float(lam_.min()) if len(lam_) else 1., int((lam_ < .5).sum()), int((lam_ < .2).sum()), float(W.tgc['fn'].sum())/wref), flush=True)
+            float(lam_.min()) if len(lam_) else 1., int((lam_ < .5).sum()), int((lam_ < .2).sum()), float(W.tgc['fn'].sum())/wtot), flush=True)
     if args.dense_from and s >= args.dense_from:
         dense_x.append(ST.tx.cpu().numpy()); dense_s.append(s)
         np.savez(args.save/('dense_%s.npz' % args.tag), x=np.array(dense_x), s=np.array(dense_s))
@@ -243,22 +244,25 @@ for s in range(s_first, nsteps+1):
     if s % args.every == 0:
         xs.append(ST.tx.cpu().numpy()); Fs.append(W._Ft.cpu().numpy()); Ls.append(W.tul['Ln'].cpu().numpy()); ts.append(s*args.dt)
         ek = .5*float((M3*ST.tv**2).sum()); ed, ev = W.stored(); eg = float((-fg*ST.tx).sum())
+        wt_ = float(W.tball[1])                                                             # (the step's objective holds wt E of a term read at the step's end, wt = theta: the stored energy is E;
+        e6_ = float(W.tgc['E'].sum()) if W.ground_cut else float(W.tsum[6])/wt_            # before 11-03 the balance took wt E, so a landing read half its ground's and contacts' energy)
+        e7_ = float(W.tsc['E'].sum()) if W.selfc is not None else 0.
         Lm = W.tul['Ln']
         sf = torch.linalg.svdvals(W._Ft.cpu())
         bd = W.B['bdelta'].numpy()
         if W.selfc is not None:
             ss_ = W.self_stats
-            print('  contact: energy %.3e, pairs within reach %d, overlapping at the step\'s start %d, the deepest %.3f of rho_i + rho_k, push / weight %.3f' % (float(W.tsum[7]), ss_['pairs'], ss_['active'], ss_['d_max'], float(W.tsc['fn'].sum())/wref), flush=True)
+            print('  contact: energy %.3e, pairs within reach %d, overlapping at the step\'s start %d, the deepest %.3f of rho_i + rho_k, push / weight %.3f' % (e7_, ss_['pairs'], ss_['active'], ss_['d_max'], float(W.tsc['fn'].sum())/wtot), flush=True)
             if W.ground_cut:
                 gs_ = W.ground_stats
                 print('  ground: faces in the cut %d, area %.4f m^2 (walls to another cell\'s mirror, largest area %.2e); cells against their images %d, pressing at the step\'s start %d, lambda min %.3f; push / weight %.3f' % (
-                    gs_['faces'], gs_['area'], gs_.get('other_A_max', 0.), gs_['near'], gs_['pushing'], gs_['lam_min'], float(W.tgc['fn'].sum())/wref), flush=True)
+                    gs_['faces'], gs_['area'], gs_.get('other_A_max', 0.), gs_['near'], gs_['pushing'], gs_['lam_min'], float(W.tgc['fn'].sum())/wtot), flush=True)
             if W.jump_share:
                 us_ = W.ul_stats
                 print('  share: walls without a spring %d, over .5 %d, between .1 and .9 %d, mean %.3f' % (us_.get('share_n', 0), us_.get('share_hi', 0), us_.get('share_mid', 0), us_.get('share_mean', 0.)), flush=True)
         print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_v %.3e, balance / start %.4f; com up %.5f, lowest %.4f; e^L %.3f..%.3f; F_e singular %.3f..%.3f; touching %d, ground/weight %.2f; walls %d, new %d, closed %d; radii %d (fails %d), flips %d; last %d steps: products %d, outer median %d max %d, rejected %d' % (
-            s*args.dt, time.time()-t0, ek, ed, ev, float(W.tsum[6]), W.Wv, (ek+ed+ev+float(W.tsum[6])+float(W.tsum[7])+W.Wv+eg)/H0, float((M3*ST.tx)[:, 2].sum())/M, float(ST.tx[:, 2].min()), float(torch.exp(Lm).min()), float(torch.exp(Lm).max()), float(sf[:, 2].min()), float(sf[:, 0].max()),
-            int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wref, W.ul_stats.get('walls', 0), W.ul_stats.get('born', 0), W.ul_stats.get('closed', 0), W.ul_stats.get('radii_it', 0), W.ul_stats.get('radii_fail', 0), W.ul_stats.get('flips', 0), args.every, sum(npr[-args.every:]), int(np.median(nout[-args.every:])), max(nout[-args.every:]), ST.stats['rejected']), flush=True)
+            s*args.dt, time.time()-t0, ek, ed, ev, e6_, W.Wv, (ek+ed+ev+e6_+e7_+W.Wv+eg)/H0, float((M3*ST.tx)[:, 2].sum())/M, float(ST.tx[:, 2].min()), float(torch.exp(Lm).min()), float(torch.exp(Lm).max()), float(sf[:, 2].min()), float(sf[:, 0].max()),
+            int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wtot, W.ul_stats.get('walls', 0), W.ul_stats.get('born', 0), W.ul_stats.get('closed', 0), W.ul_stats.get('radii_it', 0), W.ul_stats.get('radii_fail', 0), W.ul_stats.get('flips', 0), args.every, sum(npr[-args.every:]), int(np.median(nout[-args.every:])), max(nout[-args.every:]), ST.stats['rejected']), flush=True)
         if time.time()-t_saved > 60:
             save(); t_saved = time.time()
 save()

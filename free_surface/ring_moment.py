@@ -29,7 +29,7 @@ import math
 import warp as wp
 
 from free_surface.closure_warp import k_mid_ball, k_mid_lamt
-from free_surface.ring_yield import RingYield, YieldStep
+from free_surface.ring_yield import GL8, RingYield, YieldStep
 
 f64 = torch.float64
 
@@ -127,10 +127,11 @@ class RingMoment(RingYield):
         self._rho0 = self._rest_rho0()
         self._h = float(self.V0.median())**(1/3)
         z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
-        self.selfc = dict(K=K, i=z(K, wp.int32), k=z(K, wp.int32), Rs=z(K, wp.float64), Kc=z(K, wp.float64), fn=z(K, wp.float64), nv=z(K, wp.vec3d), xn=z(n, wp.vec3d))
+        self.selfc = dict(K=K, i=z(K, wp.int32), k=z(K, wp.int32), Rs=z(K, wp.float64), Kc=z(K, wp.float64), fn=z(K, wp.float64), nv=z(K, wp.vec3d), xn=z(n, wp.vec3d), E=z(K, wp.float64),
+                          gq=wp.array(GL8, dtype=wp.float64, device=dev))
         self.Mp = self.lam+2*self.mu                                                       # (the P-wave modulus: uniaxial strain)
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
-        self.tsc = {k_: tt(self.selfc[k_]) for k_ in ('i', 'k', 'Rs', 'Kc', 'fn', 'xn')}
+        self.tsc = {k_: tt(self.selfc[k_]) for k_ in ('i', 'k', 'Rs', 'Kc', 'fn', 'xn', 'E')}
         self._pairs = torch.zeros(0, 2, dtype=torch.long, device=dev); self._pw = torch.zeros(0, dtype=f64, device=dev)
         self.self_stats = dict(pairs=0, active=0, d_max=0.)
 

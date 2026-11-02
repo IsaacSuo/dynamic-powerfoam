@@ -563,6 +563,8 @@ def ground_check(W, ST, V0):
     ht = x@ng-c0
     print('sites under the plane %d (lowest %.3f h above it); balls reaching it %d' % (int((ht < 0).sum()), float(ht.min())/h_, int((ht < W._ulr).sum())), flush=True)
     W.update_ul(x)
+    if W.selfc is not None:
+        W.update_self(x)                                                               # (the contact list on this start too, as MidpointStep.begin)
     gs, us = W.ground_stats, W.ul_stats
     G = W._ulG
     Vt = W.V0*torch.exp(W.tul['Ln'])
@@ -570,18 +572,21 @@ def ground_check(W, ST, V0):
     print('one start: mirrors %d; ground faces %d, area %.4f m^2; walls to another cell\'s mirror, largest area %.2e; radii iterations %d; volume error max %.2e, total V %.6f against V0 e^L %.6f; cells against their images %d, pressing %d, lambda min %.3f' % (
         G.n_mirror, gs['faces'], gs['area'], gs['other_A_max'], us.get('radii_it', -1), float(err.max()), float(G.V.detach().sum()), float(Vt.sum()), gs['near'], gs['pushing'], gs['lam_min']), flush=True)
     W.grad(x); W.reread()
-    e0, g0 = W.grad(x); g0 = g0.clone()
-    t_ = W.tgc; on_ = t_['Kc'] > 0
-    i_ = t_['i'][on_].long(); hh_ = x[i_]@ng-c0; lam_ = hh_/t_['Rs'][on_]
-    E6_ = float(W.tball[1])*float((t_['Kc'][on_]*torch.log(lam_.clamp(max=1.))**2).sum())      # (the term's weight wt, as the kernel; x is the step's start, so the end point is x)
-    print('  the ground term at x: %.6e, by hand from the list %.6e; push / weight %.4f; rho / h %.3f..%.3f' % (
-        float(W.tsum[6]), E6_, float(t_['fn'].sum())/float(9.8*W.V0.sum()), float(t_['Rs'][on_].min())/h_ if bool(on_.any()) else 0., float(t_['Rs'][on_].max())/h_ if bool(on_.any()) else 0.), flush=True)
     torch.manual_seed(1)
-    d = torch.randn_like(x); d = d/d.norm(dim=1).max()
     near = ht < 2*h_
+    d1 = torch.randn_like(x); d1 = d1/d1.norm(dim=1).max()
+    x1 = x+.02*h_*d1*near[:, None]                                                     # (off the start: the contacts read over a step D != 0, the AVF's path in play; .02 h keeps
+    e0, g0 = W.grad(x1); g0 = g0.clone()                                               #  every end point above the plane, the end moving 2 x as far)
+    t_ = W.tgc; on_ = t_['Kc'] > 0
+    i_ = t_['i'][on_].long(); hh_ = (2*x1[i_]-x[i_])@ng-c0; lam_ = hh_/t_['Rs'][on_]
+    Ee_ = float((t_['Kc'][on_]*torch.log(lam_.clamp(max=1.))**2).sum())
+    print('  at the point off the start: the ground stored %.6e, by hand from the list %.6e; its objective (Phi) %.6e; contact stored %.6e, objective %.6e; ground push / weight %.4f, rho / h %.3f..%.3f' % (
+        float(t_['E'].sum()), Ee_, float(W.tsum[6])/float(W.tball[1]), float(W.tsc['E'].sum()) if W.selfc is not None else 0., float(W.tsum[7])/float(W.tball[1]),
+        float(t_['fn'].sum())/float(9.8*W.V0.sum()), float(t_['Rs'][on_].min())/h_ if bool(on_.any()) else 0., float(t_['Rs'][on_].max())/h_ if bool(on_.any()) else 0.), flush=True)
+    d = torch.randn_like(x); d = d/d.norm(dim=1).max()
     for name, m_ in (('every site', torch.ones_like(near)), ('the sites near the ground', near)):
         dd = d*m_[:, None]
         for e in (1e-5*h_, 1e-6*h_):
-            Ep, _ = W.grad(x+e*dd); Em, _ = W.grad(x-e*dd)
+            Ep, _ = W.grad(x1+e*dd); Em, _ = W.grad(x1-e*dd)
             fd = float(Ep-Em)/(2*e); an = float((g0*dd).sum())
             print('  %s, step %.0e h: central difference %.8e, gradient %.8e, rel. error %.2e' % (name, e/h_, fd, an, abs(fd-an)/max(abs(an), 1e-300)), flush=True)
