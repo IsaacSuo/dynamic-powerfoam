@@ -1,4 +1,6 @@
 """At a real saved state of a run (nothing rebuilt): is the force at x what the frames' motion asks, and on a leg, per term, along its own motion and along straightening in the ground's plane."""
+import math
+
 import numpy as np
 import torch
 import warp as wp
@@ -429,7 +431,7 @@ def lock_colour(W, ST, mass, V0, X0, P, r0, sigma=1.19):
 
 def contact_check(W, ST, V0):
     """the colour contact on the state's gap. At rest (F = I): rho0, and no unlike pair may overlap. At the real state: one step's start (the cut, births by colour, the contact list), the pairs, the overlapping ones;
-    then every pair put at an overlap of 5 % of rho_i + rho_k at z = x_n: the contact's gradient (with it less without it) against central differences of its energy, term 7, along a random direction"""
+    then every pair put at lambda .95 at z = x_n: the contact's gradient (with it less without it) against central differences of its energy, term 7, along a random direction"""
     h_ = float(np.median(V0)**(1/3))
     q = lambda v_: np.round(np.quantile(v_.cpu().numpy(), [0., .1, .5, .9, 1.]), 3).tolist()
     I3 = torch.eye(3, dtype=f64, device=dev).expand(W.n, 3, 3)
@@ -447,20 +449,20 @@ def contact_check(W, ST, V0):
     if m == 0:
         return
     W.grad(x); W.reread()
-    t['d0'][:m] = 1e300
+    Kc = t['Kc'][:m].clone()
+    t['Kc'][:m] = 0.
     _, g_off = W.grad(x); g_off = g_off.clone()
-    t['d0'][:m] = .95*Rs-L                                                                  # (every pair at an overlap of 5 %)
+    t['Kc'][:m] = Kc; t['Rs'][:m] = L/.95                                                   # (every pair at lambda .95)
     e0, g_on = W.grad(x); g_on = g_on.clone(); E7 = float(W.tsum[7])
-    Reff = t['Reff'][:m]; dl = .05*Rs
-    E7c = float((float(W.tball[1])*8/15*W.Esp*torch.sqrt(Reff*dl)*dl*dl).sum())
+    E7c = float((float(W.tball[1])*Kc*math.log(.95)**2).sum())
     gc = g_on-g_off
     torch.manual_seed(0)
     d = torch.randn_like(x); d = d/d.norm(dim=1).max()
     act = t['fn'][:m] > 0
-    print('  pushed in by 5 %%: %d pushing, energy %.4e (closed form %.4e); push per pushing pair median %.3e = %.2f of a median cell\'s weight' % (int(act.sum()), E7, E7c, float(t['fn'][:m][act].median()), float(t['fn'][:m][act].median())/(9.8*float(np.median(V0)))), flush=True)
+    print('  every pair at lambda .95: %d pushing, energy %.4e (closed form %.4e); push per pair median %.3e = %.2f of a median cell\'s weight' % (int(act.sum()), E7, E7c, float(t['fn'][:m][act].median()), float(t['fn'][:m][act].median())/(9.8*float(np.median(V0)))), flush=True)
     for e in (1e-4*h_, 1e-5*h_, 1e-6*h_):
         W.grad(x+e*d); Ep = float(W.tsum[7])
         W.grad(x-e*d); Em = float(W.tsum[7])
         fd = (Ep-Em)/(2*e); an = float((gc*d).sum())
         print('  step %.0e h: central difference %.6e, gradient %.6e, rel. error %.2e' % (e/h_, fd, an, abs(fd-an)/abs(an)), flush=True)
-    t['d0'][:m] = 0.
+    t['Rs'][:m] = Rs

@@ -8,7 +8,10 @@
   colour contact (set_colour_contact, 11-02; ClosureWarp's of 10-30): a wall is material or contact by the cells' place at rest, the colour code (exp(-d^2 / 2 sigma^2) on the rest skin graph, the inside harmonic); a new wall's
     spring is born only between like colours (similarity sum sqrt(p_i p_j) >= sim_birth) in place of the two springs. A wall without a spring is a free surface to both cells (no volume flux, no gradient).
     Check on the first lion's locked states (lock_colour): the weightless springs split at .5 (rest distance 8-9 h under, 1-2 h over); the unlike ones out, the legs' lowest omega^2 3135-8662 -> 161-216
-  the push: on the state, not on a history. Every pair of unlike colours (a static set) pushes by Hertz on delta = rho_i + rho_k - |d| > 0, scaled by 1 - similarity; rho = rho0 |F_n^T n|, the cell's extent along the line
+  the push: on the state, not on a history. Every pair of unlike colours (a static set) within rho_i + rho_k pushes as the two half cells along the line, a column under uniaxial strain lambda = |d| / (rho_i + rho_k), in the
+    log measure as the volume: E = 1/2 M V_c (ln lambda)^2 (1 - similarity), M = lam + 2 mu, V_c the two cells' mean rest volume; 0 with its force at the touch, infinite as the centres meet, so they never pass
+    (11-02, Hertz on rho_i + rho_k - |d| was tried: finite at d = 0, E_max = 8/15 E* sqrt(R_eff) (rho_i + rho_k)^5/2, and the push turns over past it; 560 of 600 leg-torso pairs came in over its speed sqrt(2 E_max / mu),
+    4.3 m/s against 1.95, and the paws went in as with no push at all). rho = rho0 |F_n^T n|, the cell's extent along the line
     of a ball of radius rho0 carried by its fit F_n at the step's start (n the line there, both frozen over the step, as R and beta), rho0 half the cell's rest distance to its neighbours by wall area (the face neighbours:
     two cells side by side at their own size read delta 0). Its partners found by distance each step, within reach and a margin of h. (11-02 first the push on the approach since the wall's birth, ClosureWarp's d0:
     with balls of 2 h the cut has walls between unlike cells 1.6-3.9 h apart across the air, so the push began far before touching, and a pair that slid past left and came back nearer, born without force:
@@ -70,12 +73,10 @@ class RingMoment(RingYield):
         self._rho0 = .5*sAL/sA.clamp(min=1e-300)
         self._h = float(self.V0.median())**(1/3)
         z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
-        self.selfc = dict(K=K, i=z(K, wp.int32), k=z(K, wp.int32), Rs=z(K, wp.float64), d0=z(K, wp.float64), Reff=z(K, wp.float64), fn=z(K, wp.float64), nv=z(K, wp.vec3d), xn=z(n, wp.vec3d),
-                          Esp=wp.float64(self.Es/2))
-        self.Esp = self.Es/2
+        self.selfc = dict(K=K, i=z(K, wp.int32), k=z(K, wp.int32), Rs=z(K, wp.float64), Kc=z(K, wp.float64), fn=z(K, wp.float64), nv=z(K, wp.vec3d), xn=z(n, wp.vec3d))
+        self.Mp = self.lam+2*self.mu                                                       # (the P-wave modulus: uniaxial strain)
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
-        self.tsc = {k_: tt(self.selfc[k_]) for k_ in ('i', 'k', 'Rs', 'd0', 'Reff', 'fn', 'xn')}
-        self.tsc['d0'].fill_(1e300)
+        self.tsc = {k_: tt(self.selfc[k_]) for k_ in ('i', 'k', 'Rs', 'Kc', 'fn', 'xn')}
         self._pairs = torch.zeros(0, 2, dtype=torch.long, device=dev); self._pw = torch.zeros(0, dtype=f64, device=dev)
         self.self_stats = dict(pairs=0, active=0, d_max=0.)
 
@@ -103,7 +104,8 @@ class RingMoment(RingYield):
         return a[k], b[k], ra[k], rb[k], 1-sim[k], L[k]
 
     def update_self(self, x):
-        """the contact list at the step's start x (MidpointStep.begin, after update_ul): every unlike pair within reach + h, rho on the fit F_n there, frozen over the step; Hertz on delta = rho_a + rho_b - |d| (k_ry_contact, d0 = 0)"""
+        """the contact list at the step's start x (MidpointStep.begin, after update_ul): every unlike pair within reach + h, rho on the fit F_n there, frozen over the step; k_ry_contact on lambda = |d| / (rho_a + rho_b),
+        Kc = 1/2 M V_c (1 - similarity), V_c the two cells' mean rest volume"""
         st = self.self_stats
         x = x.detach()
         F = self.ty['Fn'][self._gid]
@@ -113,10 +115,10 @@ class RingMoment(RingYield):
             raise RuntimeError('update_self: %d contact pairs over the capacity %d' % (m, K))
         self._pairs, self._pw = torch.stack([a, b], 1), pw
         t = self.tsc
-        t['i'].zero_(); t['k'].zero_(); t['d0'].fill_(1e300); t['Rs'].zero_(); t['Reff'].fill_(1.)
+        t['i'].zero_(); t['k'].zero_(); t['Rs'].zero_(); t['Kc'].zero_()
         if m:
             t['i'][:m] = a.to(torch.int32); t['k'][:m] = b.to(torch.int32)
-            t['Rs'][:m] = ra+rb; t['d0'][:m] = 0.; t['Reff'][:m] = ra*rb/(ra+rb)*pw**2                   # (the force goes as sqrt(R_eff): the weight 1 - similarity)
+            t['Rs'][:m] = ra+rb; t['Kc'][:m] = .5*self.Mp*.5*(self.V0[a]+self.V0[b])*pw
             dl = (ra+rb-L)/(ra+rb)
             st['active'], st['d_max'] = int((dl > 0).sum()), float(dl.max())
         t['xn'].copy_(x)

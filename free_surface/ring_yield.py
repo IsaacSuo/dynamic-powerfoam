@@ -32,9 +32,10 @@ f64 = torch.float64
 
 
 @wp.kernel(enable_backward=False)
-def k_ry_contact(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: wp.array(dtype=int), sk: wp.array(dtype=int), Rs: wp.array(dtype=wp.float64), d0: wp.array(dtype=wp.float64),
-                 Reff: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64), Esp: wp.float64, fn: wp.array(dtype=wp.float64), nv: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
-    """closure_warp.py's k_self on term 7 (6 is the ground's): a contact (i, k) pushes by Hertz on delta = Rs - |xe_k - xe_i| - d0 > 0, at the step-end centres; padding i == k"""
+def k_ry_contact(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: wp.array(dtype=int), sk: wp.array(dtype=int), Rs: wp.array(dtype=wp.float64), Kc: wp.array(dtype=wp.float64),
+                 bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), nv: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
+    """a contact (i, k) on term 7 (6 is the ground's), at the step-end centres: the two half cells along their line as a column under uniaxial strain, lambda = |d| / Rs < 1,
+    E = Kc (ln lambda)^2 (Kc = 1/2 M V_c, ring_moment.py), infinite as the centres meet; fn = -dE/d|d| = -2 Kc ln(lambda) / |d|, the push; padding i == k"""
     c = wp.tid()
     i, k = si[c], sk[c]
     fn[c] = wp.float64(0.0)
@@ -45,11 +46,10 @@ def k_ry_contact(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: 
     dv = (cs*x[k]-(cs-wp.float64(1.0))*xn[k])-(cs*x[i]-(cs-wp.float64(1.0))*xn[i])
     L = wp.length(dv)
     nv[c] = dv/L
-    dl = Rs[c]-L-d0[c]
-    if dl > wp.float64(0.0):
-        sq = wp.sqrt(Reff[c]*dl)
-        fn[c] = wp.float64(4.0)/wp.float64(3.0)*Esp*sq*dl
-        wp.atomic_add(terms, 7, c % NSLOT, wt*wp.float64(8.0)/wp.float64(15.0)*Esp*sq*dl*dl)
+    if L < Rs[c]:
+        lg = wp.log(L/Rs[c])
+        fn[c] = -wp.float64(2.0)*Kc[c]*lg/L
+        wp.atomic_add(terms, 7, c % NSLOT, wt*Kc[c]*lg*lg)
 
 
 @wp.kernel(enable_backward=False)
@@ -659,7 +659,7 @@ class RingYield(RingFlow):
             wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], self.tones], outputs=[g])
         sc = self.selfc
         if sc is not None:                                                                 # (the contacts of ring_moment.py's colour code, after set_colour_contact)
-            wp.launch(k_ry_contact, sc['K'], inputs=[x, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['d0'], sc['Reff'], bl['par'], sc['Esp']], outputs=[sc['fn'], sc['nv'], B['terms']])
+            wp.launch(k_ry_contact, sc['K'], inputs=[x, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['Kc'], bl['par']], outputs=[sc['fn'], sc['nv'], B['terms']])
             wp.launch(k_ry_contact_adj, sc['K'], inputs=[sc['i'], sc['k'], bl['par'], sc['fn'], sc['nv']], outputs=[g])
         wp.launch(k_ry_as, n, inputs=[Y['Gbm'], gid], outputs=[Y['Ss']])
         wp.launch(k_ry_ab, n, inputs=[Y['Ss'], V0, Y['Vgi'], gid], outputs=[B['Gb']])

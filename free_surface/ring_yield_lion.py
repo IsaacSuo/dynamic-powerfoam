@@ -62,7 +62,7 @@ if args.beta > 0:
 W.start()
 if args.colour > 0:
     W.set_colour_contact(args.colour)
-    print('colour contact: sigma %g, E* %.3f, births at similarity >= %g' % (args.colour, W.Esp, W.sim_birth), flush=True)
+    print('colour contact: sigma %g, M %.3f, births at similarity >= %g' % (args.colour, W.Mp, W.sim_birth), flush=True)
 W.prepare()
 fg = -args.g*M3*up; wref = float((9.8*M3*up).norm()); tol = args.tol*wref
 CG = TrustCG(W, mass, args.dt, per=2, product_iters=1)
