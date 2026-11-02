@@ -28,6 +28,9 @@ a_.add_argument('--aa', type=int, default=6)
 a_.add_argument('--hold-after', type=int, default=3)
 a_.add_argument('--eps-cut', type=float, default=-1.)
 a_.add_argument('--beta', type=float, default=.05)
+a_.add_argument('--no-elastic-births', action='store_true', help='a wall no return has reached: a free surface')
+a_.add_argument('--start-frames', type=Path, default=None, help='restart from a saved frame of an elastic run')
+a_.add_argument('--start-k', type=int, default=0)
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
 a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
 args = a_.parse_args()
@@ -55,6 +58,18 @@ ST.hold_after = args.hold_after
 W.true_blocks = args.true_blocks
 ST._pre_age = 0
 ST.set_state(W.X.clone(), torch.tensor(v0, dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
+if args.no_elastic_births:
+    W.elastic_births = False
+s_first = 1
+if args.start_frames is not None:
+    Z_ = np.load(args.start_frames); k_ = args.start_k
+    W._Ft = torch.as_tensor(Z_['F'][k_], device=dev, dtype=f64); W._Fe = W._Ft.clone()
+    W.tul['Ln'].copy_(torch.as_tensor(Z_['L'][k_], device=dev, dtype=f64))
+    x_ = torch.as_tensor(Z_['x'][k_], device=dev, dtype=f64)
+    v_ = (torch.as_tensor(Z_['x'][k_+1], device=dev, dtype=f64)-torch.as_tensor(Z_['x'][k_-1], device=dev, dtype=f64))/(float(Z_['t'][k_+1])-float(Z_['t'][k_-1]))
+    ST.set_state(x_, v_, fg/M3)
+    s_first = int(round(float(Z_['t'][k_])/args.dt))+1
+    print('restart at step %d' % (s_first-1), flush=True)
 H0 = .5*float((M3*ST.tv**2).sum())+float((-fg*ST.tx).sum())
 h = float(np.median(V0))**(1/3)
 print('lion, ring springs on the cut: %d cells, h %.2f mm; E / rho %.3f, nu %.4f, beta %g, dt 1/%d, tol %g of the weight; ground z = %g, frictionless; the start\'s energy %.5f' % (n, 1e3*h, E, nu, args.beta, round(1/args.dt), args.tol, C0, H0), flush=True)
@@ -68,7 +83,7 @@ def save():
 t0 = t_saved = time.time()
 nit, npr, nout = [], [], []
 nsteps = int(round(args.T/args.dt))
-for s in range(1, nsteps+1):
+for s in range(s_first, nsteps+1):
     e_, its, g2 = ST.step(tol, lambda g_: .5*tol)
     if not math.isfinite(g2) or math.sqrt(g2) > tol:
         tr_ = ST.stats['trace']

@@ -36,6 +36,7 @@ class RingMoment(RingYield):
             return r1
         return torch.sqrt((2*r1*r1-r0*r0).clamp(min=(.25*r1)**2))
 
+    elastic_births = True
     radii_extrap = False                                                               # (on the 30 steps: the same time, no gain)
 
     def _skin(self, Mq, Mo_old, yld):
@@ -87,6 +88,8 @@ class RingMoment(RingYield):
             k = torch.nonzero(new)[:, 0]
             near = np.asarray(A2[np.array(lo[k].cpu()), np.array(hi[k].cpu())]).ravel() > 0
             new[k[torch.as_tensor(~near, device=self.dev)]] = False
+        if not self.elastic_births:                                                        # (a wall that no return has reached is a free surface to its cells: no bond, not even through the volume)
+            new = new & ((self._ret[self._gid[lo]] > 0) | (self._ret[self._gid[hi]] > 0))
         return new, stay
 
     def _spring_k(self, x, lo_s, hi_s, key_s, ds, k0_, both_y, has_wall, Aw, wall):
