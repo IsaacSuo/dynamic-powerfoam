@@ -37,7 +37,13 @@ def pack(o):
 
 def wp_put(a, v):
     t_ = wp.to_torch(a, requires_grad=False)
-    t_.copy_(torch.as_tensor(v, device=t_.device, dtype=t_.dtype))
+    v_ = torch.as_tensor(v, device=t_.device, dtype=t_.dtype)
+    if v_.shape != t_.shape and v_.shape[1:] == t_.shape[1:]:                       # (a buffer of another capacity, as the contact list: the common part, the rest zero)
+        print('unpack: an array of %d rows into one of %d' % (v_.shape[0], t_.shape[0]), flush=True)
+        m_ = min(v_.shape[0], t_.shape[0])
+        t_.zero_(); t_[:m_].copy_(v_[:m_])
+        return
+    t_.copy_(v_)
 
 
 def unpack(o, st):
