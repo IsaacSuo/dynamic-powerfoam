@@ -86,6 +86,7 @@ def slices(W, ST, mass, V0, X0, P):
     sv = torch.linalg.svdvals(Y['Ff'].cpu()).to(dev); dt = torch.linalg.det(Y['Ff'])
     for li, a_ in enumerate(legs[:3]):
         bins = [a_[(zr[a_] >= ed[i]) & (zr[a_] < ed[i+1])] for i in range(7)]
+        Rgs = {}
         print('leg %d: end to end %.4f' % (li, float((x[torch.as_tensor(bins[-1], device=dev)].mean(0)-x[torch.as_tensor(bins[0], device=dev)].mean(0)).norm())), flush=True)
         for i, b in enumerate(bins):
             bt = torch.as_tensor(b, device=dev)
@@ -97,4 +98,24 @@ def slices(W, ST, mass, V0, X0, P):
             cs = (((Rc.transpose(1, 2)@Rg).diagonal(dim1=1, dim2=2).sum(1)-1)/2).clamp(-1., 1.)
             ang = torch.rad2deg(torch.arccos(cs))
             seg = float((x[torch.as_tensor(bins[i+1], device=dev)].mean(0)-c1).norm()/(Xr[torch.as_tensor(bins[i+1], device=dev)].mean(0)-c0).norm()) if i < 6 else 0.
+            Rgs[i] = Rg
             print('   slice %d: length ratio %.2f; slice turned %.0f deg from rest; cell R off the slice\'s turn: median %.0f, 90 %% %.0f deg; e^L median %.2f (%.2f..%.2f); det F median %.2f, min %.2f; sv median %.2f %.2f; tensor %.2e, remainder %.2e; |r| / |q| rms %.2f' % (i, seg, float(torch.rad2deg(torch.arccos(((Rg.diagonal().sum()-1)/2).clamp(-1., 1.)))), float(ang.median()), float(torch.quantile(ang, .9)), float(torch.exp(W.tul['Ln'][bt]).median()), float(torch.exp(W.tul['Ln'][bt]).min()), float(torch.exp(W.tul['Ln'][bt]).max()), float(dt[bt].median()), float(dt[bt].min()), float(sv[bt, 0].median()), float(sv[bt, 2].median()), float(e[bt].sum()), float(er[bt].sum()), float((rel[bt].sum()/den[bt].sum()).sqrt())), flush=True)
+        # the bend: everything below it turned back toward the part above, a smooth blend across it: per term the torque against the turn (+ unbends), real state
+        Rrel = Rgs[1]@Rgs[5].T
+        Ru = Rrel.T
+        ang = float(torch.arccos(((Ru.diagonal().sum()-1)/2).clamp(-1., 1.)))
+        axis = torch.stack([Ru[2, 1]-Ru[1, 2], Ru[0, 2]-Ru[2, 0], Ru[1, 0]-Ru[0, 1]]); axis = axis/axis.norm().clamp(min=1e-12)
+        joint = x[torch.as_tensor(bins[3], device=dev)].mean(0)
+        at = torch.as_tensor(a_, device=dev)
+        zc = torch.as_tensor(zr[a_], device=dev, dtype=f64)
+        z1, z2 = float(zr[bins[2]].mean()), float(zr[bins[4]].mean())
+        wgt = ((z2-zc)/(z2-z1)).clamp(0., 1.)
+        rot = wgt[:, None]*torch.linalg.cross(axis.expand(len(a_), 3), x[at]-joint)
+        tv = lambda y_: (W.grad(y_), (W.tsum.clone().sum(1) if W.tsum.dim() > 1 else W.tsum.clone()))[1]
+        e_ = 1e-3
+        e00 = tv(x); xp, xm = x.clone(), x.clone(); xp[at] += e_*rot; xm[at] -= e_*rot
+        ep, em = tv(xp), tv(xm); W.grad(x)
+        names = {0: 'tensor', 1: 'volume', 2: 'var', 4: 'remainder', 5: 'outer'}
+        Q = {names[k]: -(float(ep[k])-float(em[k]))/(2*e_) for k in names}; St = {names[k]: (float(ep[k])+float(em[k])-2*float(e00[k]))/e_**2 for k in names}
+        I_ = float((mass[at][:, None]*rot*rot).sum()); om = float((mass[at][:, None]*ST.tv[at]*rot).sum())/I_
+        print('   the bend %.0f deg about %s: torque, + unbends: total %+.2e, %s; stiffness total %.2e, %s; inertia %.2e; so angular acceleration %+.1f rad/s2, omega^2 %.0f; angular speed now %+.2f rad/s, viscous time beta omega^2 = %.2f /s' % (np.degrees(ang), np.round(axis.cpu().numpy(), 2).tolist(), sum(Q.values()), {k: float('%+.1e' % v_) for k, v_ in Q.items()}, sum(St.values()), {k: float('%.1e' % v_) for k, v_ in St.items()}, I_, sum(Q.values())/I_, sum(St.values())/I_, om, .05*sum(St.values())/I_), flush=True)
