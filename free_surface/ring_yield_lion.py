@@ -110,6 +110,16 @@ def save():
 
 
 from free_surface.run_state import pack, unpack
+r0_t = torch.as_tensor(r0, dtype=f64, device=dev)
+
+
+def rest_radii():
+    """after a state's load: the rest radii from the foam (a checkpoint of a restarted run before 11-02 holds its cut radii there: _rr0 and _ulr were one tensor), the jump share's site colours"""
+    W._rr0.copy_(r0_t)
+    if getattr(W, 'jump_share', False):
+        W._site_blend = W._blend(W.X)
+
+
 if args.probe_jump:
     from free_surface.ring_moment import color_code
     from free_surface.ring_moment_force import jump_check
@@ -118,7 +128,7 @@ if args.probe_jump:
     rk_ = torch.unique(torch.minimum(G0_.i[k0_], G0_.j[k0_]).long()*n+torch.maximum(G0_.i[k0_], G0_.j[k0_]).long())
     for f_ in args.probe_jump:
         ck_ = torch.load(f_, weights_only=False)
-        unpack(W, ck_['W']); unpack(ST, ck_['ST'])
+        unpack(W, ck_['W']); unpack(ST, ck_['ST']); rest_radii()
         jump_check(W, ST, V0, '%s (step %d)' % (f_.name, ck_['s']), Qc_, rk_, G0_.patch_A.detach() > 0)
     raise SystemExit
 if args.probe_30:
@@ -127,13 +137,13 @@ if args.probe_30:
     W.elastic_births = not args.no_elastic_births
     for f_ in args.probe_30:
         ck_ = torch.load(f_, weights_only=False)
-        unpack(W, ck_['W']); unpack(ST, ck_['ST'])
+        unpack(W, ck_['W']); unpack(ST, ck_['ST']); rest_radii()
         check30(W, ST, mass, V0, X0, g['pairs'], dn_, ck_['s'], args.dt)
     raise SystemExit
 dense_x, dense_s = [], []
 if args.load_state is not None:
     ck_ = torch.load(args.load_state, weights_only=False)
-    unpack(W, ck_['W']); unpack(ST, ck_['ST'])
+    unpack(W, ck_['W']); unpack(ST, ck_['ST']); rest_radii()
     W.true_blocks = args.true_blocks; ST._pre_age = 0; ST.aa_m = args.aa; ST.pre_every = args.pre_every
     W.elastic_births = not args.no_elastic_births and not args.jump                       # (the command line's, not the checkpoint's)
     ground_k()

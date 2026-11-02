@@ -439,9 +439,21 @@ def contact_check(W, ST, V0):
     if W.jump_share:
         W._Fe.copy_(I3)                                                                         # (at rest: F = I for the jump test too)
     a, b, ra, rb, pw, L = W.contact_pairs(W.X, I3, h_)
+    if W.jump_share and len(a):
+        sb_ = W._blend(W.X)
+        print('  debug: F_e is I %s; the site blends as made %s; a sample pair s %s' % (bool((W._Fe[W._gid]-I3).abs().max() < 1e-12), all(bool((u_ == v_).all()) for u_, v_ in zip(sb_[:2], W._site_blend[:2])),
+              np.round(W.jump_sim(a[:5], b[:5], W.X[b[:5]]-W.X[a[:5]], torch.full((5,), .5, dtype=f64, device=dev)).cpu().numpy(), 4).tolist()), flush=True)
     W._Fe.copy_(Fe_)
     dl = (ra+rb-L)/(ra+rb)
-    print('rho0 / h quantiles 0 .1 .5 .9 1: %s; at rest, unlike pairs within reach + h: %d, overlapping %d, the deepest %.3f of rho_i + rho_k, the nearest gap %.3f h' % (q(W._rho0/h_), len(a), int((dl > 0).sum()), float(dl.max()), float((L-ra-rb).min())/h_), flush=True)
+    if len(a) == 0:
+        print('rho0 / h quantiles 0 .1 .5 .9 1: %s; at rest no pair pushes (none within reach with 1 - s over 1e-3)' % q(W._rho0/h_), flush=True)
+    else:
+        print('rho0 / h quantiles 0 .1 .5 .9 1: %s; at rest, unlike pairs within reach + h: %d, overlapping %d, the deepest %.3f of rho_i + rho_k, the nearest gap %.3f h' % (q(W._rho0/h_), len(a), int((dl > 0).sum()), float(dl.max()), float((L-ra-rb).min())/h_), flush=True)
+    if bool((dl > 0).any()):
+        ov = dl > 0
+        Er = float((.5*W.Mp*.5*(W.V0[a[ov]]+W.V0[b[ov]])*pw[ov]*torch.log(L[ov]/(ra+rb)[ov])**2).sum())
+        Fr = float((2*.5*W.Mp*.5*(W.V0[a[ov]]+W.V0[b[ov]])*pw[ov]*(-torch.log(L[ov]/(ra+rb)[ov]))/L[ov]).sum())/(9.8*float(np.median(V0)))
+        print('  at rest the overlapping pairs\' push weight 1 - s quantiles 0 .1 .5 .9 1: %s; their energy %.3e, push %.2f median cells\' weights in all' % (q(pw[ov]), Er, Fr), flush=True)
     x = ST.tx.clone()
     W.update_ul(x); W.update_self(x)
     st, us = W.self_stats, W.ul_stats

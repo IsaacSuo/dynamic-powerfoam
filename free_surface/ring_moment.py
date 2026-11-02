@@ -71,26 +71,36 @@ class RingMoment(RingYield):
         by s in the gradient, the volume and its smoothing, its cells' closure taking the rest; a pair without a spring pushes by 1 - s. No weightless springs: the share is the wall's"""
         self.jump_share = True
         self.elastic_births = False
+        self._site_blend = self._blend(self.X)                                          # (the colour at each rest site, by the same reading as at any point)
 
-    def _sim_at(self, y, b):
-        """the static colour's similarity of rest points y to cells b: the rest power cell holding y and the next, by their power gap (continuous across the face, the second's
-        weight 1/2 on it and under 5 % a quarter cell inside)"""
+    def _blend(self, y):
+        """the static colour at rest points y: the rest power cell holding y and the next, by their power gap (continuous across the face, the second's weight 1/2 on it and
+        under 5 % a quarter cell inside): (k1, k2, g), the colour (Q_k1 + g Q_k2) / (1 + g), and its squared norm"""
         X, w2 = self.X.float(), (self._rr0**2).float()
         tau2 = self._h**2/6
-        out = torch.empty(len(y), dtype=f64, device=y.device)
+        k1 = torch.empty(len(y), dtype=torch.long, device=y.device); k2 = torch.empty_like(k1); g = torch.empty(len(y), dtype=f64, device=y.device)
         for c0 in range(0, len(y), 4096):
             pw = torch.cdist(y[c0:c0+4096].float(), X)**2-w2[None]
             v, k = torch.topk(pw, 2, dim=1, largest=False)
-            g = torch.exp(-(v[:, 1]-v[:, 0]).double().clamp(min=0.)/tau2)
-            bb = b[c0:c0+4096]
-            out[c0:c0+4096] = (color_sim(self._col_Q, k[:, 0], bb)+g*color_sim(self._col_Q, k[:, 1], bb))/(1+g)
-        return out
+            k1[c0:c0+4096], k2[c0:c0+4096] = k[:, 0], k[:, 1]
+            g[c0:c0+4096] = torch.exp(-(v[:, 1]-v[:, 0]).double().clamp(min=0.)/tau2)
+        nrm = (1+g*g+2*g*color_sim(self._col_Q, k1, k2))/(1+g)**2
+        return k1, k2, g, nrm
+
+    def _blend_sim(self, A, B):
+        """the similarity of two blended colours, normalised: 1 for the same point"""
+        Q = self._col_Q
+        k1a, k2a, ga, na = A; k1b, k2b, gb, nb = B
+        num = color_sim(Q, k1a, k1b)+gb*color_sim(Q, k1a, k2b)+ga*color_sim(Q, k2a, k1b)+ga*gb*color_sim(Q, k2a, k2b)
+        return (num/((1+ga)*(1+gb))/torch.sqrt(na*nb).clamp(min=1e-300)).clamp(0., 1.)
 
     def jump_sim(self, a, b, d, t):
-        """the jump test's similarity of pairs (a, b), d = x_b - x_a, t the wall's place on the line (the step's start state F_e): from both ends, averaged"""
+        """the jump test's similarity of pairs (a, b), d = x_b - x_a, t the wall's place on the line (the step's start state F_e): the colour at the predicted rest point against
+        the colour at the partner's rest site, read alike (so 1 for J = 0); from both ends, averaged"""
         Fi = self._inv(self._Fe[self._gid])
         I_ = torch.einsum('fab,fb->fa', Fi[a], t[:, None]*d)+torch.einsum('fab,fb->fa', Fi[b], (1-t)[:, None]*d)
-        return .5*(self._sim_at(self.X[a]+I_, b)+self._sim_at(self.X[b]-I_, a))
+        sb = tuple(v_[b] for v_ in self._site_blend); sa = tuple(v_[a] for v_ in self._site_blend)
+        return .5*(self._blend_sim(self._blend(self.X[a]+I_), sb)+self._blend_sim(self._blend(self.X[b]-I_), sa))
 
     def _wall_share(self, i, j, A, c, x, conn):
         mw = conn.to(f64)

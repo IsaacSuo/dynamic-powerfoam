@@ -205,7 +205,8 @@ class PlasticUL:
         self.n = n = len(X); self.dev = dev; self.grad_kind = grad
         self.X = torch.as_tensor(X, dtype=f64, device=dev).contiguous()
         self.V0 = torch.as_tensor(V0, dtype=f64, device=dev).contiguous()
-        self._rr0 = self._ulr = torch.as_tensor(r, dtype=f64, device=dev).contiguous()
+        self._rr0 = torch.as_tensor(r, dtype=f64, device=dev).contiguous()
+        self._ulr = self._rr0.clone()                                               # (not the same tensor: a state's load wrote its cut radii into the rest ones, 11-02)
         self.st = SimpleNamespace(X=self.X, V=self.V0)
         self.mu, self.lam = E/(2*(1+nu)), E*nu/((1+nu)*(1-2*nu))
         self.kap = self.lam+2*self.mu/3
