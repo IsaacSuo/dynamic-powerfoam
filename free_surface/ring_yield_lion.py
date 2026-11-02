@@ -224,21 +224,16 @@ for s in range(s_first, nsteps+1):
         break
     if ST.stats.get('aa_nan', 0):
         print('AA step %d: the extrapolation read NaN %d times, back to the plain point' % (s, ST.stats['aa_nan']), flush=True)
-    if args.watch_ground and W.ground_cut:
-        ng_, c0_ = W._recut.ng, W._recut.c0
-        h0_ = (W.tul['xn']@ng_-c0_)/h; h1_ = (ST.tx@ng_-c0_)/h
-        low_ = torch.nonzero(h1_ < .05)[:, 0]; und_ = torch.nonzero(h1_ < 0)[:, 0]
-        st_ = torch.where(W._g_on, 1, torch.where(W._g_face, 2, torch.where(h0_*h < W._ulr, 3, 0)))      # 1 counted, 2 released, 3 its ball reaches the plane but no face, 0 neither
-        nm_ = ['none', 'counted', 'released', 'no face']
-        cnt_ = [int((st_[low_] == k_).sum()) for k_ in range(4)]
-        line_ = 'watch step %d: under the plane %d, under .05 h %d (by the start: none %d, counted %d, released %d, no face %d); lowest %.4f h' % (s, len(und_), len(low_), cnt_[0], cnt_[1], cnt_[2], cnt_[3], float(h1_.min()))
-        if len(und_):
-            Fs_ = torch.linalg.svdvals(W._Fe[W._gid][und_].cpu())
-            Gnn_ = torch.einsum('a,fab,b->f', ng_, W.tG[und_]/W.th, ng_)
-            line_ += '; ' + ', '.join('cell %d: %s, start %.3f h -> %.3f h, face area / h^2 %.3f, r %.2f h, F_n singular %.2f..%.2f, G_nn over the step %+.3f' % (
-                c_, nm_[int(st_[c_])], float(h0_[c_]), float(h1_[c_]), float(W._g_area[c_])/h**2, float(W._ulr[c_])/h, float(Fs_[k_, 2]), float(Fs_[k_, 0]), float(Gnn_[k_])) for k_, c_ in enumerate(und_[:6].tolist()))
-        print(line_, flush=True)
     ST.end()
+    if args.watch_ground and W.ground_cut:                                                  # (after end: the step's end x against its start's list)
+        ng_, c0_ = W._recut.ng, W._recut.c0
+        h1_ = (ST.tx@ng_-c0_)/h
+        gl_ = W.tgc['i'][W.tgc['Kc'] > 0].long()
+        lam_ = (ST.tx[gl_]@ng_-c0_)/W.tgc['Rs'][W.tgc['Kc'] > 0]
+        k3_ = torch.argsort(h1_)[:3]
+        print('watch step %d: under the plane %d, under .05 h %d; lowest %s h (cells %s, a face in the cut %s); lambda at the end: min %.3f, under .5 %d, under .2 %d; push / weight %.2f' % (
+            s, int((h1_ < 0).sum()), int((h1_ < .05).sum()), np.array2string(h1_[k3_].cpu().numpy(), precision=4), k3_.tolist(), W._g_face[k3_].tolist(),
+            float(lam_.min()) if len(lam_) else 1., int((lam_ < .5).sum()), int((lam_ < .2).sum()), float(W.tgc['fn'].sum())/wref), flush=True)
     if args.dense_from and s >= args.dense_from:
         dense_x.append(ST.tx.cpu().numpy()); dense_s.append(s)
         np.savez(args.save/('dense_%s.npz' % args.tag), x=np.array(dense_x), s=np.array(dense_s))
@@ -256,7 +251,8 @@ for s in range(s_first, nsteps+1):
             print('  contact: energy %.3e, pairs within reach %d, overlapping at the step\'s start %d, the deepest %.3f of rho_i + rho_k, push / weight %.3f' % (float(W.tsum[7]), ss_['pairs'], ss_['active'], ss_['d_max'], float(W.tsc['fn'].sum())/wref), flush=True)
             if W.ground_cut:
                 gs_ = W.ground_stats
-                print('  ground: faces %d (new %d), counted %d, released %d, area counted %.4f m^2; walls to another cell\'s mirror, largest area %.2e' % (gs_['faces'], gs_['new'], gs_['active'], gs_['released'], gs_['area'], gs_.get('other_A_max', 0.)), flush=True)
+                print('  ground: faces in the cut %d, area %.4f m^2 (walls to another cell\'s mirror, largest area %.2e); cells against their images %d, pressing at the step\'s start %d, lambda min %.3f; push / weight %.3f' % (
+                    gs_['faces'], gs_['area'], gs_.get('other_A_max', 0.), gs_['near'], gs_['pushing'], gs_['lam_min'], float(W.tgc['fn'].sum())/wref), flush=True)
             if W.jump_share:
                 us_ = W.ul_stats
                 print('  share: walls without a spring %d, over .5 %d, between .1 and .9 %d, mean %.3f' % (us_.get('share_n', 0), us_.get('share_hi', 0), us_.get('share_mid', 0), us_.get('share_mean', 0.)), flush=True)

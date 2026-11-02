@@ -124,13 +124,7 @@ class RingMoment(RingYield):
         """the colour code on the rest cut, each cell's rho0 and the contact list's buffers, before prepare(); K the list's capacity. E* of two like bodies, E / 2 (1 - nu^2), as closure_warp.py"""
         n, dev = self.n, self.dev
         self._col_Q = color_code(self, self._rr0, sigma)
-        G, _ = self._recut.geometry(self.X, self._rr0)
-        kp = G.wall_A.detach() > 0
-        i0, j0, A0 = G.i[kp].long(), G.j[kp].long(), G.wall_A.detach()[kp]
-        L0 = (self.X[j0]-self.X[i0]).norm(dim=1)
-        sA = torch.zeros(n, dtype=f64, device=dev).index_add(0, i0, A0).index_add(0, j0, A0)
-        sAL = torch.zeros(n, dtype=f64, device=dev).index_add(0, i0, A0*L0).index_add(0, j0, A0*L0)
-        self._rho0 = .5*sAL/sA.clamp(min=1e-300)
+        self._rho0 = self._rest_rho0()
         self._h = float(self.V0.median())**(1/3)
         z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
         self.selfc = dict(K=K, i=z(K, wp.int32), k=z(K, wp.int32), Rs=z(K, wp.float64), Kc=z(K, wp.float64), fn=z(K, wp.float64), nv=z(K, wp.vec3d), xn=z(n, wp.vec3d))

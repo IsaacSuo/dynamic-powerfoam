@@ -209,42 +209,18 @@ class MergedUL(PlasticUL):
     ground_cut = False
 
     def set_ground_cut(self, c0, normal=(0., 0., 1.)):
-        """the ground as a plane of the cut (recut.GroundRecut, 11-03): a cell touching it has a ground face, a wall to a fixed body, frictionless: its normal motion 0,
-        its tangential the cell's own field there (ring_yield.k_gg_ground), in the gradient and so in the volume, and in the closure as a wall. One-sided, as an active
-        set frozen over the step: a face counts when new, or while the normal traction read at the step's start presses, or while its cell came nearer the plane over
-        the last step; else it is a free surface. The Hertz ground off (no ball touches). Before prepare()"""
+        """the ground as a plane of the cut (recut.GroundRecut, 11-03): every cell whose ball reaches it is cut at it by its own mirror, so no material lies under it and
+        the volumes are the clipped ones. Its face is a free surface to the gradient and the closure, as a wall between unlike cells; the push is the contact with the
+        mirror image (ring_yield.RingYield.set_ground_cut: a frictionless rigid plane is the symmetry plane of the body and its image). The Hertz ground off (no ball
+        touches). Before prepare(). (11-03 first: the face a wall in the gradient, its normal motion 0 and its tangential the cell's field, one-sided by an active set read
+        at the step's start: the centre points went through their own counted faces, 0.017 h a step toward the plane while the cell's G_nn was -0.02 a step, since moving a
+        centre onto its pinned face strains its cell only ~25 % (the walls above follow it by half); step 398 of the lion, a centre under the plane broke the mirror cut)"""
         from free_surface.recut import GroundRecut
         f32 = self._recut.A.f32
         self._recut = GroundRecut(self.n, c0, normal, self.dev, cap=2*self.n); self._recut.A.f32 = f32
         self.ground_cut = True
-        n, dev = self.n, self.dev
-        z = lambda dt_: wp.zeros(n, dtype=dt_, device=dev)
-        for k_, dt_ in (('gi', wp.int32), ('ga', wp.float64), ('gn', wp.vec3d), ('go', wp.vec3d)):
-            self.ul[k_] = z(dt_); self.tul[k_] = wp.to_torch(self.ul[k_], requires_grad=False)
-        self._g_face = torch.zeros(n, dtype=torch.bool, device=dev)
-        self._g_h = torch.full((n,), float('inf'), dtype=f64, device=dev)
-        self.ground_stats = dict(faces=0, active=0, released=0, area=0., new=0)
-
-    def _ground_faces(self, G, x):
-        """the ground faces at the step's start x and which count: (gi, area counted, centroid), each cell's normal traction from its state, kap L + 2 mu (dev e)_nn,
-        e = (F F^T - I) / 2"""
-        st = self.ground_stats
-        ng = self._recut.ng
-        gi, gA, gc = G.g_i.long(), G.g_A, G.g_c
-        face = torch.zeros(self.n, dtype=torch.bool, device=x.device); face[gi] = True
-        new = face & ~self._g_face
-        h = x@ng-self._recut.c0
-        near = h < self._g_h
-        Fe = self._Fe[self._gid]
-        e = .5*(Fe@Fe.transpose(1, 2)-self.I3); e = e-(e.diagonal(dim1=1, dim2=2).sum(1)/3)[:, None, None]*self.I3
-        tn = self.kap*self.tul['Ln']+2*self.mu*torch.einsum('a,fab,b->f', ng, e, ng)
-        on = face & (new | (tn <= 0) | near)
-        self._g_face, self._g_h = face, h
-        self._g_on, self._g_area = on, torch.zeros(self.n, dtype=f64, device=x.device).index_add(0, gi, gA)      # (for a watch: the step's start, per cell)
-        st['faces'], st['new'], st['active'] = int(face.sum()), int(new.sum()), int(on.sum())
-        st['released'] = int((face & ~on).sum()); st['area'] = float(gA[on[gi]].sum())
-        st['other_A_max'] = G.other_A_max
-        return gi, gA*on[gi].to(f64), gc, on[gi]
+        self._g_face = torch.zeros(self.n, dtype=torch.bool, device=self.dev)
+        self.ground_stats = dict(faces=0, area=0., other_A_max=0.)
 
     def _spring_k(self, x, lo_s, hi_s, key_s, ds, k0_, both_y, has_wall, Aw, wall):
         """k: of the current wall when both cells have yielded, else kept"""
@@ -341,15 +317,12 @@ class MergedUL(PlasticUL):
         a_ = torch.zeros(n, 3, dtype=f64, device=dev).index_add(0, ic, -Ac[:, None]*nn).index_add(0, jc, Ac[:, None]*nn)
         Mw = (torch.zeros(n, 3, 3, dtype=f64, device=dev).index_add(0, ic, Ac[:, None, None]*(cc-x[ic])[:, :, None]*nn[:, None, :])
               .index_add(0, jc, -Ac[:, None, None]*(cc-x[jc])[:, :, None]*nn[:, None, :]))
-        if self.ground_cut:                                                         # (the ground faces that count: walls to the fixed plane, the outward normal down)
-            gi_, gA_, gc_, gon_ = self._ground_faces(G, x)
-            no_ = -self._recut.ng
-            a_.index_add_(0, gi_, -gA_[:, None]*no_[None, :])
-            Mw.index_add_(0, gi_, gA_[:, None, None]*(gc_-x[gi_])[:, :, None]*no_[None, None, :])
-            openc[gi_[~gon_]] = True
-            for k2 in ('gi', 'ga', 'gn', 'go'):
-                t[k2].zero_()
-            kg = len(gi_); t['gi'][:kg] = gi_.to(torch.int32); t['ga'][:kg] = gA_; t['gn'][:kg] = no_[None, :].expand(kg, 3); t['go'][:kg] = gc_-x[gi_]
+        if self.ground_cut:                                                         # (a ground face: a free surface to its cell, as a contact wall; the push is the mirror contact's)
+            gi_ = G.g_i.long()
+            openc[gi_] = True
+            self._g_face.zero_(); self._g_face[gi_] = True
+            gs_ = self.ground_stats
+            gs_['faces'], gs_['area'], gs_['other_A_max'] = len(gi_), float(G.g_A.sum()), G.other_A_max
         Mc = V[:, None, None]*self.I3-Mw
         Mc[~openc] = 0.; a_[~openc] = 0.
         for k2 in ('wi', 'wj', 'wa', 'wn', 'wt', 'wtau', 'wv'):

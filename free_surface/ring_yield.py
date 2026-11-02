@@ -53,35 +53,34 @@ def k_ry_contact(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: 
 
 
 @wp.kernel(enable_backward=False)
-def k_gg_ground(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), gi: wp.array(dtype=int), ga: wp.array(dtype=wp.float64), gn: wp.array(dtype=wp.vec3d),
-                go: wp.array(dtype=wp.vec3d), Ge: wp.array(dtype=wp.mat33d), Sg: wp.array(dtype=wp.mat33d)):
-    """a ground face (merged_ul.set_ground_cut) in the divergence-theorem sum: A u_face (x) n, n its outward normal (down), u_face the frictionless wall's: the cell's
-    own field at the face, u + Ge o (o the face centroid from the site at the step's start), less its normal part (the plane does not move); area 0: not counted"""
-    e = wp.tid()
-    a = ga[e]
-    if a == wp.float64(0.0):
+def k_ry_ground(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), gi: wp.array(dtype=int), Rs: wp.array(dtype=wp.float64), Kc: wp.array(dtype=wp.float64),
+                gpl: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), terms: wp.array2d(dtype=wp.float64)):
+    """the ground (RingYield.set_ground_cut) on term 6: a cell against its own mirror image, k_ry_contact's column on the pair (i, i') at the step-end centre, |d| = 2 h,
+    Rs = rho_i: lambda = h / rho_i, and the real body's half of the pair, E = Kc (ln lambda)^2, Kc = 1/4 M V0_i; along the plane's normal only, so frictionless; infinite
+    as the centre reaches the plane (h <= 0 reads non-finite, a refused trial); fn = -dE/dh, the push. gpl = (n, c0); padding Kc = 0"""
+    c = wp.tid()
+    fn[c] = wp.float64(0.0)
+    if Kc[c] == wp.float64(0.0):
         return
-    i = gi[e]
-    n = gn[e]
-    u = (x[i]-xn[i])+Ge[i]@go[e]
-    ut = u-wp.dot(u, n)*n
-    wp.atomic_add(Sg, i, a*wp.outer(ut, n))
+    i = gi[c]
+    cs, wt = bpar[0], bpar[1]
+    y = cs*x[i]-(cs-wp.float64(1.0))*xn[i]
+    h = y[0]*gpl[0]+y[1]*gpl[1]+y[2]*gpl[2]-gpl[3]
+    if h < Rs[c]:
+        lg = wp.log(h/Rs[c])
+        fn[c] = -wp.float64(2.0)*Kc[c]*lg/h
+        wp.atomic_add(terms, 6, c % NSLOT, wt*Kc[c]*lg*lg)
 
 
 @wp.kernel(enable_backward=False)
-def k_gg_ground_adj(gi: wp.array(dtype=int), ga: wp.array(dtype=wp.float64), gn: wp.array(dtype=wp.vec3d), go: wp.array(dtype=wp.vec3d), Gs: wp.array(dtype=wp.mat33d),
-                    x_adj: wp.array(dtype=wp.vec3d), Gbe: wp.array(dtype=wp.mat33d)):
-    """k_gg_ground's adjoint: dE/du_face = A Gs n, through the projection to x and to Ge"""
-    e = wp.tid()
-    a = ga[e]
-    if a == wp.float64(0.0):
+def k_ry_ground_adj(gi: wp.array(dtype=int), gpl: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d)):
+    """dE/dx_i = -cs wt fn n"""
+    c = wp.tid()
+    f = fn[c]
+    if f == wp.float64(0.0):
         return
-    i = gi[e]
-    n = gn[e]
-    ub = a*(Gs[i]@n)
-    ubt = ub-wp.dot(ub, n)*n
-    wp.atomic_add(x_adj, i, ubt)
-    wp.atomic_add(Gbe, i, wp.outer(ubt, go[e]))
+    g = -bpar[0]*bpar[1]*f
+    wp.atomic_add(x_adj, gi[c], wp.vec3d(g*gpl[0], g*gpl[1], g*gpl[2]))
 
 
 @wp.kernel(enable_backward=False)
@@ -620,6 +619,8 @@ class RingYield(RingFlow):
             lead_ = self._gid == torch.arange(self.n, device=self.dev)
             on_ = self._yld[lead_]
             self.ul_stats['fit_gap'] = float((self.ty['Fn'][lead_][on_]-self._Ft[lead_][on_]).flatten(1).norm(dim=1).max()) if bool(on_.any()) else 0.
+        if self.ground_cut:
+            self._ground_list(x)
         if self.ledger:
             Y, g = self.ty, self._gid
             lead = g == torch.arange(self.n, device=self.dev)
@@ -630,6 +631,68 @@ class RingYield(RingFlow):
             gap = (tr_-(torch.exp(Lg/3)-1)).abs()
             self.ul_stats['v_gap_med'], self.ul_stats['v_gap_max'] = float(gap[lead].median()), float(gap[lead].max())
             self.ul_stats['v_max'] = float(tr_[lead].abs().max())
+
+    def _rest_rho0(self):
+        """each cell's rho0: half its rest distance to its neighbours by wall area (the self contact's, ring_moment.py)"""
+        G, _ = self._recut.geometry(self.X, self._rr0)
+        kp = G.wall_A.detach() > 0
+        i0, j0, A0 = G.i[kp].long(), G.j[kp].long(), G.wall_A.detach()[kp]
+        L0 = (self.X[j0]-self.X[i0]).norm(dim=1)
+        sA = torch.zeros(self.n, dtype=f64, device=self.dev).index_add(0, i0, A0).index_add(0, j0, A0)
+        sAL = torch.zeros(self.n, dtype=f64, device=self.dev).index_add(0, i0, A0*L0).index_add(0, j0, A0*L0)
+        return .5*sAL/sA.clamp(min=1e-300)
+
+    def set_ground_cut(self, c0, normal=(0., 0., 1.)):
+        """the ground in the cut (merged_ul.set_ground_cut) and its push, 11-03: a frictionless rigid plane is the symmetry plane of the body and its mirror image (the
+        image moves as the reflection, so on the plane u_n = 0 and the shear is 0: the half of the doubled body's motion is the contact's, exactly), so the ground is the
+        contact of each cell with its own image, the self contact's column (ring_moment.py) on the pair (i, i'): |d| = 2 h, rho_i' = rho_i, lambda = h / rho_i, the pair's
+        E = 1/2 M V_c (ln lambda)^2 with V_c the mean rest volume V0_i, and the real body takes half of it (the doubled Lagrangian over 2), Kc = 1/4 M V0_i: the half cell
+        between its centre and the plane, a column under uniaxial strain. rho = rho0 |F_n^T n| on the fit at the step's start, frozen (the self contact's). Infinite as
+        h -> 0, so no centre reaches the plane and the mirror cut stays valid; one-sided by the law. The own image only: a pair (i, j') would push i along the plane,
+        against frictionless. After set_ball (its cs, wt), before prepare()"""
+        super().set_ground_cut(c0, normal)
+        n, dev = self.n, self.dev
+        if getattr(self, '_rho0', None) is None:
+            self._rho0 = self._rest_rho0()
+        self.Mp = self.lam+2*self.mu
+        self._h = float(self.V0.median())**(1/3)
+        ng = self._recut.ng
+        z = lambda dt_: wp.zeros(n, dtype=dt_, device=dev)
+        self.gcon = dict(i=z(wp.int32), Rs=z(wp.float64), Kc=z(wp.float64), fn=z(wp.float64),
+                         pl=wp.array([float(ng[0]), float(ng[1]), float(ng[2]), float(c0)], dtype=wp.float64, device=dev))
+        self.tgc = {k_: wp.to_torch(self.gcon[k_], requires_grad=False) for k_ in ('i', 'Rs', 'Kc', 'fn')}
+        self.ground_stats.update(near=0, pushing=0, lam_min=1.)
+
+    def ground_start(self, z, xn):
+        """the solve's start inside the ground's domain: a listed centre whose end point cs z - (cs - 1) x_n the predictor put under half its start height is moved
+        along the normal to that height (11-03: at 3 m/s a step is .18 h, the predictor put two centres under the plane, the log read NaN at the start). The start
+        only: the step's answer does not depend on it, and every trial after it is refused when non-finite"""
+        t = self.tgc; on = t['Kc'] > 0
+        if not bool(on.any()):
+            return 0
+        i = t['i'][on].long()
+        ng, c0, cs = self._recut.ng, self._recut.c0, float(self.tball[0])
+        h0 = xn[i]@ng-c0
+        hy = (cs*z[i]-(cs-1)*xn[i])@ng-c0
+        low = hy < .5*h0
+        if bool(low.any()):
+            z[i[low]] += ((.5*h0-hy)[low]/cs)[:, None]*ng[None, :]
+        self.ground_stats['start_moved'] = int(low.sum())
+        return int(low.sum())
+
+    def _ground_list(self, x):
+        """the cells against their images at the step's start x: those with h < rho + h_cell / 2 (a step's motion is under .3 h_cell), rho = rho0 |F_n^T n| on F_n there"""
+        t, st = self.tgc, self.ground_stats
+        ng, c0 = self._recut.ng, self._recut.c0
+        hg = x@ng-c0
+        rho = self._rho0*torch.einsum('fba,b->fa', self.ty['Fn'][self._gid], ng).norm(dim=1)
+        near = torch.nonzero(hg < rho+.5*self._h)[:, 0]
+        m = len(near)
+        t['i'].zero_(); t['Rs'].zero_(); t['Kc'].zero_()
+        if m:
+            t['i'][:m] = near.to(torch.int32); t['Rs'][:m] = rho[near]; t['Kc'][:m] = .25*self.Mp*self.V0[near]
+        lam = hg[near]/rho[near]
+        st['near'], st['pushing'], st['lam_min'] = m, int((lam < 1).sum()), float(lam.min()) if m else 1.
 
     def reread_light(self):
         """beta, R, v at the last evaluation: a substep's reading"""
@@ -660,8 +723,6 @@ class RingYield(RingFlow):
         wp.launch(k_Aul, Kw, inputs=[B['G0'], U['As'], U['Ao'], U['Aw']], outputs=[B['Ga']])
         wp.launch(k_Ge, n, inputs=[B['G0'], B['Ga'], U['used']], outputs=[B['Ge']])
         wp.launch(k_gg_wall, Kw, inputs=[x, U['xn']]+wall+[B['Ge']], outputs=[B['Sg']])
-        if self.ground_cut:
-            wp.launch(k_gg_ground, n, inputs=[x, U['xn'], U['gi'], U['ga'], U['gn'], U['go'], B['Ge']], outputs=[B['Sg']])
         wp.launch(k_gg_cell, n, inputs=[x, U['xn'], B['Sg'], B['Ge'], U['a'], U['Mc'], U['Vi']], outputs=[B['G']])
         wp.launch(k_ry_gs, n, inputs=[B['G'], V0, gid], outputs=[Y['Gs']])
         wp.launch(k_ry_gm, n, inputs=[Y['Gs'], Y['Vgi'], gid], outputs=[Y['Gm']])
@@ -695,14 +756,16 @@ class RingYield(RingFlow):
         if sc is not None:                                                                 # (the contacts of ring_moment.py's colour code, after set_colour_contact)
             wp.launch(k_ry_contact, sc['K'], inputs=[x, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['Kc'], bl['par']], outputs=[sc['fn'], sc['nv'], B['terms']])
             wp.launch(k_ry_contact_adj, sc['K'], inputs=[sc['i'], sc['k'], bl['par'], sc['fn'], sc['nv']], outputs=[g])
+        if self.ground_cut:                                                                # (the ground: each cell against its mirror image, set_ground_cut)
+            gc = self.gcon
+            wp.launch(k_ry_ground, n, inputs=[x, U['xn'], gc['i'], gc['Rs'], gc['Kc'], gc['pl'], bl['par']], outputs=[gc['fn'], B['terms']])
+            wp.launch(k_ry_ground_adj, n, inputs=[gc['i'], gc['pl'], bl['par'], gc['fn']], outputs=[g])
         wp.launch(k_ry_as, n, inputs=[Y['Gbm'], gid], outputs=[Y['Ss']])
         wp.launch(k_ry_ab, n, inputs=[Y['Ss'], V0, Y['Vgi'], gid], outputs=[B['Gb']])
         wp.launch(k_ry_as, n, inputs=[Y['Gbrm'], gid], outputs=[Y['Srs']])
         wp.launch(k_ry_ab, n, inputs=[Y['Srs'], V0, Y['Vgi'], gid], outputs=[Br['Gb']])
         wp.launch(k_gg_cell_adj, n, inputs=[B['Gb'], U['a'], U['Mc'], U['Vi']], outputs=[g, B['Gs'], B['Gbe']])
         wp.launch(k_gg_wall_adj, Kw, inputs=wall+[B['Gs']], outputs=[g, B['Gbe']])
-        if self.ground_cut:
-            wp.launch(k_gg_ground_adj, n, inputs=[U['gi'], U['ga'], U['gn'], U['go'], B['Gs']], outputs=[g, B['Gbe']])
         wp.launch(k_Ge_adj, n, inputs=[B['Gbe'], U['used']], outputs=[B['Gb0']])
         wp.launch(k_Aul_adj2, Kw, inputs=[B['Gbe'], U['As'], U['Ao'], U['Aw']], outputs=[B['Gb0']])
         wp.launch(k_Gul_adj, 2*Kw, inputs=[B['Gb0'], U['S'], U['O'], U['R']], outputs=[g])
@@ -956,6 +1019,8 @@ class YieldStep(MidpointStep):
         if self.smooth_pred and self._vp is not None:
             h_ = self.th*self.dt
             self.tz.copy_(self.tx+.5*h_*(self.tv+self._vp)+.5*(.5*h_*self.dt+h_*h_)*(self.ta+self._ap))
+        if getattr(W, 'ground_cut', False):
+            W.ground_start(self.tz, self.tx)
         wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
         if getattr(W, 'hold', False):
             W.hold_start(self.tx, self.muf)

@@ -567,10 +567,15 @@ def ground_check(W, ST, V0):
     G = W._ulG
     Vt = W.V0*torch.exp(W.tul['Ln'])
     err = ((G.V.detach()-Vt)/Vt).abs()
-    print('one start: mirrors %d; ground faces %d (new %d), counted %d, released %d, area counted %.4f m^2; walls to another cell\'s mirror, largest area %.2e; radii iterations %d; volume error max %.2e, total V %.6f against V0 e^L %.6f' % (
-        G.n_mirror, gs['faces'], gs['new'], gs['active'], gs['released'], gs['area'], gs['other_A_max'], us.get('radii_it', -1), float(err.max()), float(G.V.detach().sum()), float(Vt.sum())), flush=True)
+    print('one start: mirrors %d; ground faces %d, area %.4f m^2; walls to another cell\'s mirror, largest area %.2e; radii iterations %d; volume error max %.2e, total V %.6f against V0 e^L %.6f; cells against their images %d, pressing %d, lambda min %.3f' % (
+        G.n_mirror, gs['faces'], gs['area'], gs['other_A_max'], us.get('radii_it', -1), float(err.max()), float(G.V.detach().sum()), float(Vt.sum()), gs['near'], gs['pushing'], gs['lam_min']), flush=True)
     W.grad(x); W.reread()
     e0, g0 = W.grad(x); g0 = g0.clone()
+    t_ = W.tgc; on_ = t_['Kc'] > 0
+    i_ = t_['i'][on_].long(); hh_ = x[i_]@ng-c0; lam_ = hh_/t_['Rs'][on_]
+    E6_ = float(W.tball[1])*float((t_['Kc'][on_]*torch.log(lam_.clamp(max=1.))**2).sum())      # (the term's weight wt, as the kernel; x is the step's start, so the end point is x)
+    print('  the ground term at x: %.6e, by hand from the list %.6e; push / weight %.4f; rho / h %.3f..%.3f' % (
+        float(W.tsum[6]), E6_, float(t_['fn'].sum())/float(9.8*W.V0.sum()), float(t_['Rs'][on_].min())/h_ if bool(on_.any()) else 0., float(t_['Rs'][on_].max())/h_ if bool(on_.any()) else 0.), flush=True)
     torch.manual_seed(1)
     d = torch.randn_like(x); d = d/d.norm(dim=1).max()
     near = ht < 2*h_
