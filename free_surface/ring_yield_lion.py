@@ -52,6 +52,7 @@ a_.add_argument('--true-blocks', action='store_true', help='the preconditioner o
 a_.add_argument('--colour', type=float, default=0., help='ring_moment.py\'s colour contact at this sigma (graph steps; the lion\'s 1.19), with --moment')
 a_.add_argument('--jump', action='store_true', help='with --colour: a wall without a spring counts by the jump test (RingMoment.set_jump_share), no weightless springs')
 a_.add_argument('--ground-cut', action='store_true', help='the ground as a plane of the cut (MergedUL.set_ground_cut), the Hertz ground off')
+a_.add_argument('--watch-ground', action='store_true', help='with --ground-cut: after every step, the centre points under the plane and what their cells had at the step\'s start')
 args = a_.parse_args()
 E, nu, C0, v0 = 10648.614517785627/1000, .3912951704721983, -.2, (0., 0., -.245)
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
@@ -204,11 +205,39 @@ for s in range(s_first, nsteps+1):
         bo = torch.nonzero(gl & ~torch.isfinite(Y_['Ff']).all(dim=(1, 2)))[:, 0]
         sn = torch.linalg.svdvals(torch.nan_to_num(Y_['Fn'][gl], nan=0., posinf=0., neginf=0.).cpu())
         print('step %d, t %.4f: the solve did not converge (|g| / weight %s, %d outer, %d inner); |g| %s; F_n smallest min %.3f, largest max %.3f; non-finite, groups: %s, sites: %s; groups with a bad fit %s, V0 / median %s; largest |g| cells %s, V0 / median %s' % (s, s*args.dt, math.sqrt(g2)/wref if math.isfinite(g2) else g2, ST.stats['outer'], its, ['%.3g' % (a__[4]/wref) for a__ in tr_][-20:], float(sn[:, 2].min()), float(sn[:, 0].max()), bad, badx, bo[:12].tolist(), np.array2string(V0[bo[:12].cpu().numpy()]/np.median(V0), precision=3), top.tolist(), np.array2string(V0[top.cpu().numpy()]/np.median(V0), precision=3)), flush=True)
+        print('  energy terms at the failure: %s; |g| / weight over the first evaluations %s' % (np.array2string(W.tsum.detach().cpu().numpy(), precision=3), ['%.3g' % (a__[4]/wref) for a__ in tr_][:8]), flush=True)
+        if W.ground_cut:
+            Gv_ = W._ulG; Vt_ = W.V0*torch.exp(W.tul['Ln']); V_ = Gv_.V.detach(); gi_ = Gv_.g_i.long()
+            hasg_ = torch.zeros(n, dtype=torch.bool, device=dev); hasg_[gi_] = True
+            Ag_ = torch.zeros(n, dtype=f64, device=dev).index_add(0, gi_, Gv_.g_A.detach())
+            ht_ = (W.tul['xn']@W._recut.ng-W._recut.c0)/h
+            rat_ = V_/Vt_; k_ = int(torch.argmin(rat_))
+            Gn_ = wp.to_torch(W.B['G'], requires_grad=False).norm(dim=(1, 2))
+            print('  ground at the failure: %d faces on %d cells, areas %.2e..%.2e; V / V0 e^L min %.3e (cell %d, ground face %s, height %.3f h), max %.3e; cells under .5 %d; |G| max %.3e (cell %d)' % (
+                len(gi_), int(hasg_.sum()), float(Gv_.g_A.min()) if len(gi_) else 0., float(Gv_.g_A.max()) if len(gi_) else 0., float(rat_[k_]), k_, bool(hasg_[k_]), float(ht_[k_]), float(rat_.max()),
+                int((rat_ < .5).sum()), float(Gn_.max()), int(torch.argmax(Gn_))), flush=True)
+            for c_ in top.tolist():
+                print('    cell %d: |g| / weight %.3e, ground face %s (area / V^(2/3) %.3f), height %.3f h, radius %.3f h, V / V0 e^L %.3f, |G| %.3e' % (
+                    c_, float(gz[c_])/wref, bool(hasg_[c_]), float(Ag_[c_]/V_[c_]**(2/3)), float(ht_[c_]), float(W._ulr[c_])/h, float(rat_[c_]), float(Gn_[c_])), flush=True)
         np.savez(args.save/('fail_%s.npz' % args.tag), x=ST.tx.cpu().numpy(), v=ST.tv.cpu().numpy(), a=ST.ta.cpu().numpy(), z=ST.tz.cpu().numpy(), step=s)
         save()
         break
     if ST.stats.get('aa_nan', 0):
         print('AA step %d: the extrapolation read NaN %d times, back to the plain point' % (s, ST.stats['aa_nan']), flush=True)
+    if args.watch_ground and W.ground_cut:
+        ng_, c0_ = W._recut.ng, W._recut.c0
+        h0_ = (W.tul['xn']@ng_-c0_)/h; h1_ = (ST.tx@ng_-c0_)/h
+        low_ = torch.nonzero(h1_ < .05)[:, 0]; und_ = torch.nonzero(h1_ < 0)[:, 0]
+        st_ = torch.where(W._g_on, 1, torch.where(W._g_face, 2, torch.where(h0_*h < W._ulr, 3, 0)))      # 1 counted, 2 released, 3 its ball reaches the plane but no face, 0 neither
+        nm_ = ['none', 'counted', 'released', 'no face']
+        cnt_ = [int((st_[low_] == k_).sum()) for k_ in range(4)]
+        line_ = 'watch step %d: under the plane %d, under .05 h %d (by the start: none %d, counted %d, released %d, no face %d); lowest %.4f h' % (s, len(und_), len(low_), cnt_[0], cnt_[1], cnt_[2], cnt_[3], float(h1_.min()))
+        if len(und_):
+            Fs_ = torch.linalg.svdvals(W._Fe[W._gid][und_].cpu())
+            Gnn_ = torch.einsum('a,fab,b->f', ng_, W.tG[und_]/W.th, ng_)
+            line_ += '; ' + ', '.join('cell %d: %s, start %.3f h -> %.3f h, face area / h^2 %.3f, r %.2f h, F_n singular %.2f..%.2f, G_nn over the step %+.3f' % (
+                c_, nm_[int(st_[c_])], float(h0_[c_]), float(h1_[c_]), float(W._g_area[c_])/h**2, float(W._ulr[c_])/h, float(Fs_[k_, 2]), float(Fs_[k_, 0]), float(Gnn_[k_])) for k_, c_ in enumerate(und_[:6].tolist()))
+        print(line_, flush=True)
     ST.end()
     if args.dense_from and s >= args.dense_from:
         dense_x.append(ST.tx.cpu().numpy()); dense_s.append(s)

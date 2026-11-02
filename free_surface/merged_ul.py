@@ -240,6 +240,7 @@ class MergedUL(PlasticUL):
         tn = self.kap*self.tul['Ln']+2*self.mu*torch.einsum('a,fab,b->f', ng, e, ng)
         on = face & (new | (tn <= 0) | near)
         self._g_face, self._g_h = face, h
+        self._g_on, self._g_area = on, torch.zeros(self.n, dtype=f64, device=x.device).index_add(0, gi, gA)      # (for a watch: the step's start, per cell)
         st['faces'], st['new'], st['active'] = int(face.sum()), int(new.sum()), int(on.sum())
         st['released'] = int((face & ~on).sum()); st['area'] = float(gA[on[gi]].sum())
         st['other_A_max'] = G.other_A_max

@@ -238,7 +238,8 @@ class GroundRecut(Recut):
     """the cut bounded by a rigid plane n . y = c0 (n the up normal): every cell whose ball reaches the plane gets a mirror site, its reflection with the same radius; the
     power plane of a site and its mirror is the plane itself, so the cut of the real cells ends at it and nothing of theirs lies under it. The radii stay tied (a mirror's
     is its parent's): the Newton on the real cells only, its Jacobian over the real walls (a ground face does not move when both weights move alike), so Recut's solve
-    holds unchanged on the view. cap: the alpha complex's capacity (real + mirrors)"""
+    holds unchanged on the view. A real cell is cut against the real cells and its own mirror only (another cell's mirror never bounds it above the plane, and kept it
+    ties four sites on every edge of a ground face), a mirror against its parent only (its own cell is not used). cap: the alpha complex's capacity (real + mirrors)"""
 
     def __init__(self, n, c0, normal=(0., 0., 1.), device='cuda', margin=.05, cap=None):
         super().__init__(n, device, margin)
@@ -255,6 +256,10 @@ class GroundRecut(Recut):
         if len(P) > self.A.n:
             raise RuntimeError('GroundRecut: %d sites with the mirrors over the capacity %d' % (len(P), self.A.n))
         self.A.overlaps(P, R, self.margin); self.stats['overlaps'] += 1                # (the mirrors change with the radii: no reuse)
+        a, b = self.A.ov                                                               # (each real cell sees the real cells and its own mirror only, a mirror its parent only: above
+        ra, rb = a < n, b < n                                                          # the plane |y - p_k'|^2 = |y - p_k|^2 + 4 h_k (n.y - c0) > |y - p_k|^2, so another cell's mirror
+        keep = (ra & rb) | (ra & ~rb & (parent[b] == a)) | (~ra & rb & (parent[a] == b))   # never bounds a real cell; kept, it made i, k, i', k' co-spherical on every edge of a
+        self.A.ov = (a[keep], b[keep])                                                 # ground face, and the clipping read that tie at random: 11-03 step 336, three cells V < 0)
         out = self.A(P, R, reuse=True)
         bad = out['status'].clone(); bad[bad == 1] = 0
         if bool((bad > 0).any()):
