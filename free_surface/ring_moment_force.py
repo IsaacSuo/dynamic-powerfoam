@@ -466,3 +466,73 @@ def contact_check(W, ST, V0):
         fd = (Ep-Em)/(2*e); an = float((gc*d).sum())
         print('  step %.0e h: central difference %.6e, gradient %.6e, rel. error %.2e' % (e/h_, fd, an, abs(fd-an)/abs(an)), flush=True)
     t['Rs'][:m] = Rs
+
+
+def jump_check(W, ST, V0, tag, Q, rest_keys, skin=None):
+    """the jump test (11-02) at a real state: a wall (i, j) of the cut at x lies in one piece of material iff the inverse motion is continuous across it.
+    J = X_j - X_i - int_{x_i}^{x_j} F^-1 dx, the integral F_i^-1 t d + F_j^-1 (1 - t) d (t the wall's place on the line, d = x_j - x_i): 0 in one piece, the rest jump
+    across an interface. Its size by the static colour: s = BC of the colour of the rest cell holding the predicted point X_i + int and j's own (and from j), averaged.
+    Per wall class: rest walls, new walls of like colour (>= .5), of unlike colour (< .5); F the state's F_e, and the fit at x"""
+    from free_surface.ring_moment import color_sim
+    n = W.n; h_ = float(np.median(V0))**(1/3)
+    X = W.X; x = ST.tx.clone(); r0 = W._rr0
+    Fe = W._Fe[W._gid].clone()
+    W.update_ul(x)
+    Ffit = W.ty['Fn'][W._gid].clone()
+    G = W._ulG; kp = G.wall_A.detach() > 0
+    i, j = G.i[kp].long(), G.j[kp].long(); c = G.wall_c.detach()[kp]
+    d = x[j]-x[i]
+    t = ((c-x[i])*d).sum(1)/(d*d).sum(1)
+    t_out = int(((t < 0) | (t > 1)).sum()); t = t.clamp(0., 1.)
+    a_, b_ = torch.minimum(i, j), torch.maximum(i, j)
+    rest = torch.isin(a_*n+b_, rest_keys)
+    sc = color_sim(Q, i, j)
+    cls = {'rest walls': rest, 'new, like colour': ~rest & (sc >= .5), 'new, unlike colour': ~rest & (sc < .5)}
+    w2 = r0*r0
+
+    def locate(p):
+        out = torch.empty(len(p), dtype=torch.long, device=p.device)
+        for c0 in range(0, len(p), 4096):
+            pw = torch.cdist(p[c0:c0+4096].float(), X.float())**2-w2.float()[None]
+            out[c0:c0+4096] = pw.argmin(1)
+        return out
+    q = lambda v_: np.round(np.quantile(v_.cpu().numpy(), [.05, .25, .5, .75, .95]), 3).tolist() if len(v_) else '-'
+    print('== %s: walls %d (t outside [0, 1]: %d); rest %d, new like %d, new unlike %d' % (tag, len(i), t_out, int(rest.sum()), int(cls['new, like colour'].sum()), int(cls['new, unlike colour'].sum())), flush=True)
+    for name, F in (('F_e of the state', Fe), ('the fit at x', Ffit)):
+        Fi = W._inv(F)
+        I_ = torch.einsum('fab,fb->fa', Fi[i], t[:, None]*d)+torch.einsum('fab,fb->fa', Fi[j], (1-t)[:, None]*d)
+        J = X[j]-X[i]-I_
+        cj, ci = locate(X[i]+I_), locate(X[j]-I_)
+        s = .5*(color_sim(Q, cj, j)+color_sim(Q, ci, i))
+        hit = .5*((cj == j).double()+(ci == i).double())
+        print('  %s: |F^-1| largest singular value quantiles .5 .99 max %s' % (name, np.round(np.quantile(torch.linalg.matrix_norm(Fi, ord=2).cpu().numpy(), [.5, .99, 1.]), 2).tolist()), flush=True)
+        for k_, m_ in cls.items():
+            if not bool(m_.any()):
+                continue
+            print('    %-19s |J| / h q.05 .25 .5 .75 .95 %s; s %s; s > .5: %.3f; predicted cell = the partner: %.3f' % (k_, q(J[m_].norm(dim=1)/h_), q(s[m_]), float((s[m_] > .5).double().mean()), float(hit[m_].mean())), flush=True)
+        nw = ~rest
+        if bool(nw.any()):
+            H = np.histogram2d(sc[nw].cpu().numpy(), s[nw].cpu().numpy(), bins=[[0., .1, .3, .5, .7, .9, 1.01], [0., .1, .3, .5, .7, .9, 1.01]])[0].astype(int)
+            print('    new walls, rows colour similarity 0 .1 .3 .5 .7 .9 1, columns jump similarity, the same bins:\n'+'\n'.join('      '+' '.join('%6d' % v_ for v_ in row) for row in H), flush=True)
+        if skin is None or name != 'the fit at x':
+            continue
+        # the walls where the two disagree, against those where both read contact or both material: rest and current distance, the rest segment inside the body, skin, legs
+        Xr = X; zr = X[:, 2]-X[:, 2].min(); leg = zr < .18
+        sg = torch.linspace(.1, .9, 9, device=x.device, dtype=x.dtype)
+
+        def inside(a, b):
+            pts = (Xr[a][:, None, :]+sg[None, :, None]*(Xr[b]-Xr[a])[:, None, :]).reshape(-1, 3)
+            k = locate(pts)
+            ok = (pts-Xr[k]).norm(dim=1) <= r0[k]
+            return ok.reshape(len(a), -1).all(1)
+        sets = {'colour < .5, jump > .5 (disagree)': nw & (sc < .5) & (s > .5), 'colour < .5, jump < .5 (both contact)': nw & (sc < .5) & (s <= .5),
+                'colour >= .5, jump < .5 (disagree)': nw & (sc >= .5) & (s <= .5), 'colour >= .5, jump > .5 (both material)': nw & (sc >= .5) & (s > .5)}
+        for k_, m_ in sets.items():
+            if not bool(m_.any()):
+                print('    %-40s none' % k_, flush=True)
+                continue
+            a, b = i[m_], j[m_]
+            rd = (Xr[b]-Xr[a]).norm(dim=1)/h_; cd = d[m_].norm(dim=1)/h_
+            print('    %-40s %5d: rest distance / h %s; now %s; now / rest %s; rest segment inside the body %.2f; both skin %.2f, one %.2f; both on legs %.2f, one %.2f' % (
+                k_, int(m_.sum()), q(rd), q(cd), q(cd/rd), float(inside(a, b).double().mean()), float((skin[a] & skin[b]).double().mean()), float((skin[a] ^ skin[b]).double().mean()),
+                float((leg[a] & leg[b]).double().mean()), float((leg[a] ^ leg[b]).double().mean())), flush=True)

@@ -37,6 +37,7 @@ a_.add_argument('--ground-k', type=float, default=1., help='the ground\'s Hertz 
 a_.add_argument('--rest-ground', action='store_true', help='the ground on the rest radii, not the cut\'s')
 a_.add_argument('--dense-from', type=int, default=0, help='every step from this one: the sites into dense_<tag>.npz')
 a_.add_argument('--probe-30', type=Path, nargs='*', default=[], help='these saved states: ring_moment_force.check30, then stop')
+a_.add_argument('--probe-jump', type=Path, nargs='*', default=[], help='these saved states: ring_moment_force.jump_check, then stop')
 a_.add_argument('--dense', type=Path, default=None)
 a_.add_argument('--probe-colour', action='store_true', help='at the loaded state: the lock against the colours, then stop')
 a_.add_argument('--probe-contact', action='store_true', help='at the loaded state: the colour contact\'s births and gradient, then stop')
@@ -106,6 +107,17 @@ def save():
 
 
 from free_surface.run_state import pack, unpack
+if args.probe_jump:
+    from free_surface.ring_moment import color_code
+    from free_surface.ring_moment_force import jump_check
+    Qc_ = color_code(W, W._rr0, 1.19)
+    G0_, _ = W._recut.geometry(W.X, W._rr0); k0_ = G0_.wall_A.detach() > 0
+    rk_ = torch.unique(torch.minimum(G0_.i[k0_], G0_.j[k0_]).long()*n+torch.maximum(G0_.i[k0_], G0_.j[k0_]).long())
+    for f_ in args.probe_jump:
+        ck_ = torch.load(f_, weights_only=False)
+        unpack(W, ck_['W']); unpack(ST, ck_['ST'])
+        jump_check(W, ST, V0, '%s (step %d)' % (f_.name, ck_['s']), Qc_, rk_, G0_.patch_A.detach() > 0)
+    raise SystemExit
 if args.probe_30:
     from free_surface.ring_moment_force import check30
     dn_ = np.load(args.dense)
