@@ -202,6 +202,10 @@ class MergedUL(PlasticUL):
         stay = ~(yld[self.tlo] & yld[self.thi]) | torch.isin(self.tkey, key)
         return new, stay
 
+    def _wall_share(self, i, j, A, c, x, conn):
+        """each wall's share as material: 1 for a wall whose pair has a spring, 0 for the others (a free surface to both)"""
+        return conn.to(f64)
+
     def _spring_k(self, x, lo_s, hi_s, key_s, ds, k0_, both_y, has_wall, Aw, wall):
         """k: of the current wall when both cells have yielded, else kept"""
         k_ = k0_.clone(); q_ = both_y & has_wall
@@ -249,7 +253,10 @@ class MergedUL(PlasticUL):
             s[k2].zero_()
         s['si'][:m_s] = lo_s.to(torch.int32); s['sj'][:m_s] = hi_s.to(torch.int32); s['sP'][:m_s] = p_; s['sdn'][:m_s] = dl_; s['sk'][:m_s] = k_; s['sb'].fill_(1.)
         self._m_s = m_s
-        ic, jc, Ac, cc = i[conn], j[conn], A[conn], c[conn]
+        mw = self._wall_share(i, j, A, c, x, conn)                                    # (each wall's share as material: 1 a spring's, 0 the rest by default; the area counts by it)
+        sel = mw > 0
+        ic, jc, Ac, cc = i[sel], j[sel], A[sel]*mw[sel], c[sel]
+        ms_ = mw[sel]
         m = len(ic); U = self.ul
         if m > U['Kw']:
             raise RuntimeError('update_ul: %d walls over the capacity %d' % (m, U['Kw']))
@@ -280,16 +287,17 @@ class MergedUL(PlasticUL):
         tiny = self.V0 < self._ul_agg*self.V0.median()
         m1, m2 = tiny[ic] & ~tiny[jc], tiny[jc] & ~tiny[ic]
         as_, ao_ = torch.cat([ic[m1], jc[m2]]), torch.cat([jc[m1], ic[m2]])
-        va = self.V0[ao_]
+        va = self.V0[ao_]*torch.cat([ms_[m1], ms_[m2]])
         den = torch.zeros(n, dtype=f64, device=dev).index_add(0, as_, va)
         t['As'].zero_(); t['Ao'].zero_(); t['Aw'].zero_()
         k3 = len(as_); t['As'][:k3] = as_.to(torch.int32); t['Ao'][:k3] = ao_.to(torch.int32); t['Aw'][:k3] = va/den[as_]
         t['used'].copy_((tiny & (den > 0)).to(torch.int32))
         tw = ((cc-x[ic])*nn).sum(1)/Lw
         cap = G.patch_A.detach() > 0
-        openc = cap.clone()                                                         # (a wall that does not count is a free surface to its cells)
-        if bool((~conn).any()):
-            openc[i[~conn]] = True; openc[j[~conn]] = True
+        openc = cap.clone()                                                         # (a wall that does not count, or counts in part, is a free surface to its cells by the rest)
+        part = mw < 1
+        if bool(part.any()):
+            openc[i[part]] = True; openc[j[part]] = True
         a_ = torch.zeros(n, 3, dtype=f64, device=dev).index_add(0, ic, -Ac[:, None]*nn).index_add(0, jc, Ac[:, None]*nn)
         Mw = (torch.zeros(n, 3, 3, dtype=f64, device=dev).index_add(0, ic, Ac[:, None, None]*(cc-x[ic])[:, :, None]*nn[:, None, :])
               .index_add(0, jc, -Ac[:, None, None]*(cc-x[jc])[:, :, None]*nn[:, None, :]))

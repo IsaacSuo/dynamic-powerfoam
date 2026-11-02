@@ -15,7 +15,11 @@
     of a ball of radius rho0 carried by its fit F_n at the step's start (n the line there, both frozen over the step, as R and beta), rho0 half the cell's rest distance to its neighbours by wall area (the face neighbours:
     two cells side by side at their own size read delta 0). Its partners found by distance each step, within reach and a margin of h. (11-02 first the push on the approach since the wall's birth, ClosureWarp's d0:
     with balls of 2 h the cut has walls between unlike cells 1.6-3.9 h apart across the air, so the push began far before touching, and a pair that slid past left and came back nearer, born without force:
-    10 % born under .82 h at t .34, the nearest leg-torso pair .42 h apart read delta .02; the paws went in .02 s later than without it)"""
+    10 % born under .82 h at t .34, the nearest leg-torso pair .42 h apart read delta .02; the paws went in .02 s later than without it)
+  jump share (set_jump_share, 11-02): one piece of material or two is whether the inverse motion is continuous between two cells: J = X_j - X_i - int F^-1 dx along the current
+    segment (exact by the fundamental theorem in one piece, whatever the flow; the rest jump across an interface). A wall without a spring counts as material by s = the static
+    colour's similarity of X_i + int F^-1 dx to j (the jump's size measured through the material), the rest of it a free surface; such a pair pushes by 1 - s. The colour alone read
+    compressed skin as contact: on the saved states 99-298 walls a state with colour < .5 had J ~ 0, rest 2.5-3.6 h apart, now about half, the rest segment inside the body (jump_check)"""
 import numpy as np
 import scipy.sparse as sp
 import torch
@@ -59,8 +63,54 @@ class RingMoment(RingYield):
     radii_extrap = False                                                               # (on the 30 steps: the same time, no gain)
     _col_Q = None
     sim_birth = .5
+    jump_share = False
 
-    def set_colour_contact(self, sigma, K=65536):
+    def set_jump_share(self):
+        """the share of a wall without a spring by the jump of the inverse motion across it (11-02, after set_colour_contact): J = X_j - X_i - int F^-1 dx along x_i -> x_j,
+        0 in one piece of material, the rest jump across an interface; s = the static colour's similarity of the rest point X_i + int F^-1 dx to j (and from j), the wall counting
+        by s in the gradient, the volume and its smoothing, its cells' closure taking the rest; a pair without a spring pushes by 1 - s. No weightless springs: the share is the wall's"""
+        self.jump_share = True
+        self.elastic_births = False
+
+    def _sim_at(self, y, b):
+        """the static colour's similarity of rest points y to cells b: the rest power cell holding y and the next, by their power gap (continuous across the face, the second's
+        weight 1/2 on it and under 5 % a quarter cell inside)"""
+        X, w2 = self.X.float(), (self._rr0**2).float()
+        tau2 = self._h**2/6
+        out = torch.empty(len(y), dtype=f64, device=y.device)
+        for c0 in range(0, len(y), 4096):
+            pw = torch.cdist(y[c0:c0+4096].float(), X)**2-w2[None]
+            v, k = torch.topk(pw, 2, dim=1, largest=False)
+            g = torch.exp(-(v[:, 1]-v[:, 0]).double().clamp(min=0.)/tau2)
+            bb = b[c0:c0+4096]
+            out[c0:c0+4096] = (color_sim(self._col_Q, k[:, 0], bb)+g*color_sim(self._col_Q, k[:, 1], bb))/(1+g)
+        return out
+
+    def jump_sim(self, a, b, d, t):
+        """the jump test's similarity of pairs (a, b), d = x_b - x_a, t the wall's place on the line (the step's start state F_e): from both ends, averaged"""
+        Fi = self._inv(self._Fe[self._gid])
+        I_ = torch.einsum('fab,fb->fa', Fi[a], t[:, None]*d)+torch.einsum('fab,fb->fa', Fi[b], (1-t)[:, None]*d)
+        return .5*(self._sim_at(self.X[a]+I_, b)+self._sim_at(self.X[b]-I_, a))
+
+    def _wall_share(self, i, j, A, c, x, conn):
+        mw = conn.to(f64)
+        if not self.jump_share:
+            return mw
+        k = torch.nonzero(~conn)[:, 0]
+        if len(k):
+            a, b = i[k], j[k]
+            d = x[b]-x[a]
+            t = (((c[k]-x[a])*d).sum(1)/(d*d).sum(1)).clamp(0., 1.)
+            mw[k] = self.jump_sim(a, b, d, t)
+        kk = torch.minimum(i, j)*self.n+torch.maximum(i, j)
+        o = torch.argsort(kk)
+        self._wkey, self._wshare = kk[o], mw[o]
+        st = self.ul_stats
+        st['share_n'] = len(k); st['share_hi'] = int((mw[k] > .5).sum()); st['share_mid'] = int(((mw[k] > .1) & (mw[k] < .9)).sum())
+        st['share_mean'] = float(mw[k].mean()) if len(k) else 0.
+        return mw
+
+    def set_colour_contact(self, sigma, K=262144):
         """the colour code on the rest cut, each cell's rho0 and the contact list's buffers, before prepare(); K the list's capacity. E* of two like bodies, E / 2 (1 - nu^2), as closure_warp.py"""
         n, dev = self.n, self.dev
         self._col_Q = color_code(self, self._rr0, sigma)
@@ -94,6 +144,22 @@ class RingMoment(RingYield):
         L = (x[b]-x[a]).norm(dim=1)
         k = (L < rmax[a]+rmax[b]+margin) & ~torch.isin(a*n+b, self.tkey)
         a, b = a[k], b[k]
+        if self.jump_share:                                                            # (reach first; the share: a wall's as update_ul read it, the others' on the half-way split)
+            d = x[b]-x[a]; L = d.norm(dim=1); nn = d/L[:, None]
+            ra = self._rho0[a]*torch.einsum('fba,fb->fa', F[a], nn).norm(dim=1)
+            rb = self._rho0[b]*torch.einsum('fba,fb->fa', F[b], nn).norm(dim=1)
+            k = L < ra+rb+margin
+            a, b, d, L, ra, rb = a[k], b[k], d[k], L[k], ra[k], rb[k]
+            s = torch.zeros(len(a), dtype=f64, device=x.device)
+            isw = torch.zeros(len(a), dtype=torch.bool, device=x.device)
+            if getattr(self, '_wkey', None) is not None and len(self._wkey) and len(a):
+                pos = torch.searchsorted(self._wkey, a*n+b).clamp(max=len(self._wkey)-1); isw = self._wkey[pos] == a*n+b
+                s[isw] = self._wshare[pos[isw]]
+            nw = ~isw
+            if bool(nw.any()):
+                s[nw] = self.jump_sim(a[nw], b[nw], d[nw], torch.full((int(nw.sum()),), .5, dtype=f64, device=x.device))
+            k = (1-s) > 1e-3
+            return a[k], b[k], ra[k], rb[k], (1-s)[k], L[k]
         sim = color_sim(self._col_Q, a, b)
         k = sim < self.sim_birth
         a, b, sim = a[k], b[k], sim[k]
@@ -109,7 +175,7 @@ class RingMoment(RingYield):
         st = self.self_stats
         x = x.detach()
         F = self.ty['Fn'][self._gid]
-        a, b, ra, rb, pw, L = self.contact_pairs(x, F, self._h)
+        a, b, ra, rb, pw, L = self.contact_pairs(x, F, (.5 if self.jump_share else 1.)*self._h)   # (a step's relative motion is under .3 h; with the share every near pair is a candidate)
         m = len(a); K = self.selfc['K']
         if m > K:
             raise RuntimeError('update_self: %d contact pairs over the capacity %d' % (m, K))

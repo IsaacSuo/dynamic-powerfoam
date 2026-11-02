@@ -435,7 +435,11 @@ def contact_check(W, ST, V0):
     h_ = float(np.median(V0)**(1/3))
     q = lambda v_: np.round(np.quantile(v_.cpu().numpy(), [0., .1, .5, .9, 1.]), 3).tolist()
     I3 = torch.eye(3, dtype=f64, device=dev).expand(W.n, 3, 3)
+    Fe_ = W._Fe.clone()
+    if W.jump_share:
+        W._Fe.copy_(I3)                                                                         # (at rest: F = I for the jump test too)
     a, b, ra, rb, pw, L = W.contact_pairs(W.X, I3, h_)
+    W._Fe.copy_(Fe_)
     dl = (ra+rb-L)/(ra+rb)
     print('rho0 / h quantiles 0 .1 .5 .9 1: %s; at rest, unlike pairs within reach + h: %d, overlapping %d, the deepest %.3f of rho_i + rho_k, the nearest gap %.3f h' % (q(W._rho0/h_), len(a), int((dl > 0).sum()), float(dl.max()), float((L-ra-rb).min())/h_), flush=True)
     x = ST.tx.clone()
