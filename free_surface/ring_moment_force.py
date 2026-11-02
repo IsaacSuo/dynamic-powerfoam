@@ -552,3 +552,31 @@ def jump_check(W, ST, V0, tag, Q, rest_keys, skin=None):
             print('    %-40s %5d: rest distance / h %s; now %s; now / rest %s; rest segment inside the body %.2f; both skin %.2f, one %.2f; both on legs %.2f, one %.2f' % (
                 k_, int(m_.sum()), q(rd), q(cd), q(cd/rd), float(inside(a, b).double().mean()), float((skin[a] & skin[b]).double().mean()), float((skin[a] ^ skin[b]).double().mean()),
                 float((leg[a] & leg[b]).double().mean()), float((leg[a] ^ leg[b]).double().mean())), flush=True)
+
+
+def ground_check(W, ST, V0):
+    """the ground in the cut (merged_ul.set_ground_cut) at a real state: one step's start (mirrors, faces, which count, the radii), the volumes against V0 e^L, none
+    of a cell under the plane by construction; the whole energy's gradient against central differences along a random direction, the ground faces in it"""
+    x = ST.tx.clone()
+    h_ = float(np.median(V0)**(1/3))
+    c0 = W._recut.c0; ng = W._recut.ng
+    ht = x@ng-c0
+    print('sites under the plane %d (lowest %.3f h above it); balls reaching it %d' % (int((ht < 0).sum()), float(ht.min())/h_, int((ht < W._ulr).sum())), flush=True)
+    W.update_ul(x)
+    gs, us = W.ground_stats, W.ul_stats
+    G = W._ulG
+    Vt = W.V0*torch.exp(W.tul['Ln'])
+    err = ((G.V.detach()-Vt)/Vt).abs()
+    print('one start: mirrors %d; ground faces %d (new %d), counted %d, released %d, area counted %.4f m^2; walls to another cell\'s mirror, largest area %.2e; radii iterations %d; volume error max %.2e, total V %.6f against V0 e^L %.6f' % (
+        G.n_mirror, gs['faces'], gs['new'], gs['active'], gs['released'], gs['area'], gs['other_A_max'], us.get('radii_it', -1), float(err.max()), float(G.V.detach().sum()), float(Vt.sum())), flush=True)
+    W.grad(x); W.reread()
+    e0, g0 = W.grad(x); g0 = g0.clone()
+    torch.manual_seed(1)
+    d = torch.randn_like(x); d = d/d.norm(dim=1).max()
+    near = ht < 2*h_
+    for name, m_ in (('every site', torch.ones_like(near)), ('the sites near the ground', near)):
+        dd = d*m_[:, None]
+        for e in (1e-5*h_, 1e-6*h_):
+            Ep, _ = W.grad(x+e*dd); Em, _ = W.grad(x-e*dd)
+            fd = float(Ep-Em)/(2*e); an = float((g0*dd).sum())
+            print('  %s, step %.0e h: central difference %.8e, gradient %.8e, rel. error %.2e' % (name, e/h_, fd, an, abs(fd-an)/max(abs(an), 1e-300)), flush=True)

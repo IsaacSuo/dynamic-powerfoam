@@ -53,6 +53,38 @@ def k_ry_contact(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: 
 
 
 @wp.kernel(enable_backward=False)
+def k_gg_ground(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), gi: wp.array(dtype=int), ga: wp.array(dtype=wp.float64), gn: wp.array(dtype=wp.vec3d),
+                go: wp.array(dtype=wp.vec3d), Ge: wp.array(dtype=wp.mat33d), Sg: wp.array(dtype=wp.mat33d)):
+    """a ground face (merged_ul.set_ground_cut) in the divergence-theorem sum: A u_face (x) n, n its outward normal (down), u_face the frictionless wall's: the cell's
+    own field at the face, u + Ge o (o the face centroid from the site at the step's start), less its normal part (the plane does not move); area 0: not counted"""
+    e = wp.tid()
+    a = ga[e]
+    if a == wp.float64(0.0):
+        return
+    i = gi[e]
+    n = gn[e]
+    u = (x[i]-xn[i])+Ge[i]@go[e]
+    ut = u-wp.dot(u, n)*n
+    wp.atomic_add(Sg, i, a*wp.outer(ut, n))
+
+
+@wp.kernel(enable_backward=False)
+def k_gg_ground_adj(gi: wp.array(dtype=int), ga: wp.array(dtype=wp.float64), gn: wp.array(dtype=wp.vec3d), go: wp.array(dtype=wp.vec3d), Gs: wp.array(dtype=wp.mat33d),
+                    x_adj: wp.array(dtype=wp.vec3d), Gbe: wp.array(dtype=wp.mat33d)):
+    """k_gg_ground's adjoint: dE/du_face = A Gs n, through the projection to x and to Ge"""
+    e = wp.tid()
+    a = ga[e]
+    if a == wp.float64(0.0):
+        return
+    i = gi[e]
+    n = gn[e]
+    ub = a*(Gs[i]@n)
+    ubt = ub-wp.dot(ub, n)*n
+    wp.atomic_add(x_adj, i, ubt)
+    wp.atomic_add(Gbe, i, wp.outer(ubt, go[e]))
+
+
+@wp.kernel(enable_backward=False)
 def k_ry_contact_adj(si: wp.array(dtype=int), sk: wp.array(dtype=int), bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), nv: wp.array(dtype=wp.vec3d), x_adj: wp.array(dtype=wp.vec3d)):
     """dE/dx_k = -cs wt F n, dE/dx_i = +cs wt F n (n from i to k)"""
     c = wp.tid()
@@ -628,6 +660,8 @@ class RingYield(RingFlow):
         wp.launch(k_Aul, Kw, inputs=[B['G0'], U['As'], U['Ao'], U['Aw']], outputs=[B['Ga']])
         wp.launch(k_Ge, n, inputs=[B['G0'], B['Ga'], U['used']], outputs=[B['Ge']])
         wp.launch(k_gg_wall, Kw, inputs=[x, U['xn']]+wall+[B['Ge']], outputs=[B['Sg']])
+        if self.ground_cut:
+            wp.launch(k_gg_ground, n, inputs=[x, U['xn'], U['gi'], U['ga'], U['gn'], U['go'], B['Ge']], outputs=[B['Sg']])
         wp.launch(k_gg_cell, n, inputs=[x, U['xn'], B['Sg'], B['Ge'], U['a'], U['Mc'], U['Vi']], outputs=[B['G']])
         wp.launch(k_ry_gs, n, inputs=[B['G'], V0, gid], outputs=[Y['Gs']])
         wp.launch(k_ry_gm, n, inputs=[Y['Gs'], Y['Vgi'], gid], outputs=[Y['Gm']])
@@ -667,6 +701,8 @@ class RingYield(RingFlow):
         wp.launch(k_ry_ab, n, inputs=[Y['Srs'], V0, Y['Vgi'], gid], outputs=[Br['Gb']])
         wp.launch(k_gg_cell_adj, n, inputs=[B['Gb'], U['a'], U['Mc'], U['Vi']], outputs=[g, B['Gs'], B['Gbe']])
         wp.launch(k_gg_wall_adj, Kw, inputs=wall+[B['Gs']], outputs=[g, B['Gbe']])
+        if self.ground_cut:
+            wp.launch(k_gg_ground_adj, n, inputs=[U['gi'], U['ga'], U['gn'], U['go'], B['Gs']], outputs=[g, B['Gbe']])
         wp.launch(k_Ge_adj, n, inputs=[B['Gbe'], U['used']], outputs=[B['Gb0']])
         wp.launch(k_Aul_adj2, Kw, inputs=[B['Gbe'], U['As'], U['Ao'], U['Aw']], outputs=[B['Gb0']])
         wp.launch(k_Gul_adj, 2*Kw, inputs=[B['Gb0'], U['S'], U['O'], U['R']], outputs=[g])

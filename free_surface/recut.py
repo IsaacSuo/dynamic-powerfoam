@@ -213,3 +213,53 @@ class Recut:
                                                                                # 1e-9 can lie below it)
             r, G, S, res = torch.sqrt(wt), Gt, St, rt
         return r, G, S, it, nrep
+
+
+class GroundView:
+    """the real cells of a cut with mirror sites (GroundRecut): walls between real cells (i, j, wall_A, wall_c), V, patch_A, p, r of the real sites; the ground faces
+    (each real cell's wall with its own mirror: g_i, g_A, g_c, on the plane) apart; walls to another cell's mirror (none of positive area: a cell's mirror lies under
+    the plane wherever the cell owns the point above it) counted in other_A_max"""
+
+    def __init__(self, G, n, parent):
+        kp = G.wall_A.detach() > 0
+        i, j = G.i, G.j
+        real = (i < n) & (j < n)
+        self.i, self.j, self.wall_A, self.wall_c = i[real], j[real], G.wall_A[real], G.wall_c[real]
+        gm = kp & (i < n) & (j >= n)
+        own = gm & (parent[j.clamp(max=len(parent)-1)] == i)
+        self.g_i, self.g_A, self.g_c = i[own], G.wall_A.detach()[own], G.wall_c.detach()[own]
+        oth = gm & ~own
+        self.other_A_max = float(G.wall_A.detach()[oth].max()) if bool(oth.any()) else 0.
+        self.V, self.patch_A, self.p, self.r = G.V[:n], G.patch_A[:n], G.p[:n], G.r[:n]
+        self.n_mirror = len(G.V)-n
+
+
+class GroundRecut(Recut):
+    """the cut bounded by a rigid plane n . y = c0 (n the up normal): every cell whose ball reaches the plane gets a mirror site, its reflection with the same radius; the
+    power plane of a site and its mirror is the plane itself, so the cut of the real cells ends at it and nothing of theirs lies under it. The radii stay tied (a mirror's
+    is its parent's): the Newton on the real cells only, its Jacobian over the real walls (a ground face does not move when both weights move alike), so Recut's solve
+    holds unchanged on the view. cap: the alpha complex's capacity (real + mirrors)"""
+
+    def __init__(self, n, c0, normal=(0., 0., 1.), device='cuda', margin=.05, cap=None):
+        super().__init__(n, device, margin)
+        self.c0, self.ng = float(c0), torch.tensor(normal, dtype=torch.float64, device=device)
+        self.ng = self.ng/self.ng.norm()
+        self.A = AlphaComplex(cap if cap is not None else 2*n, device)
+
+    def geometry(self, p, r, reuse=False):
+        n = self.n
+        h = p@self.ng-self.c0
+        M = torch.nonzero(h < r)[:, 0]
+        P = torch.cat([p, p[M]-2*h[M, None]*self.ng[None, :]]); R = torch.cat([r, r[M]])
+        parent = torch.cat([torch.arange(n, device=p.device), M])
+        if len(P) > self.A.n:
+            raise RuntimeError('GroundRecut: %d sites with the mirrors over the capacity %d' % (len(P), self.A.n))
+        self.A.overlaps(P, R, self.margin); self.stats['overlaps'] += 1                # (the mirrors change with the radii: no reuse)
+        out = self.A(P, R, reuse=True)
+        bad = out['status'].clone(); bad[bad == 1] = 0
+        if bool((bad > 0).any()):
+            raise RuntimeError('alpha complex: per-cell storage overflow or an open cut (status %s)' % torch.unique(out['status']).tolist())
+        S = self.A.structure_gpu(out, len(P))
+        self.stats['geometry'] += 1
+        G = Geometry(P, R, S)
+        return GroundView(G, n, parent), dict(hidden=S['hidden'][:n], pairs=S['pairs'], mirrors=len(M))

@@ -41,6 +41,7 @@ a_.add_argument('--probe-jump', type=Path, nargs='*', default=[], help='these sa
 a_.add_argument('--dense', type=Path, default=None)
 a_.add_argument('--probe-colour', action='store_true', help='at the loaded state: the lock against the colours, then stop')
 a_.add_argument('--probe-contact', action='store_true', help='at the loaded state: the colour contact\'s births and gradient, then stop')
+a_.add_argument('--probe-ground', action='store_true', help='at the loaded state: the ground in the cut, its faces and the gradient, then stop')
 a_.add_argument('--probe-unstable', action='store_true', help='at the loaded state: each leg\'s lowest modes, then stop')
 a_.add_argument('--probe-lock', action='store_true', help='at the loaded state: what stiffens the leg, then stop')
 a_.add_argument('--probe-equil', action='store_true', help='at the loaded state: is a leg at an equilibrium, then stop')
@@ -50,6 +51,7 @@ a_.add_argument('--moment', action='store_true', help='the springs not tied to t
 a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
 a_.add_argument('--colour', type=float, default=0., help='ring_moment.py\'s colour contact at this sigma (graph steps; the lion\'s 1.19), with --moment')
 a_.add_argument('--jump', action='store_true', help='with --colour: a wall without a spring counts by the jump test (RingMoment.set_jump_share), no weightless springs')
+a_.add_argument('--ground-cut', action='store_true', help='the ground as a plane of the cut (MergedUL.set_ground_cut), the Hertz ground off')
 args = a_.parse_args()
 E, nu, C0, v0 = 10648.614517785627/1000, .3912951704721983, -.2, (0., 0., -.245)
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
@@ -67,6 +69,9 @@ if args.colour > 0:
     if args.jump:
         W.set_jump_share()
     print('colour contact: sigma %g, M %.3f, %s' % (args.colour, W.Mp, 'the jump share, no weightless springs' if args.jump else 'births at similarity >= %g' % W.sim_birth), flush=True)
+if args.ground_cut:
+    W.set_ground_cut(C0)
+    print('the ground in the cut at z = %g (mirror sites), one-sided faces; no Hertz ground' % C0, flush=True)
 W.prepare()
 fg = -args.g*M3*up; wref = float((9.8*M3*up).norm()); tol = args.tol*wref
 CG = TrustCG(W, mass, args.dt, per=2, product_iters=1)
@@ -159,6 +164,10 @@ if args.probe_colour:
     from free_surface.ring_moment_force import lock_colour
     lock_colour(W, ST, mass, V0, X0, g['pairs'], torch.as_tensor(r0, device=dev, dtype=f64))
     raise SystemExit
+if args.probe_ground:
+    from free_surface.ring_moment_force import ground_check
+    ground_check(W, ST, V0)
+    raise SystemExit
 if args.probe_contact:
     from free_surface.ring_moment_force import contact_check
     contact_check(W, ST, V0)
@@ -216,6 +225,9 @@ for s in range(s_first, nsteps+1):
         if W.selfc is not None:
             ss_ = W.self_stats
             print('  contact: energy %.3e, pairs within reach %d, overlapping at the step\'s start %d, the deepest %.3f of rho_i + rho_k, push / weight %.3f' % (float(W.tsum[7]), ss_['pairs'], ss_['active'], ss_['d_max'], float(W.tsc['fn'].sum())/wref), flush=True)
+            if W.ground_cut:
+                gs_ = W.ground_stats
+                print('  ground: faces %d (new %d), counted %d, released %d, area counted %.4f m^2; walls to another cell\'s mirror, largest area %.2e' % (gs_['faces'], gs_['new'], gs_['active'], gs_['released'], gs_['area'], gs_.get('other_A_max', 0.)), flush=True)
             if W.jump_share:
                 us_ = W.ul_stats
                 print('  share: walls without a spring %d, over .5 %d, between .1 and .9 %d, mean %.3f' % (us_.get('share_n', 0), us_.get('share_hi', 0), us_.get('share_mid', 0), us_.get('share_mean', 0.)), flush=True)
