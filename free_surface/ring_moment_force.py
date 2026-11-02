@@ -119,3 +119,58 @@ def slices(W, ST, mass, V0, X0, P):
         Q = {names[k]: -(float(ep[k])-float(em[k]))/(2*e_) for k in names}; St = {names[k]: (float(ep[k])+float(em[k])-2*float(e00[k]))/e_**2 for k in names}
         I_ = float((mass[at][:, None]*rot*rot).sum()); om = float((mass[at][:, None]*ST.tv[at]*rot).sum())/I_
         print('   the bend %.0f deg about %s: torque, + unbends: total %+.2e, %s; stiffness total %.2e, %s; inertia %.2e; so angular acceleration %+.1f rad/s2, omega^2 %.0f; angular speed now %+.2f rad/s, viscous time beta omega^2 = %.2f /s' % (np.degrees(ang), np.round(axis.cpu().numpy(), 2).tolist(), sum(Q.values()), {k: float('%+.1e' % v_) for k, v_ in Q.items()}, sum(St.values()), {k: float('%.1e' % v_) for k, v_ in St.items()}, I_, sum(Q.values())/I_, sum(St.values())/I_, om, .05*sum(St.values())/I_), flush=True)
+
+
+def equil(W, ST, mass, V0, X0, P):
+    """at a real state, a leg with the rest of the body held: its force, its true tangent (R re-read at each product), the Newton step and whether the energy falls along it, the lowest modes. Is the leg at an equilibrium of the model?"""
+    n = W.n; h_ = float(np.median(V0)**(1/3))
+    x = ST.tx.clone(); W.update_ul(x); W.grad(x); W.reread(); W.grad(x)
+    zr = X0[:, 2]-X0[:, 2].min(); low = zr < .18
+    idx = -np.ones(n, int); idx[low] = np.arange(low.sum())
+    m = low[P[:, 0]] & low[P[:, 1]]; p = idx[P[m]]
+    _, lab = connected_components(coo_matrix((np.ones(len(p)), (p[:, 0], p[:, 1])), shape=(low.sum(), low.sum())), directed=False)
+    ids = np.nonzero(low)[0]
+    legs = sorted([ids[lab == k] for k in np.argsort(-np.bincount(lab))[:4]], key=lambda a_: X0[a_, 0].mean())
+    ed = np.linspace(0., .17, 8)
+
+    def force(y, at):
+        W.grad(y); W.reread_light(); _, g_ = W.grad(y)
+        return g_[at].flatten().clone()
+
+    def energy(y):
+        W.grad(y); W.reread_light(); W.grad(y)
+        t = W.tsum.clone(); t = t.sum(1) if t.dim() > 1 else t
+        return float(t[0]), float(t[1]), float(t[2]), float(t[4]), float(t[5]), float(t[6])
+
+    def e2e(y, bins):
+        return float((y[torch.as_tensor(bins[-1], device=dev)].mean(0)-y[torch.as_tensor(bins[0], device=dev)].mean(0)).norm())
+    for li, a0 in enumerate(legs[:3]):
+        a_ = a0[zr[a0] < .15]
+        bins = [a0[(zr[a0] >= ed[i]) & (zr[a0] < ed[i+1])] for i in range(7)]
+        at = torch.as_tensor(a_, device=dev); N = len(a_)
+        Mv = np.repeat(V0[a_], 3)
+        f0 = force(x, at)
+        K = torch.zeros(3*N, 3*N, dtype=f64)
+        for j in range(3*N):
+            y = x.clone(); y[at[j//3], j % 3] += 1e-7
+            K[:, j] = ((force(y, at)-f0)/1e-7).cpu()
+        K = K.numpy(); g_ = f0.cpu().numpy()
+        w = np.linalg.eigvals(K/Mv[:, None]); wr = np.sort(w.real)
+        acc = (g_/Mv).reshape(N, 3); weight = 9.8
+        print('leg %d: %d cells; asymmetry of K %.2f; lowest real omega^2 %s; negative %d; elastic acceleration on its cells: median %.1f, 90 %% %.0f, mean vector %s; speed of the leg against its root %.3f' % (li, N, float(np.linalg.norm(K-K.T)/np.linalg.norm(K)), np.round(wr[:6], 0).tolist(), int((wr < -1.).sum()), float(np.median(np.linalg.norm(acc, axis=1))), float(np.quantile(np.linalg.norm(acc, axis=1), .9)), np.round((-(g_.reshape(N, 3))).sum(0)/V0[a_].sum(), 2).tolist(), float((ST.tv[at]-ST.tv[torch.as_tensor(bins[-1], device=dev)].mean(0)).norm(dim=1).median())), flush=True)
+        e0 = energy(x)
+        for c in (0., 30., 300., 3000.):
+            A = K+np.diag(c*Mv)
+            try:
+                dz = -np.linalg.solve(A, g_)
+            except np.linalg.LinAlgError:
+                dz = -np.linalg.lstsq(A, g_, rcond=1e-8)[0]
+            d = torch.as_tensor(dz.reshape(N, 3), device=dev, dtype=f64)
+            nr = d.norm(dim=1)
+            line = []
+            for s in (.1, .25, .5, 1.):
+                y = x.clone(); y[at] = x[at]+s*d
+                e = energy(y)
+                line.append('%.2f: dE %+.1e, end to end %.4f' % (s, sum(e)-sum(e0), e2e(y, bins)))
+            print('    (K + %5.0f M) step: |dx| / h median %.2f, max %.1f; along it %s' % (c, float(nr.median())/h_, float(nr.max())/h_, '; '.join(line)), flush=True)
+        print('    end to end now %.4f; energies tensor, volume, var, remainder, outer, ground %s' % (e2e(x, bins), ['%.2e' % v for v in e0]), flush=True)

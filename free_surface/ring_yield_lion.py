@@ -33,6 +33,7 @@ a_.add_argument('--start-frames', type=Path, default=None, help='restart from a 
 a_.add_argument('--start-k', type=int, default=0)
 a_.add_argument('--save-state', type=int, nargs='*', default=[])
 a_.add_argument('--load-state', type=Path, default=None)
+a_.add_argument('--probe-equil', action='store_true', help='at the loaded state: is a leg at an equilibrium, then stop')
 a_.add_argument('--probe-leg', action='store_true', help='at the loaded state: ring_moment_force.py, then stop')
 a_.add_argument('--g', type=float, default=9.8, help='gravity')
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
@@ -93,6 +94,10 @@ if args.load_state is not None:
     print('gravity on the sites now: %.4e, asked %.4e' % (float(wp.to_torch(ST.a['fg'], requires_grad=False).sum(0)[2]), -args.g*float(M3.sum())), flush=True)
     s_first = ck_['s']+1
     print('from step %d' % ck_['s'], flush=True)
+if args.probe_equil:
+    from free_surface.ring_moment_force import equil
+    equil(W, ST, mass, V0, X0, g['pairs'])
+    raise SystemExit
 if args.probe_leg:
     from free_surface.ring_moment_force import probe, slices
     slices(W, ST, mass, V0, X0, g['pairs'])
