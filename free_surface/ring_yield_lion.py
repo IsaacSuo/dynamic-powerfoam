@@ -88,7 +88,7 @@ from free_surface.run_state import pack, unpack
 if args.load_state is not None:
     ck_ = torch.load(args.load_state, weights_only=False)
     unpack(W, ck_['W']); unpack(ST, ck_['ST'])
-    W.true_blocks = args.true_blocks; ST._pre_age = 0
+    W.true_blocks = args.true_blocks; ST._pre_age = 0; ST.aa_m = args.aa
     wp.to_torch(ST.a['fg'], requires_grad=False).copy_(fg)                                  # (the command line's gravity over the checkpoint's)
     s_first = ck_['s']+1
     print('from step %d' % ck_['s'], flush=True)
@@ -114,6 +114,8 @@ for s in range(s_first, nsteps+1):
         np.savez(args.save/('fail_%s.npz' % args.tag), x=ST.tx.cpu().numpy(), v=ST.tv.cpu().numpy(), a=ST.ta.cpu().numpy(), z=ST.tz.cpu().numpy(), step=s)
         save()
         break
+    if ST.stats.get('aa_nan', 0):
+        print('AA step %d: the extrapolation read NaN %d times, back to the plain point' % (s, ST.stats['aa_nan']), flush=True)
     ST.end()
     if s in args.save_state:
         torch.save(dict(W=pack(W), ST=pack(ST), s=s), args.save/('state_%s_%d.pt' % (args.tag, s)))

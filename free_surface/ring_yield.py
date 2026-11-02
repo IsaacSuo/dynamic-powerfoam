@@ -898,13 +898,15 @@ class YieldStep(MidpointStep):
             g2 = self._eval(0.)[PS_GQ2]; evals += 1
             self._accept()
             g_ = math.sqrt(g2)
-            if aa_on and g_ > self.aa_back*g_last and z_plain is not None:
+            if aa_on and not (g_ <= self.aa_back*g_last) and z_plain is not None:              # (not g_ > ...: a NaN must come back too)
                 # (the extrapolated point read worse than the plain one was: back to it, the history dropped)
+                bad_ = not math.isfinite(g_)
                 self.tz.copy_(z_plain)
                 z_plain = None; hist_G, hist_f = [], []
                 st['aa_back'] = st.get('aa_back', 0)+1
+                st['aa_nan'] = st.get('aa_nan', 0)+int(bad_)
                 self._eval(0.)
-                W.reread(hold=outer >= self.hold_after)
+                W.reread(hold=outer >= self.hold_after and not bad_)                           # (a NaN read: every R afresh, none kept)
                 g2 = self._eval(0.)[PS_GQ2]; evals += 2
                 self._accept()
                 g_ = math.sqrt(g2)
