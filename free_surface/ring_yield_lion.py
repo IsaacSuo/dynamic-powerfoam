@@ -31,6 +31,9 @@ a_.add_argument('--beta', type=float, default=.05)
 a_.add_argument('--no-elastic-births', action='store_true', help='a wall no return has reached: a free surface')
 a_.add_argument('--start-frames', type=Path, default=None, help='restart from a saved frame of an elastic run')
 a_.add_argument('--start-k', type=int, default=0)
+a_.add_argument('--save-state', type=int, nargs='*', default=[])
+a_.add_argument('--load-state', type=Path, default=None)
+a_.add_argument('--probe-leg', action='store_true', help='at the loaded state: ring_moment_force.py, then stop')
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
 a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
 args = a_.parse_args()
@@ -80,6 +83,17 @@ def save():
     np.savez(args.save/('frames_%s.npz' % args.tag), x=np.array(xs), F=np.array(Fs), L=np.array(Ls), t=np.array(ts))
 
 
+from free_surface.run_state import pack, unpack
+if args.load_state is not None:
+    ck_ = torch.load(args.load_state, weights_only=False)
+    unpack(W, ck_['W']); unpack(ST, ck_['ST'])
+    W.true_blocks = args.true_blocks; ST._pre_age = 0
+    s_first = ck_['s']+1
+    print('from step %d' % ck_['s'], flush=True)
+if args.probe_leg:
+    from free_surface.ring_moment_force import probe
+    probe(W, ST, mass, fg, V0, X0, g['pairs'], args.dt)
+    raise SystemExit
 t0 = t_saved = time.time()
 nit, npr, nout = [], [], []
 nsteps = int(round(args.T/args.dt))
@@ -99,6 +113,8 @@ for s in range(s_first, nsteps+1):
         save()
         break
     ST.end()
+    if s in args.save_state:
+        torch.save(dict(W=pack(W), ST=pack(ST), s=s), args.save/('state_%s_%d.pt' % (args.tag, s)))
     nit.append(its); npr.append(e_); nout.append(ST.stats['outer'])
     if s % args.every == 0:
         xs.append(ST.tx.cpu().numpy()); Fs.append(W._Ft.cpu().numpy()); Ls.append(W.tul['Ln'].cpu().numpy()); ts.append(s*args.dt)
