@@ -4,7 +4,11 @@
     uniform flow: lam is the same everywhere, and any mix of closed weights is closed, so the patch test holds
     no return, lam = 0: q, weights, outer layer, group do not move, whatever the walls do; the springs' energy 1/2 sum w |d - (1 + v) R q|^2 does not see the cut. e_y to 0: lam to 1, the walls' weights
   force: K = I, the plain derivative of 1/2 tr(X M X^T); R = polar(F), the same in all cells under the same F; a torque of M's non-roundness times e is the price (the theorem)
-  a new wall gets a spring of weight 0 if its cells are two springs apart (a fold's two sheets are not: a wall between them is a free surface to both); a spring leaves when it has no wall and next to no weight"""
+  a new wall gets a spring of weight 0 if its cells are two springs apart (a fold's two sheets are not: a wall between them is a free surface to both); a spring leaves when it has no wall and next to no weight
+  colour contact (set_colour_contact, 11-02; ClosureWarp's of 10-30): a wall is material or contact by the cells' place at rest, the colour code (exp(-d^2 / 2 sigma^2) on the rest skin graph, the inside harmonic); a new wall's
+    spring is born only between like colours (similarity sum sqrt(p_i p_j) >= sim_birth) in place of the two springs. A wall without a spring is a free surface to both cells (no volume flux, no gradient) and a contact: Hertz on the
+    approach of the two sites since its birth, delta = |d|_birth - |d| (the radii cancel; the rest radii set only R_eff), push only, scaled by 1 - similarity; it leaves when delta is back to 0 or a spring takes its wall.
+    Check on the first lion's locked states (lock_colour): the weightless springs split at .5 (rest distance 8-9 h under, 1-2 h over); the unlike ones out, the legs' lowest omega^2 3135-8662 -> 161-216"""
 import numpy as np
 import scipy.sparse as sp
 import torch
@@ -46,6 +50,63 @@ class RingMoment(RingYield):
 
     elastic_births = True
     radii_extrap = False                                                               # (on the 30 steps: the same time, no gain)
+    _col_Q = None
+    sim_birth = .5
+
+    def set_colour_contact(self, sigma, K=32768):
+        """the colour code on the rest cut and the contact list's buffers, before prepare(); K the list's capacity. E* of two like bodies, E / 2 (1 - nu^2), as closure_warp.py"""
+        n, dev = self.n, self.dev
+        self._col_Q = color_code(self, self._rr0, sigma)
+        z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
+        self.selfc = dict(K=K, i=z(K, wp.int32), k=z(K, wp.int32), Rs=z(K, wp.float64), d0=z(K, wp.float64), Reff=z(K, wp.float64), fn=z(K, wp.float64), nv=z(K, wp.vec3d), xn=z(n, wp.vec3d),
+                          Esp=wp.float64(self.Es/2))
+        self.Esp = self.Es/2
+        tt = lambda a_: wp.to_torch(a_, requires_grad=False)
+        self.tsc = {k_: tt(self.selfc[k_]) for k_ in ('i', 'k', 'Rs', 'd0', 'Reff', 'fn', 'xn')}
+        self.tsc['d0'].fill_(1e300)
+        self._pairs = torch.zeros(0, 2, dtype=torch.long, device=dev); self._pd0 = torch.zeros(0, dtype=f64, device=dev); self._pw = torch.zeros(0, dtype=f64, device=dev)
+        self.self_stats = dict(pairs=0, born=0, left=0, to_spring=0, d_max=0.)
+
+    def update_self(self, x):
+        """the contact list at the step's start x (MidpointStep.begin, after update_ul's cut): a contact leaves when its sites are back to their distance at its birth, or a spring has its wall;
+        a wall of this cut without a spring and not yet a contact becomes one, born without force"""
+        n, rr, st = self.n, self._rr0, self.self_stats
+        x = x.detach()
+        P = self._pairs
+        if len(P):
+            dl = rr[P[:, 0]]+rr[P[:, 1]]-(x[P[:, 1]]-x[P[:, 0]]).norm(dim=1)-self._pd0
+            mat = torch.isin(P[:, 0]*n+P[:, 1], self.tkey)
+            st['left'] += int((dl <= 0).sum()); st['to_spring'] += int(((dl > 0) & mat).sum())
+            stay = (dl > 0) & ~mat
+            self._pairs, self._pd0, self._pw = P[stay], self._pd0[stay], self._pw[stay]
+        G = self._ulG
+        kp = G.wall_A.detach() > 0
+        i, j = G.i[kp].long(), G.j[kp].long()
+        a, b = torch.minimum(i, j), torch.maximum(i, j)
+        key = a*n+b
+        old = torch.isin(key, self.tkey)
+        if len(self._pairs):
+            old |= torch.isin(key, self._pairs[:, 0]*n+self._pairs[:, 1])
+        a, b = a[~old], b[~old]
+        pw = 1-color_sim(self._col_Q, a, b)
+        f = pw > 0
+        a, b, pw = a[f], b[f], pw[f]
+        if len(a):
+            d0 = rr[a]+rr[b]-(x[b]-x[a]).norm(dim=1)
+            self._pairs = torch.cat([self._pairs, torch.stack([a, b], 1)]); self._pd0 = torch.cat([self._pd0, d0]); self._pw = torch.cat([self._pw, pw])
+            st['born'] += len(a)
+        m = len(self._pairs); K = self.selfc['K']
+        if m > K:
+            raise RuntimeError('update_self: %d contacts over the capacity %d' % (m, K))
+        t = self.tsc
+        t['i'].zero_(); t['k'].zero_(); t['d0'].fill_(1e300); t['Rs'].zero_(); t['Reff'].fill_(1.)
+        if m:
+            P = self._pairs; ra, rb = rr[P[:, 0]], rr[P[:, 1]]
+            t['i'][:m] = P[:, 0].to(torch.int32); t['k'][:m] = P[:, 1].to(torch.int32)
+            t['Rs'][:m] = ra+rb; t['d0'][:m] = self._pd0; t['Reff'][:m] = ra*rb/(ra+rb)*self._pw**2       # (the force goes as sqrt(R_eff): the weight 1 - similarity)
+            st['d_max'] = float(((ra+rb-(x[P[:, 1]]-x[P[:, 0]]).norm(dim=1)-self._pd0)/(ra+rb)).max())
+        t['xn'].copy_(x)
+        st['pairs'] = m
 
     def _skin(self, Mq, Mo_old, yld):
         """the outer layer is a set of unseen halves: Mo their weights, carried by the return as q (end_ul), toward the current cut's by the same part. At the first cut, the cut's"""
@@ -88,7 +149,11 @@ class RingMoment(RingYield):
         ret = (self._ret[self._gid[self.tlo]] > 0) | (self._ret[self._gid[self.thi]] > 0)
         stay = torch.isin(self.tkey, key) | (wt > self._wgone) | ((wt > 0) & ~ret)          # (next to no weight: it leaves, in a return only)
         new = ~torch.isin(key, self.tkey)
-        if bool(new.any()):
+        if bool(new.any()) and self._col_Q is not None:                                    # (like colours only: material at rest; the rest a contact, update_self)
+            k = torch.nonzero(new)[:, 0]
+            near = color_sim(self._col_Q, lo[k], hi[k]) >= self.sim_birth
+            new[k[~near]] = False
+        elif bool(new.any()):
             a_, b_ = np.array(self.tlo.cpu()), np.array(self.thi.cpu())
             A = sp.csr_matrix((np.ones(len(a_)), (a_, b_)), shape=(self.n, self.n))
             A = A+A.T

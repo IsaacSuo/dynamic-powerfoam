@@ -39,6 +39,7 @@ a_.add_argument('--dense-from', type=int, default=0, help='every step from this 
 a_.add_argument('--probe-30', type=Path, nargs='*', default=[], help='these saved states: ring_moment_force.check30, then stop')
 a_.add_argument('--dense', type=Path, default=None)
 a_.add_argument('--probe-colour', action='store_true', help='at the loaded state: the lock against the colours, then stop')
+a_.add_argument('--probe-contact', action='store_true', help='at the loaded state: the colour contact\'s births and gradient, then stop')
 a_.add_argument('--probe-unstable', action='store_true', help='at the loaded state: each leg\'s lowest modes, then stop')
 a_.add_argument('--probe-lock', action='store_true', help='at the loaded state: what stiffens the leg, then stop')
 a_.add_argument('--probe-equil', action='store_true', help='at the loaded state: is a leg at an equilibrium, then stop')
@@ -46,6 +47,7 @@ a_.add_argument('--probe-leg', action='store_true', help='at the loaded state: r
 a_.add_argument('--g', type=float, default=9.8, help='gravity')
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
 a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
+a_.add_argument('--colour', type=float, default=0., help='ring_moment.py\'s colour contact at this sigma (graph steps; the lion\'s 1.19), with --moment')
 args = a_.parse_args()
 E, nu, C0, v0 = 10648.614517785627/1000, .3912951704721983, -.2, (0., 0., -.245)
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
@@ -58,6 +60,9 @@ W.set_ball((0., 0., 1.), C0, 0.)
 if args.beta > 0:
     W.set_viscosity(args.beta, args.dt)
 W.start()
+if args.colour > 0:
+    W.set_colour_contact(args.colour)
+    print('colour contact: sigma %g, E* %.3f, births at similarity >= %g' % (args.colour, W.Esp, W.sim_birth), flush=True)
 W.prepare()
 fg = -args.g*M3*up; wref = float((9.8*M3*up).norm()); tol = args.tol*wref
 CG = TrustCG(W, mass, args.dt, per=2, product_iters=1)
@@ -115,6 +120,7 @@ if args.load_state is not None:
     ck_ = torch.load(args.load_state, weights_only=False)
     unpack(W, ck_['W']); unpack(ST, ck_['ST'])
     W.true_blocks = args.true_blocks; ST._pre_age = 0; ST.aa_m = args.aa; ST.pre_every = args.pre_every
+    W.elastic_births = not args.no_elastic_births                                         # (the command line's, not the checkpoint's)
     ground_k()
     fg.copy_(-args.g*M3*up); wp.to_torch(ST.a['fg'], requires_grad=False).copy_(-args.g*M3*up)      # (the command line's gravity over the checkpoint's: fg shares the array the state was just written into)
     print('gravity on the sites now: %.4e, asked %.4e' % (float(wp.to_torch(ST.a['fg'], requires_grad=False).sum(0)[2]), -args.g*float(M3.sum())), flush=True)
@@ -127,6 +133,10 @@ if args.load_state is not None:
 if args.probe_colour:
     from free_surface.ring_moment_force import lock_colour
     lock_colour(W, ST, mass, V0, X0, g['pairs'], torch.as_tensor(r0, device=dev, dtype=f64))
+    raise SystemExit
+if args.probe_contact:
+    from free_surface.ring_moment_force import contact_check
+    contact_check(W, ST, V0)
     raise SystemExit
 if args.probe_unstable:
     from free_surface.ring_moment_force import unstable
@@ -178,8 +188,11 @@ for s in range(s_first, nsteps+1):
         Lm = W.tul['Ln']
         sf = torch.linalg.svdvals(W._Ft.cpu())
         bd = W.B['bdelta'].numpy()
+        if W.selfc is not None:
+            ss_ = W.self_stats
+            print('  contact: energy %.3e, pairs %d (born %d, left %d, to a spring %d so far), deepest approach %.3f of R_i + R_k, push / weight %.3f' % (float(W.tsum[7]), ss_['pairs'], ss_['born'], ss_['left'], ss_['to_spring'], ss_['d_max'], float(W.tsc['fn'].sum())/wref), flush=True)
         print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_v %.3e, balance / start %.4f; com up %.5f, lowest %.4f; e^L %.3f..%.3f; F_e singular %.3f..%.3f; touching %d, ground/weight %.2f; walls %d, new %d, closed %d; radii %d (fails %d), flips %d; last %d steps: products %d, outer median %d max %d, rejected %d' % (
-            s*args.dt, time.time()-t0, ek, ed, ev, float(W.tsum[6]), W.Wv, (ek+ed+ev+float(W.tsum[6])+W.Wv+eg)/H0, float((M3*ST.tx)[:, 2].sum())/M, float(ST.tx[:, 2].min()), float(torch.exp(Lm).min()), float(torch.exp(Lm).max()), float(sf[:, 2].min()), float(sf[:, 0].max()),
+            s*args.dt, time.time()-t0, ek, ed, ev, float(W.tsum[6]), W.Wv, (ek+ed+ev+float(W.tsum[6])+float(W.tsum[7])+W.Wv+eg)/H0, float((M3*ST.tx)[:, 2].sum())/M, float(ST.tx[:, 2].min()), float(torch.exp(Lm).min()), float(torch.exp(Lm).max()), float(sf[:, 2].min()), float(sf[:, 0].max()),
             int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wref, W.ul_stats.get('walls', 0), W.ul_stats.get('born', 0), W.ul_stats.get('closed', 0), W.ul_stats.get('radii_it', 0), W.ul_stats.get('radii_fail', 0), W.ul_stats.get('flips', 0), args.every, sum(npr[-args.every:]), int(np.median(nout[-args.every:])), max(nout[-args.every:]), ST.stats['rejected']), flush=True)
         if time.time()-t_saved > 60:
             save(); t_saved = time.time()

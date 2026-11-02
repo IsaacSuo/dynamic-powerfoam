@@ -15,7 +15,7 @@ The corner to give up. A uniform flow balances only if every cell reads one stre
   merging   a cell under agg of the median volume is one cell with its neighbour across its largest wall: A, M summed, F, R, beta shared, its gradient the group's volume mean, V_g G_g = sum V_i G_i, which keeps the cancellation across walls
   the cut   eps_cut < 0: every cell on it from the first step, no first yield, the elastic part too: the springs are rewritten on the newest walls every step, a uniform elastic loop comes back to 1e-13; a wave's F_e drifts by (amp^2 / steps) a loop. The state is the fit: F_e, what the last step's return left, and the cut only re-weights the quadrature of it. At fixed x and q new weights read F'' = A'' M''^-1, not F_e, as the normal equations hold the remainder on the old weights only: F'' - F_e = sum dw r (x) q M^-1, (dw / w)(r / L), against a limit of a percent: it was read as stress at the step's start, H_n to 89 e_y. So all of a cell's q and its outer layer go through T = F_e^-1 F'', one map: A = A'' T^T, M = T M'' T^T, F = F'' T^-1 = F_e exactly, the remainder is d - F'' q, the least for the new weights. A new spring reads none, q = F_e^-1 d, and leaves the fit alone. A cell's T too far from I (det under .1): all its q = F_e^-1 d, the remainder dropped. Each cell's q stand in its own frame, F_e^-1 d: a cell that changes group goes first through F_e,group^-1 F_e, which keeps its remainder, or the difference of the two F reads as one (that was the cut's energy: .019 of the springs to .001). Between two cells on the cut the wall's spring 2 w goes by t, the wall's place on the line of the sites (clipped .02 .. .98): M_i then has each pyramid's moment and a thin cell's M scales with its volume
   outer     on the cut q_k = F_e^-1 D_k, D_k the cut's own vectors, so Mo = F_e^-1 Mo_cur F_e^-T in q's frame (until 11-01 Mo_cur itself: right on no rotated cell), P = I, and F_g = (I + G) F_g,n reads q_k. F_g,n = F_e + s E, the remainder E = F_g - F_e on the part of the moment it had, s = tr Mo_old / tr Mo up to 1 (a cap born reads none, as a spring). (P F_g^-1 with F_g -> I, the same to first order, was tried: F_g over one step reads singular values .07 to 6 on a cell whose neighbours lie in a plane: the outer layer lost 70 % of the start's energy at the cuts, and made it in the steps)
-Self contact not here. set_ball, start(), prepare(), update_ul; through YieldStep. ring_yield_check.py its checks, ring_yield_uniform.py a uniform path against closed forms, ring_yield_part.py, ring_yield_drop.py."""
+Self contact: ring_moment.py's colour contact (set_colour_contact before prepare(), term 7). set_ball, start(), prepare(), update_ul; through YieldStep. ring_yield_check.py its checks, ring_yield_uniform.py a uniform path against closed forms, ring_yield_part.py, ring_yield_drop.py."""
 import math
 
 import numpy as np
@@ -29,6 +29,39 @@ from free_surface.skin_warp import NSLOT, NT, k_total, k_total_loss
 from free_surface.ul_plastic import k_Aul_adj2, k_Ge, k_Ge_adj, k_gg_cell, k_gg_cell_adj, k_gg_wall, k_gg_wall_adj, k_var
 
 f64 = torch.float64
+
+
+@wp.kernel(enable_backward=False)
+def k_ry_contact(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: wp.array(dtype=int), sk: wp.array(dtype=int), Rs: wp.array(dtype=wp.float64), d0: wp.array(dtype=wp.float64),
+                 Reff: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64), Esp: wp.float64, fn: wp.array(dtype=wp.float64), nv: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
+    """closure_warp.py's k_self on term 7 (6 is the ground's): a contact (i, k) pushes by Hertz on delta = Rs - |xe_k - xe_i| - d0 > 0, at the step-end centres; padding i == k"""
+    c = wp.tid()
+    i, k = si[c], sk[c]
+    fn[c] = wp.float64(0.0)
+    nv[c] = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
+    if i == k:
+        return
+    cs, wt = bpar[0], bpar[1]
+    dv = (cs*x[k]-(cs-wp.float64(1.0))*xn[k])-(cs*x[i]-(cs-wp.float64(1.0))*xn[i])
+    L = wp.length(dv)
+    nv[c] = dv/L
+    dl = Rs[c]-L-d0[c]
+    if dl > wp.float64(0.0):
+        sq = wp.sqrt(Reff[c]*dl)
+        fn[c] = wp.float64(4.0)/wp.float64(3.0)*Esp*sq*dl
+        wp.atomic_add(terms, 7, c % NSLOT, wt*wp.float64(8.0)/wp.float64(15.0)*Esp*sq*dl*dl)
+
+
+@wp.kernel(enable_backward=False)
+def k_ry_contact_adj(si: wp.array(dtype=int), sk: wp.array(dtype=int), bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), nv: wp.array(dtype=wp.vec3d), x_adj: wp.array(dtype=wp.vec3d)):
+    """dE/dx_k = -cs wt F n, dE/dx_i = +cs wt F n (n from i to k)"""
+    c = wp.tid()
+    i, k = si[c], sk[c]
+    if i == k:
+        return
+    g = bpar[0]*bpar[1]*fn[c]
+    wp.atomic_add(x_adj, k, -g*nv[c])
+    wp.atomic_add(x_adj, i, g*nv[c])
 
 
 @wp.kernel(enable_backward=False)
@@ -624,6 +657,10 @@ class RingYield(RingFlow):
         if bl is not None:
             wp.launch(k_rf_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt'], self.hd['stuck'], self.hd['kn'], wp.float64(self.sy*1.5**.5)], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']])
             wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], self.tones], outputs=[g])
+        sc = self.selfc
+        if sc is not None:                                                                 # (the contacts of ring_moment.py's colour code, after set_colour_contact)
+            wp.launch(k_ry_contact, sc['K'], inputs=[x, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['d0'], sc['Reff'], bl['par'], sc['Esp']], outputs=[sc['fn'], sc['nv'], B['terms']])
+            wp.launch(k_ry_contact_adj, sc['K'], inputs=[sc['i'], sc['k'], bl['par'], sc['fn'], sc['nv']], outputs=[g])
         wp.launch(k_ry_as, n, inputs=[Y['Gbm'], gid], outputs=[Y['Ss']])
         wp.launch(k_ry_ab, n, inputs=[Y['Ss'], V0, Y['Vgi'], gid], outputs=[B['Gb']])
         wp.launch(k_ry_as, n, inputs=[Y['Gbrm'], gid], outputs=[Y['Srs']])
