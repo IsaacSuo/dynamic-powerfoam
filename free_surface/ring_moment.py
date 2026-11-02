@@ -6,9 +6,13 @@
   force: K = I, the plain derivative of 1/2 tr(X M X^T); R = polar(F), the same in all cells under the same F; a torque of M's non-roundness times e is the price (the theorem)
   a new wall gets a spring of weight 0 if its cells are two springs apart (a fold's two sheets are not: a wall between them is a free surface to both); a spring leaves when it has no wall and next to no weight
   colour contact (set_colour_contact, 11-02; ClosureWarp's of 10-30): a wall is material or contact by the cells' place at rest, the colour code (exp(-d^2 / 2 sigma^2) on the rest skin graph, the inside harmonic); a new wall's
-    spring is born only between like colours (similarity sum sqrt(p_i p_j) >= sim_birth) in place of the two springs. A wall without a spring is a free surface to both cells (no volume flux, no gradient) and a contact: Hertz on the
-    approach of the two sites since its birth, delta = |d|_birth - |d| (the radii cancel; the rest radii set only R_eff), push only, scaled by 1 - similarity; it leaves when delta is back to 0 or a spring takes its wall.
-    Check on the first lion's locked states (lock_colour): the weightless springs split at .5 (rest distance 8-9 h under, 1-2 h over); the unlike ones out, the legs' lowest omega^2 3135-8662 -> 161-216"""
+    spring is born only between like colours (similarity sum sqrt(p_i p_j) >= sim_birth) in place of the two springs. A wall without a spring is a free surface to both cells (no volume flux, no gradient).
+    Check on the first lion's locked states (lock_colour): the weightless springs split at .5 (rest distance 8-9 h under, 1-2 h over); the unlike ones out, the legs' lowest omega^2 3135-8662 -> 161-216
+  the push: on the state, not on a history. Every pair of unlike colours (a static set) pushes by Hertz on delta = rho_i + rho_k - |d| > 0, scaled by 1 - similarity; rho = rho0 |F_n^T n|, the cell's extent along the line
+    of a ball of radius rho0 carried by its fit F_n at the step's start (n the line there, both frozen over the step, as R and beta), rho0 half the cell's rest distance to its neighbours by wall area (the face neighbours:
+    two cells side by side at their own size read delta 0). Its partners found by distance each step, within reach and a margin of h. (11-02 first the push on the approach since the wall's birth, ClosureWarp's d0:
+    with balls of 2 h the cut has walls between unlike cells 1.6-3.9 h apart across the air, so the push began far before touching, and a pair that slid past left and came back nearer, born without force:
+    10 % born under .82 h at t .34, the nearest leg-torso pair .42 h apart read delta .02; the paws went in .02 s later than without it)"""
 import numpy as np
 import scipy.sparse as sp
 import torch
@@ -53,10 +57,18 @@ class RingMoment(RingYield):
     _col_Q = None
     sim_birth = .5
 
-    def set_colour_contact(self, sigma, K=32768):
-        """the colour code on the rest cut and the contact list's buffers, before prepare(); K the list's capacity. E* of two like bodies, E / 2 (1 - nu^2), as closure_warp.py"""
+    def set_colour_contact(self, sigma, K=65536):
+        """the colour code on the rest cut, each cell's rho0 and the contact list's buffers, before prepare(); K the list's capacity. E* of two like bodies, E / 2 (1 - nu^2), as closure_warp.py"""
         n, dev = self.n, self.dev
         self._col_Q = color_code(self, self._rr0, sigma)
+        G, _ = self._recut.geometry(self.X, self._rr0)
+        kp = G.wall_A.detach() > 0
+        i0, j0, A0 = G.i[kp].long(), G.j[kp].long(), G.wall_A.detach()[kp]
+        L0 = (self.X[j0]-self.X[i0]).norm(dim=1)
+        sA = torch.zeros(n, dtype=f64, device=dev).index_add(0, i0, A0).index_add(0, j0, A0)
+        sAL = torch.zeros(n, dtype=f64, device=dev).index_add(0, i0, A0*L0).index_add(0, j0, A0*L0)
+        self._rho0 = .5*sAL/sA.clamp(min=1e-300)
+        self._h = float(self.V0.median())**(1/3)
         z = lambda k_, dt_: wp.zeros(k_, dtype=dt_, device=dev)
         self.selfc = dict(K=K, i=z(K, wp.int32), k=z(K, wp.int32), Rs=z(K, wp.float64), d0=z(K, wp.float64), Reff=z(K, wp.float64), fn=z(K, wp.float64), nv=z(K, wp.vec3d), xn=z(n, wp.vec3d),
                           Esp=wp.float64(self.Es/2))
@@ -64,47 +76,49 @@ class RingMoment(RingYield):
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tsc = {k_: tt(self.selfc[k_]) for k_ in ('i', 'k', 'Rs', 'd0', 'Reff', 'fn', 'xn')}
         self.tsc['d0'].fill_(1e300)
-        self._pairs = torch.zeros(0, 2, dtype=torch.long, device=dev); self._pd0 = torch.zeros(0, dtype=f64, device=dev); self._pw = torch.zeros(0, dtype=f64, device=dev)
-        self.self_stats = dict(pairs=0, born=0, left=0, to_spring=0, d_max=0.)
+        self._pairs = torch.zeros(0, 2, dtype=torch.long, device=dev); self._pw = torch.zeros(0, dtype=f64, device=dev)
+        self.self_stats = dict(pairs=0, active=0, d_max=0.)
+
+    def contact_pairs(self, x, F, margin):
+        """the unlike pairs without a spring within reach + margin at x: (a, b, rho_a, rho_b, 1 - similarity), rho = rho0 |F^T n| (F per cell)"""
+        n = self.n
+        rmax = self._rho0*F.flatten(1).norm(dim=1)                                         # (|F|_F over its largest singular value: a superset)
+        cut = 2*float(rmax.max())+margin
+        xf = x.float(); I_, J_ = [], []
+        for c0 in range(0, n, 1024):
+            ii, jj = torch.nonzero(torch.cdist(xf[c0:c0+1024], xf) < cut, as_tuple=True)
+            ii = ii+c0; k = ii < jj
+            I_.append(ii[k]); J_.append(jj[k])
+        a, b = torch.cat(I_), torch.cat(J_)
+        L = (x[b]-x[a]).norm(dim=1)
+        k = (L < rmax[a]+rmax[b]+margin) & ~torch.isin(a*n+b, self.tkey)
+        a, b = a[k], b[k]
+        sim = color_sim(self._col_Q, a, b)
+        k = sim < self.sim_birth
+        a, b, sim = a[k], b[k], sim[k]
+        d = x[b]-x[a]; L = d.norm(dim=1); nn = d/L[:, None]
+        ra = self._rho0[a]*torch.einsum('fba,fb->fa', F[a], nn).norm(dim=1)
+        rb = self._rho0[b]*torch.einsum('fba,fb->fa', F[b], nn).norm(dim=1)
+        k = L < ra+rb+margin
+        return a[k], b[k], ra[k], rb[k], 1-sim[k], L[k]
 
     def update_self(self, x):
-        """the contact list at the step's start x (MidpointStep.begin, after update_ul's cut): a contact leaves when its sites are back to their distance at its birth, or a spring has its wall;
-        a wall of this cut without a spring and not yet a contact becomes one, born without force"""
-        n, rr, st = self.n, self._rr0, self.self_stats
+        """the contact list at the step's start x (MidpointStep.begin, after update_ul): every unlike pair within reach + h, rho on the fit F_n there, frozen over the step; Hertz on delta = rho_a + rho_b - |d| (k_ry_contact, d0 = 0)"""
+        st = self.self_stats
         x = x.detach()
-        P = self._pairs
-        if len(P):
-            dl = rr[P[:, 0]]+rr[P[:, 1]]-(x[P[:, 1]]-x[P[:, 0]]).norm(dim=1)-self._pd0
-            mat = torch.isin(P[:, 0]*n+P[:, 1], self.tkey)
-            st['left'] += int((dl <= 0).sum()); st['to_spring'] += int(((dl > 0) & mat).sum())
-            stay = (dl > 0) & ~mat
-            self._pairs, self._pd0, self._pw = P[stay], self._pd0[stay], self._pw[stay]
-        G = self._ulG
-        kp = G.wall_A.detach() > 0
-        i, j = G.i[kp].long(), G.j[kp].long()
-        a, b = torch.minimum(i, j), torch.maximum(i, j)
-        key = a*n+b
-        old = torch.isin(key, self.tkey)
-        if len(self._pairs):
-            old |= torch.isin(key, self._pairs[:, 0]*n+self._pairs[:, 1])
-        a, b = a[~old], b[~old]
-        pw = 1-color_sim(self._col_Q, a, b)
-        f = pw > 0
-        a, b, pw = a[f], b[f], pw[f]
-        if len(a):
-            d0 = rr[a]+rr[b]-(x[b]-x[a]).norm(dim=1)
-            self._pairs = torch.cat([self._pairs, torch.stack([a, b], 1)]); self._pd0 = torch.cat([self._pd0, d0]); self._pw = torch.cat([self._pw, pw])
-            st['born'] += len(a)
-        m = len(self._pairs); K = self.selfc['K']
+        F = self.ty['Fn'][self._gid]
+        a, b, ra, rb, pw, L = self.contact_pairs(x, F, self._h)
+        m = len(a); K = self.selfc['K']
         if m > K:
-            raise RuntimeError('update_self: %d contacts over the capacity %d' % (m, K))
+            raise RuntimeError('update_self: %d contact pairs over the capacity %d' % (m, K))
+        self._pairs, self._pw = torch.stack([a, b], 1), pw
         t = self.tsc
         t['i'].zero_(); t['k'].zero_(); t['d0'].fill_(1e300); t['Rs'].zero_(); t['Reff'].fill_(1.)
         if m:
-            P = self._pairs; ra, rb = rr[P[:, 0]], rr[P[:, 1]]
-            t['i'][:m] = P[:, 0].to(torch.int32); t['k'][:m] = P[:, 1].to(torch.int32)
-            t['Rs'][:m] = ra+rb; t['d0'][:m] = self._pd0; t['Reff'][:m] = ra*rb/(ra+rb)*self._pw**2       # (the force goes as sqrt(R_eff): the weight 1 - similarity)
-            st['d_max'] = float(((ra+rb-(x[P[:, 1]]-x[P[:, 0]]).norm(dim=1)-self._pd0)/(ra+rb)).max())
+            t['i'][:m] = a.to(torch.int32); t['k'][:m] = b.to(torch.int32)
+            t['Rs'][:m] = ra+rb; t['d0'][:m] = 0.; t['Reff'][:m] = ra*rb/(ra+rb)*pw**2                   # (the force goes as sqrt(R_eff): the weight 1 - similarity)
+            dl = (ra+rb-L)/(ra+rb)
+            st['active'], st['d_max'] = int((dl > 0).sum()), float(dl.max())
         t['xn'].copy_(x)
         st['pairs'] = m
 

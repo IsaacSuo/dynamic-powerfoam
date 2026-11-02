@@ -428,50 +428,39 @@ def lock_colour(W, ST, mass, V0, X0, P, r0, sigma=1.19):
 
 
 def contact_check(W, ST, V0):
-    """the colour contact at a real state: one step's start (the cut, births by colour, the contact list); then every contact pushed in by 5 % of R_i + R_k at z = x_n: the contact's gradient (with it less without it)
-    against central differences of its energy, term 7, along a random direction"""
-    from free_surface.ring_moment import color_sim
+    """the colour contact on the state's gap. At rest (F = I): rho0, and no unlike pair may overlap. At the real state: one step's start (the cut, births by colour, the contact list), the pairs, the overlapping ones;
+    then every pair put at an overlap of 5 % of rho_i + rho_k at z = x_n: the contact's gradient (with it less without it) against central differences of its energy, term 7, along a random direction"""
+    h_ = float(np.median(V0)**(1/3))
+    q = lambda v_: np.round(np.quantile(v_.cpu().numpy(), [0., .1, .5, .9, 1.]), 3).tolist()
+    I3 = torch.eye(3, dtype=f64, device=dev).expand(W.n, 3, 3)
+    a, b, ra, rb, pw, L = W.contact_pairs(W.X, I3, h_)
+    dl = (ra+rb-L)/(ra+rb)
+    print('rho0 / h quantiles 0 .1 .5 .9 1: %s; at rest, unlike pairs within reach + h: %d, overlapping %d, the deepest %.3f of rho_i + rho_k, the nearest gap %.3f h' % (q(W._rho0/h_), len(a), int((dl > 0).sum()), float(dl.max()), float((L-ra-rb).min())/h_), flush=True)
     x = ST.tx.clone()
     W.update_ul(x); W.update_self(x)
     st, us = W.self_stats, W.ul_stats
     P = W._pairs; m = len(P)
-    zero = (W._wi+W._wj) == 0
-    sz = color_sim(W._col_Q, W.tlo[zero], W.thi[zero])
-    hb = lambda v_: np.histogram(v_.cpu().numpy(), bins=[0., .1, .3, .5, .7, .9, 1.01])[0].tolist()
-    print('one start: springs born %d, weightless now %d (similarity counts in 0 .1 .3 .5 .7 .9 1: %s); contacts born %d, similarity counts %s' % (us['born'], int(zero.sum()), hb(sz), m, hb(1-W._pw)), flush=True)
+    t = W.tsc
+    Rs = t['Rs'][:m].clone()
+    L = (x[P[:, 1]]-x[P[:, 0]]).norm(dim=1)
+    print('one start: springs born %d; contact pairs %d, overlapping %d, the deepest %.3f of rho_i + rho_k; rho_i + rho_k / h %s; 1 - similarity %s' % (us['born'], m, st['active'], st['d_max'], q(Rs/h_), q(W._pw)), flush=True)
     if m == 0:
         return
-    h_ = float(np.median(V0)**(1/3))
-    Xr = W.X
-    rd = ((Xr[P[:, 1]]-Xr[P[:, 0]]).norm(dim=1)/h_).cpu().numpy()
-    Pc = W.tsc  # noqa
-    X0 = Xr.cpu().numpy(); zr = X0[:, 2]-X0[:, 2].min()
-    print('  contacts: rest distance / h counts in 0 1.5 2 3 5 10 inf: %s; sites at rest under z .18 (legs): both %d, one %d, none %d; distance now / h median %.2f' % (
-        np.histogram(rd, bins=[0., 1.5, 2., 3., 5., 10., 1e9])[0].tolist(), int(((zr[P[:, 0].cpu().numpy()] < .18) & (zr[P[:, 1].cpu().numpy()] < .18)).sum()),
-        int(((zr[P[:, 0].cpu().numpy()] < .18) ^ (zr[P[:, 1].cpu().numpy()] < .18)).sum()), int(((zr[P[:, 0].cpu().numpy()] >= .18) & (zr[P[:, 1].cpu().numpy()] >= .18)).sum()),
-        float(((x[P[:, 1]]-x[P[:, 0]]).norm(dim=1)/h_).median())), flush=True)
-    near = rd < 2.
-    if bool(near.any()):
-        k_ = np.nonzero(near)[0][:8]
-        print('  near at rest: pairs %s, rest / h %s, similarity %s, rest heights %s' % (P[k_].tolist(), np.round(rd[k_], 2).tolist(), np.round(1-W._pw[k_].cpu().numpy(), 2).tolist(), np.round(zr[P[k_].cpu().numpy()], 3).tolist()), flush=True)
-    t = W.tsc
-    rr = W._rr0; Rs = rr[P[:, 0]]+rr[P[:, 1]]
-    d0 = t['d0'][:m].clone()
-    W.grad(x); W.reread(); 
+    W.grad(x); W.reread()
     t['d0'][:m] = 1e300
     _, g_off = W.grad(x); g_off = g_off.clone()
-    t['d0'][:m] = d0-.05*Rs
+    t['d0'][:m] = .95*Rs-L                                                                  # (every pair at an overlap of 5 %)
     e0, g_on = W.grad(x); g_on = g_on.clone(); E7 = float(W.tsum[7])
     Reff = t['Reff'][:m]; dl = .05*Rs
     E7c = float((float(W.tball[1])*8/15*W.Esp*torch.sqrt(Reff*dl)*dl*dl).sum())
     gc = g_on-g_off
     torch.manual_seed(0)
     d = torch.randn_like(x); d = d/d.norm(dim=1).max()
-    h_ = float(np.median(V0)**(1/3))
-    print('  pushed in by 5 %%: energy %.4e (closed form %.4e); push per contact median %.3e = %.2f of a median cell\'s weight' % (E7, E7c, float(t['fn'][:m].median()), float(t['fn'][:m].median())/(9.8*float(np.median(V0)))), flush=True)
+    act = t['fn'][:m] > 0
+    print('  pushed in by 5 %%: %d pushing, energy %.4e (closed form %.4e); push per pushing pair median %.3e = %.2f of a median cell\'s weight' % (int(act.sum()), E7, E7c, float(t['fn'][:m][act].median()), float(t['fn'][:m][act].median())/(9.8*float(np.median(V0)))), flush=True)
     for e in (1e-4*h_, 1e-5*h_, 1e-6*h_):
         W.grad(x+e*d); Ep = float(W.tsum[7])
         W.grad(x-e*d); Em = float(W.tsum[7])
         fd = (Ep-Em)/(2*e); an = float((gc*d).sum())
         print('  step %.0e h: central difference %.6e, gradient %.6e, rel. error %.2e' % (e/h_, fd, an, abs(fd-an)/abs(an)), flush=True)
-    t['d0'][:m] = d0
+    t['d0'][:m] = 0.

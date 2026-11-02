@@ -190,7 +190,7 @@ for s in range(s_first, nsteps+1):
         bd = W.B['bdelta'].numpy()
         if W.selfc is not None:
             ss_ = W.self_stats
-            print('  contact: energy %.3e, pairs %d (born %d, left %d, to a spring %d so far), deepest approach %.3f of R_i + R_k, push / weight %.3f' % (float(W.tsum[7]), ss_['pairs'], ss_['born'], ss_['left'], ss_['to_spring'], ss_['d_max'], float(W.tsc['fn'].sum())/wref), flush=True)
+            print('  contact: energy %.3e, pairs within reach %d, overlapping at the step\'s start %d, the deepest %.3f of rho_i + rho_k, push / weight %.3f' % (float(W.tsum[7]), ss_['pairs'], ss_['active'], ss_['d_max'], float(W.tsc['fn'].sum())/wref), flush=True)
         print('t %.4f (%.0f s): KE %.3e springs+outer %.3e vol %.3e ground %.3e W_v %.3e, balance / start %.4f; com up %.5f, lowest %.4f; e^L %.3f..%.3f; F_e singular %.3f..%.3f; touching %d, ground/weight %.2f; walls %d, new %d, closed %d; radii %d (fails %d), flips %d; last %d steps: products %d, outer median %d max %d, rejected %d' % (
             s*args.dt, time.time()-t0, ek, ed, ev, float(W.tsum[6]), W.Wv, (ek+ed+ev+float(W.tsum[6])+float(W.tsum[7])+W.Wv+eg)/H0, float((M3*ST.tx)[:, 2].sum())/M, float(ST.tx[:, 2].min()), float(torch.exp(Lm).min()), float(torch.exp(Lm).max()), float(sf[:, 2].min()), float(sf[:, 0].max()),
             int((bd > 0).sum()), float(W.B['bfn'].numpy().sum())/wref, W.ul_stats.get('walls', 0), W.ul_stats.get('born', 0), W.ul_stats.get('closed', 0), W.ul_stats.get('radii_it', 0), W.ul_stats.get('radii_fail', 0), W.ul_stats.get('flips', 0), args.every, sum(npr[-args.every:]), int(np.median(nout[-args.every:])), max(nout[-args.every:]), ST.stats['rejected']), flush=True)
