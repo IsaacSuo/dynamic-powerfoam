@@ -89,6 +89,7 @@ if args.load_state is not None:
     ck_ = torch.load(args.load_state, weights_only=False)
     unpack(W, ck_['W']); unpack(ST, ck_['ST'])
     W.true_blocks = args.true_blocks; ST._pre_age = 0
+    wp.to_torch(ST.a['fg'], requires_grad=False).copy_(fg)                                  # (the command line's gravity over the checkpoint's)
     s_first = ck_['s']+1
     print('from step %d' % ck_['s'], flush=True)
 if args.probe_leg:
