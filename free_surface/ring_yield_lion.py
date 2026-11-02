@@ -89,7 +89,8 @@ if args.load_state is not None:
     ck_ = torch.load(args.load_state, weights_only=False)
     unpack(W, ck_['W']); unpack(ST, ck_['ST'])
     W.true_blocks = args.true_blocks; ST._pre_age = 0; ST.aa_m = args.aa
-    wp.to_torch(ST.a['fg'], requires_grad=False).copy_(fg)                                  # (the command line's gravity over the checkpoint's)
+    fg.copy_(-args.g*M3*up); wp.to_torch(ST.a['fg'], requires_grad=False).copy_(-args.g*M3*up)      # (the command line's gravity over the checkpoint's: fg shares the array the state was just written into)
+    print('gravity on the sites now: %.4e, asked %.4e' % (float(wp.to_torch(ST.a['fg'], requires_grad=False).sum(0)[2]), -args.g*float(M3.sum())), flush=True)
     s_first = ck_['s']+1
     print('from step %d' % ck_['s'], flush=True)
 if args.probe_leg:
