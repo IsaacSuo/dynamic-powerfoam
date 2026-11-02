@@ -236,3 +236,52 @@ def lock(W, ST, mass, V0, X0, P, tag):
             sh = (torch.as_tensor(V0[a_], device=dev)[:, None]*u*u).sum(1); sh = sh/sh.sum()
             s_ = zr[a_]
             print('    mode %d, omega^2 %.0f: by term %s; lives on %.0f cells, mean rest height %.3f (leg is 0 .. .15)' % (i, w[i], {names[k]: round(float(q_[j_])/Mu, 0) for j_, k in enumerate(names)}, 1/float((sh*sh).sum()), float((sh.cpu().numpy()*s_).sum())), flush=True)
+
+
+def unstable(W, ST, mass, V0, X0, P):
+    """at a real state, each leg with the rest of the body held: the lowest modes on the true tangent, viscosity out; per term, where they live, which way the leg's own lower part goes against the body's mid plane and up"""
+    n = W.n
+    zr = X0[:, 2]-X0[:, 2].min(); low = zr < .18
+    idx = -np.ones(n, int); idx[low] = np.arange(low.sum())
+    m = low[P[:, 0]] & low[P[:, 1]]; p = idx[P[m]]
+    _, lab = connected_components(coo_matrix((np.ones(len(p)), (p[:, 0], p[:, 1])), shape=(low.sum(), low.sum())), directed=False)
+    ids = np.nonzero(low)[0]
+    legs = sorted([ids[lab == k] for k in np.argsort(-np.bincount(lab))[:4]], key=lambda a_: X0[a_, 0].mean())
+    x = ST.tx.clone(); W.update_ul(x); W.grad(x); W.reread(); W.grad(x)
+    names = {0: 'tensor', 1: 'volume', 2: 'var', 4: 'remainder', 5: 'outer', 6: 'ground'}
+    com = x.mean(0)
+    print('state: body centre %s; e^L %.2f..%.2f; speed median %.2f' % (np.round(com.cpu().numpy(), 3).tolist(), float(torch.exp(W.tul['Ln']).min()), float(torch.exp(W.tul['Ln']).max()), float(ST.tv.norm(dim=1).median())), flush=True)
+    for li, a0 in enumerate(legs):
+        a_ = a0[zr[a0] < .15]; at = torch.as_tensor(a_, device=dev); N = len(a_)
+        Mv = np.repeat(V0[a_], 3)
+
+        def force(y):
+            W.grad(y); W.reread_light(); _, g_ = W.grad(y)
+            return g_[at].flatten().clone()
+
+        def energy(y):
+            W.grad(y); W.reread_light(); W.grad(y)
+            t = W.tsum.clone(); t = t.sum(1) if t.dim() > 1 else t
+            return np.array([float(t[k]) for k in names])
+        f0 = force(x)
+        K = torch.zeros(3*N, 3*N, dtype=f64)
+        for j in range(3*N):
+            y = x.clone(); y[at[j//3], j % 3] += 1e-7
+            K[:, j] = ((force(y)-f0)/1e-7).cpu()
+        K = K.numpy()
+        w, Q = np.linalg.eig(K/Mv[:, None]); o = np.argsort(w.real); w, Q = w.real[o], Q.real[:, o]
+        side = np.sign(float(x[at, 1].mean()-com[1]))
+        print('leg %d: %d cells, centre %s, on the %s side; lowest real omega^2 %s; negative %d; force on it, net %s' % (li, N, np.round(x[at].mean(0).cpu().numpy(), 3).tolist(), '+y' if side > 0 else '-y', np.round(w[:6], 0).tolist(), int((w < -1.).sum()), np.round((-f0.reshape(N, 3)).sum(0).cpu().numpy(), 5).tolist()), flush=True)
+        e0 = energy(x)
+        for i in range(min(3, int((w < -1.).sum())+1)):
+            u = torch.as_tensor(Q[:, i].reshape(N, 3), device=dev, dtype=f64); u = u/float(u.abs().max())
+            if float((u*(-f0.reshape(N, 3))).sum()) < 0:
+                u = -u                                                                     # (the way the present force takes it)
+            eps = 1e-4*float(np.median(V0)**(1/3))
+            xp, xm = x.clone(), x.clone(); xp[at] += eps*u; xm[at] -= eps*u
+            q_ = (energy(xp)+energy(xm)-2*e0)/eps**2
+            Mu = float((torch.as_tensor(V0[a_], device=dev)[:, None]*u*u).sum())
+            sh = (torch.as_tensor(V0[a_], device=dev)[:, None]*u*u).sum(1); sh = sh/sh.sum()
+            k_ = torch.argsort(sh, descending=True)[:max(N//8, 3)]
+            d_ = (sh[k_, None]*u[k_]).sum(0)/sh[k_].sum()
+            print('    mode %d, omega^2 %.0f: by term %s; lives on %.0f cells; its heaviest cells at rest height %.3f; they go (x, y out of the body, z up) %s; work of the present force %+.2e' % (i, w[i], {names[k]: round(float(q_[j_])/Mu, 0) for j_, k in enumerate(names)}, 1/float((sh*sh).sum()), float(zr[a_][k_.cpu().numpy()].mean()), np.round([float(d_[0]), side*float(d_[1]), float(d_[2])], 2).tolist(), float((u*(-f0.reshape(N, 3))).sum())), flush=True)
