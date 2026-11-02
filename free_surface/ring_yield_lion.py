@@ -38,6 +38,7 @@ a_.add_argument('--rest-ground', action='store_true', help='the ground on the re
 a_.add_argument('--dense-from', type=int, default=0, help='every step from this one: the sites into dense_<tag>.npz')
 a_.add_argument('--probe-30', type=Path, nargs='*', default=[], help='these saved states: ring_moment_force.check30, then stop')
 a_.add_argument('--dense', type=Path, default=None)
+a_.add_argument('--probe-colour', action='store_true', help='at the loaded state: the lock against the colours, then stop')
 a_.add_argument('--probe-unstable', action='store_true', help='at the loaded state: each leg\'s lowest modes, then stop')
 a_.add_argument('--probe-lock', action='store_true', help='at the loaded state: what stiffens the leg, then stop')
 a_.add_argument('--probe-equil', action='store_true', help='at the loaded state: is a leg at an equilibrium, then stop')
@@ -123,6 +124,10 @@ if args.load_state is not None:
         W.tlo, W.thi, W.tkey, W._wi, W._wj, W._qkey, W._qi, W._qj, W.tk0, W.tdl = W.tlo[keep_], W.thi[keep_], W.tkey[keep_], W._wi[keep_], W._wj[keep_], W._qkey[keep_], W._qi[keep_], W._qj[keep_], W.tk0[keep_], W.tdl[keep_]
     s_first = ck_['s']+1
     print('from step %d' % ck_['s'], flush=True)
+if args.probe_colour:
+    from free_surface.ring_moment_force import lock_colour
+    lock_colour(W, ST, mass, V0, X0, g['pairs'], torch.as_tensor(r0, device=dev, dtype=f64))
+    raise SystemExit
 if args.probe_unstable:
     from free_surface.ring_moment_force import unstable
     unstable(W, ST, mass, V0, X0, g['pairs'])

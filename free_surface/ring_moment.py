@@ -294,3 +294,31 @@ class ExplicitStep(YieldStep):
         W.end_ul(self.th)
         wp.launch(k_mid_lamt, bl['k'], inputs=[W.B['bff'], W.B['bdelta']], outputs=[bl['lamt']])
         self.tx.copy_(self._xe); self.tv.copy_(self._ve); self.ta.copy_(self._ae); self.tz.copy_(self._xe)
+
+
+def color_code(W, r0, sigma):
+    """ClosureWarp._color_code (10-30, the user's colour) on a RingMoment: a static colour per cell from the rest skin graph, exp(-d^2 / (2 sigma^2)) in
+    steps, the inside by the harmonic extension on the rest A / L; the similarity of two cells sum sqrt(p_i p_j). Returns sqrt(p), n x skin cells"""
+    import scipy.sparse as sp_
+    from scipy.sparse.linalg import splu
+    from scipy.sparse.csgraph import dijkstra
+    n = W.n; X = W.X
+    G, _ = W._recut.geometry(X, r0)
+    kp = G.wall_A.detach() > 0
+    i0, j0 = G.i[kp], G.j[kp]
+    w = (G.wall_A.detach()[kp]/(X[j0]-X[i0]).norm(dim=1)).cpu().numpy()
+    Wm = sp_.coo_matrix((w, (i0.cpu().numpy(), j0.cpu().numpy())), shape=(n, n)).tocsr(); Wm = Wm+Wm.T
+    skin = (G.patch_A.detach() > 0).cpu().numpy(); sid, iid = np.where(skin)[0], np.where(~skin)[0]
+    ds = dijkstra((Wm[sid][:, sid] > 0).astype(np.float64).tocsr(), unweighted=True)
+    Ps = np.exp(-np.where(np.isfinite(ds), ds, 1e6)**2/(2*sigma**2)); Ps = Ps/Ps.sum(1, keepdims=True)
+    Pm = np.zeros((n, len(sid)), dtype=np.float32); Pm[sid] = Ps
+    Lm = (sp_.diags(np.asarray(Wm.sum(1)).ravel())-Wm).tocsc()
+    Pm[iid] = splu(Lm[iid][:, iid].tocsc()).solve(np.asarray(Wm[iid][:, sid]@Ps)).astype(np.float32)
+    return torch.as_tensor(np.sqrt(np.clip(Pm, 0, None)), device=W.dev)
+
+
+def color_sim(Q, a, b, chunk=4096):
+    s = torch.zeros(len(a), dtype=f64, device=a.device)
+    for c0 in range(0, len(a), chunk):
+        s[c0:c0+chunk] = (Q[a[c0:c0+chunk]]*Q[b[c0:c0+chunk]]).sum(1).to(f64).clamp(max=1.)
+    return s

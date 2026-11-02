@@ -377,3 +377,51 @@ def check30(W, ST, mass, V0, X0, P, dense, step, dt):
             pk = np.isin(a_, bins[0])
             sh = (V0[a_][:, None]*qr*qr).sum(1)
             print('      mode %d, omega^2 %.0f: paw %s, knee %s (x, y out, z), the force along it %+.2e; cos with the motion %s' % (i, w[i], np.round([qr[pk, 0].mean(), side*qr[pk, 1].mean(), qr[pk, 2].mean()], 2).tolist(), np.round([qr[np.isin(a_, bins[3]), 0].mean(), side*qr[np.isin(a_, bins[3]), 1].mean(), qr[np.isin(a_, bins[3]), 2].mean()], 2).tolist(), float((-f0.cpu().numpy()*q_).sum()), ('%+.2f' % ((Mv*un*q_).sum()/nu)) if has_next else '-'), flush=True)
+
+
+def lock_colour(W, ST, mass, V0, X0, P, r0, sigma=1.19):
+    """at a real state with weightless springs, leg 0: the lowest modes as run, without the weightless springs between unlike colours (the contacts), without all of them; the colours of those springs against their rest distance"""
+    from free_surface.ring_moment import color_code, color_sim
+    n = W.n; h_ = float(np.median(V0)**(1/3))
+    Qc = color_code(W, r0, sigma)
+    zr = X0[:, 2]-X0[:, 2].min(); low = zr < .18
+    idx = -np.ones(n, int); idx[low] = np.arange(low.sum())
+    m = low[P[:, 0]] & low[P[:, 1]]; p = idx[P[m]]
+    _, lab = connected_components(coo_matrix((np.ones(len(p)), (p[:, 0], p[:, 1])), shape=(low.sum(), low.sum())), directed=False)
+    ids = np.nonzero(low)[0]
+    legs = sorted([ids[lab == k] for k in np.argsort(-np.bincount(lab))[:4]], key=lambda a_: X0[a_, 0].mean())
+    a0 = legs[0]; a_ = a0[zr[a0] < .15]; at = torch.as_tensor(a_, device=dev); N = len(a_)
+    Mv = np.repeat(V0[a_], 3)
+    x = ST.tx.clone()
+    save = (W.tlo.clone(), W.thi.clone(), W.tkey.clone(), W._wi.clone(), W._wj.clone(), W._qkey.clone(), W._qi.clone(), W._qj.clone(), W.tk0.clone(), W.tdl.clone())
+    W.update_ul(x)
+    wt = W._wi+W._wj; zero = wt == 0
+    sim = color_sim(Qc, W.tlo, W.thi)
+    rest = torch.as_tensor(X0, device=dev, dtype=f64)
+    rd = (rest[W.tlo]-rest[W.thi]).norm(dim=1)/h_
+    inleg = torch.zeros(n, dtype=torch.bool, device=dev); inleg[at] = True
+    zl = zero & (inleg[W.tlo] | inleg[W.thi])
+    hb = lambda v_: np.histogram(v_.cpu().numpy(), bins=[0., .1, .3, .5, .7, .9, 1.01])[0].tolist()
+    print('weightless springs %d (on the leg %d); colour similarity, counts in 0 .1 .3 .5 .7 .9 1: all %s, on the leg %s; rest distance / h median by similarity under .5: %.1f, over .5: %.1f; springs with weight, similarity median %.2f, 1 %% %.2f' % (int(zero.sum()), int(zl.sum()), hb(sim[zero]), hb(sim[zl]), float(rd[zero & (sim < .5)].median()) if bool((zero & (sim < .5)).any()) else -1., float(rd[zero & (sim >= .5)].median()) if bool((zero & (sim >= .5)).any()) else -1., float(sim[~zero].median()), float(torch.quantile(sim[~zero], .01))), flush=True)
+
+    def force(y):
+        W.grad(y); W.reread_light(); _, g_ = W.grad(y)
+        return g_[at].flatten().clone()
+    for name, drop in (('as run', None), ('unlike colours (< .5) out', zero & (sim < .5)), ('all weightless out', zero)):
+        W.tlo, W.thi, W.tkey, W._wi, W._wj, W._qkey, W._qi, W._qj, W.tk0, W.tdl = [t_.clone() for t_ in save]
+        W.update_ul(x)
+        if drop is not None:
+            keep = ~drop
+            W.elastic_births = False
+            W.tlo, W.thi, W.tkey, W._wi, W._wj, W._qkey, W._qi, W._qj, W.tk0, W.tdl = W.tlo[keep], W.thi[keep], W.tkey[keep], W._wi[keep], W._wj[keep], W._qkey[keep], W._qi[keep], W._qj[keep], W.tk0[keep], W.tdl[keep]
+            W._spring_rule_keep = keep
+            W.update_ul(x)
+        W.elastic_births = True
+        W.grad(x); W.reread(); W.grad(x)
+        f0 = force(x)
+        K = torch.zeros(3*N, 3*N, dtype=f64)
+        for j in range(3*N):
+            y = x.clone(); y[at[j//3], j % 3] += 1e-7
+            K[:, j] = ((force(y)-f0)/1e-7).cpu()
+        w = np.sort(np.linalg.eigvals(K.numpy()/Mv[:, None]).real)
+        print('  %-26s lowest real omega^2 %s; springs in the list %d' % (name, np.round(w[:6], 0).tolist(), int(W._m_s)), flush=True)
