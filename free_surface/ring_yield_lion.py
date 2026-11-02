@@ -33,6 +33,7 @@ a_.add_argument('--start-frames', type=Path, default=None, help='restart from a 
 a_.add_argument('--start-k', type=int, default=0)
 a_.add_argument('--save-state', type=int, nargs='*', default=[])
 a_.add_argument('--load-state', type=Path, default=None)
+a_.add_argument('--ground-k', type=float, default=1., help='the ground\'s Hertz modulus times this (a test)')
 a_.add_argument('--rest-ground', action='store_true', help='the ground on the rest radii, not the cut\'s')
 a_.add_argument('--dense-from', type=int, default=0, help='every step from this one: the sites into dense_<tag>.npz')
 a_.add_argument('--probe-30', type=Path, nargs='*', default=[], help='these saved states: ring_moment_force.check30, then stop')
@@ -69,6 +70,12 @@ ST.hold_after = args.hold_after
 W.true_blocks = args.true_blocks
 ST._pre_age = 0
 W.rest_ground = args.rest_ground
+Es0_ = float(W.Es)
+
+
+def ground_k():
+    W.Es = Es0_*args.ground_k; W.tball[3] = W.Es
+ground_k()
 ST.set_state(W.X.clone(), torch.tensor(v0, dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
 if args.no_elastic_births:
     W.elastic_births = False
@@ -107,6 +114,7 @@ if args.load_state is not None:
     ck_ = torch.load(args.load_state, weights_only=False)
     unpack(W, ck_['W']); unpack(ST, ck_['ST'])
     W.true_blocks = args.true_blocks; ST._pre_age = 0; ST.aa_m = args.aa; ST.pre_every = args.pre_every
+    ground_k()
     fg.copy_(-args.g*M3*up); wp.to_torch(ST.a['fg'], requires_grad=False).copy_(-args.g*M3*up)      # (the command line's gravity over the checkpoint's: fg shares the array the state was just written into)
     print('gravity on the sites now: %.4e, asked %.4e' % (float(wp.to_torch(ST.a['fg'], requires_grad=False).sum(0)[2]), -args.g*float(M3.sum())), flush=True)
     if args.no_elastic_births:                                                              # (the checkpoint's weightless springs out: their walls are free surfaces)
@@ -131,6 +139,7 @@ if args.probe_leg:
     from free_surface.ring_moment_force import probe, slices
     slices(W, ST, mass, V0, X0, g['pairs'])
     raise SystemExit
+print('the ground: Hertz modulus %.3f (x %g), in the kernel %.3f' % (W.Es, args.ground_k, float(W.tball[3])), flush=True)
 t0 = t_saved = time.time()
 nit, npr, nout = [], [], []
 nsteps = int(round(args.T/args.dt))
