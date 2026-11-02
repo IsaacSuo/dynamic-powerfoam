@@ -34,6 +34,7 @@ a_.add_argument('--start-k', type=int, default=0)
 a_.add_argument('--save-state', type=int, nargs='*', default=[])
 a_.add_argument('--load-state', type=Path, default=None)
 a_.add_argument('--probe-leg', action='store_true', help='at the loaded state: ring_moment_force.py, then stop')
+a_.add_argument('--g', type=float, default=9.8, help='gravity')
 a_.add_argument('--moment', action='store_true', help='the springs not tied to the walls: ring_moment.py')
 a_.add_argument('--true-blocks', action='store_true', help='the preconditioner on the true diagonal blocks')
 args = a_.parse_args()
@@ -49,7 +50,7 @@ if args.beta > 0:
     W.set_viscosity(args.beta, args.dt)
 W.start()
 W.prepare()
-fg = -9.8*M3*up; wref = float(fg.norm()); tol = args.tol*wref
+fg = -args.g*M3*up; wref = float((9.8*M3*up).norm()); tol = args.tol*wref
 CG = TrustCG(W, mass, args.dt, per=2, product_iters=1)
 W.update_ul(W.X)
 W.grad(W.X); W.reread(); W.grad(W.X)
