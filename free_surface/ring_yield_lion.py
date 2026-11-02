@@ -34,6 +34,9 @@ a_.add_argument('--start-k', type=int, default=0)
 a_.add_argument('--save-state', type=int, nargs='*', default=[])
 a_.add_argument('--load-state', type=Path, default=None)
 a_.add_argument('--rest-ground', action='store_true', help='the ground on the rest radii, not the cut\'s')
+a_.add_argument('--dense-from', type=int, default=0, help='every step from this one: the sites into dense_<tag>.npz')
+a_.add_argument('--probe-30', type=Path, nargs='*', default=[], help='these saved states: ring_moment_force.check30, then stop')
+a_.add_argument('--dense', type=Path, default=None)
 a_.add_argument('--probe-unstable', action='store_true', help='at the loaded state: each leg\'s lowest modes, then stop')
 a_.add_argument('--probe-lock', action='store_true', help='at the loaded state: what stiffens the leg, then stop')
 a_.add_argument('--probe-equil', action='store_true', help='at the loaded state: is a leg at an equilibrium, then stop')
@@ -90,6 +93,16 @@ def save():
 
 
 from free_surface.run_state import pack, unpack
+if args.probe_30:
+    from free_surface.ring_moment_force import check30
+    dn_ = np.load(args.dense)
+    W.elastic_births = not args.no_elastic_births
+    for f_ in args.probe_30:
+        ck_ = torch.load(f_, weights_only=False)
+        unpack(W, ck_['W']); unpack(ST, ck_['ST'])
+        check30(W, ST, mass, V0, X0, g['pairs'], dn_, ck_['s'], args.dt)
+    raise SystemExit
+dense_x, dense_s = [], []
 if args.load_state is not None:
     ck_ = torch.load(args.load_state, weights_only=False)
     unpack(W, ck_['W']); unpack(ST, ck_['ST'])
@@ -139,6 +152,9 @@ for s in range(s_first, nsteps+1):
     if ST.stats.get('aa_nan', 0):
         print('AA step %d: the extrapolation read NaN %d times, back to the plain point' % (s, ST.stats['aa_nan']), flush=True)
     ST.end()
+    if args.dense_from and s >= args.dense_from:
+        dense_x.append(ST.tx.cpu().numpy()); dense_s.append(s)
+        np.savez(args.save/('dense_%s.npz' % args.tag), x=np.array(dense_x), s=np.array(dense_s))
     if s in args.save_state:
         torch.save(dict(W=pack(W), ST=pack(ST), s=s), args.save/('state_%s_%d.pt' % (args.tag, s)))
     nit.append(its); npr.append(e_); nout.append(ST.stats['outer'])

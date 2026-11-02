@@ -285,3 +285,95 @@ def unstable(W, ST, mass, V0, X0, P):
             k_ = torch.argsort(sh, descending=True)[:max(N//8, 3)]
             d_ = (sh[k_, None]*u[k_]).sum(0)/sh[k_].sum()
             print('    mode %d, omega^2 %.0f: by term %s; lives on %.0f cells; its heaviest cells at rest height %.3f; they go (x, y out of the body, z up) %s; work of the present force %+.2e' % (i, w[i], {names[k]: round(float(q_[j_])/Mu, 0) for j_, k in enumerate(names)}, 1/float((sh*sh).sum()), float(zr[a_][k_.cpu().numpy()].mean()), np.round([float(d_[0]), side*float(d_[1]), float(d_[2])], 2).tolist(), float((u*(-f0.reshape(N, 3))).sum())), flush=True)
+
+
+def check30(W, ST, mass, V0, X0, P, dense, step, dt):
+    """the leg's first bow, at a real state: can the paw slide; which term pushes the leg, slice by slice; the cells' couples (R = polar(F), M not round) against the ground's moment; the lowest modes and how much of the motion that follows goes along them"""
+    n = W.n; h_ = float(np.median(V0)**(1/3))
+    A, bl = ST.a, W.ball
+    wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], ST.c0, ST.g8, ST.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
+    x, v = ST.tx.clone(), ST.tv.clone()
+    W.update_ul(x); W.grad(x); W.reread(); _, g0 = W.grad(x); g0 = g0.clone()
+    zr = X0[:, 2]-X0[:, 2].min(); low = zr < .18
+    idx = -np.ones(n, int); idx[low] = np.arange(low.sum())
+    m = low[P[:, 0]] & low[P[:, 1]]; p = idx[P[m]]
+    _, lab = connected_components(coo_matrix((np.ones(len(p)), (p[:, 0], p[:, 1])), shape=(low.sum(), low.sum())), directed=False)
+    ids = np.nonzero(low)[0]
+    legs = sorted([ids[lab == k] for k in np.argsort(-np.bincount(lab))[:4]], key=lambda a_: X0[a_, 0].mean())
+    ed = np.linspace(0., .17, 8)
+    Y = W.ty; g = W._gid; lead = g == torch.arange(n, device=dev)
+    Xm = Y['Ff']-Y['vm'][:, None, None]*Y['Rz']
+    Ar = Y['Ff']@Y['Mtt']@Xm.transpose(1, 2)
+    tau = -torch.stack([Ar[:, 1, 2]-Ar[:, 2, 1], Ar[:, 2, 0]-Ar[:, 0, 2], Ar[:, 0, 1]-Ar[:, 1, 0]], 1)*lead[:, None]
+    fn = torch.as_tensor(W.B['bfn'].numpy(), device=dev, dtype=f64)
+    ff = torch.as_tensor(W.B['bff'].numpy(), device=dev, dtype=f64)
+    if ff.dim() == 1:
+        ff = torch.zeros(n, 3, dtype=f64, device=dev)
+    ups = torch.tensor([0., 0., 1.], dtype=f64, device=dev)
+    fg_ = fn[:, None]*ups+ff
+    com = x.mean(0)
+    Mg_all = torch.linalg.cross(x-com, fg_).sum(0)
+    print('t %.4f: speed median %.2f; couples of all the cells, sum |%.2e|, the sum of their sizes %.2e; the ground\'s moment on the body |%.2e|; ground force %.2e, tangential %.2e, contact cells %d; contact moment of the couples per cell: median |tau| / (2 mu V e) %.3f' % (step*dt, float(v.norm(dim=1).median()), float(tau.sum(0).norm()), float(tau.norm(dim=1).sum()), float(Mg_all.norm()), float(fn.sum()), float(ff.norm(dim=1).sum()), int((fn > 0).sum()), float((tau.norm(dim=1)[lead]/(((Xm@Y['Mtt'])*Xm).sum((1, 2))[lead].sqrt()*Y['Mtt'].diagonal(dim1=1, dim2=2).sum(1)[lead].sqrt()/3**.5).clamp(min=1e-30)).median())), flush=True)
+    names = {0: 'tensor', 1: 'volume', 2: 'var', 4: 'remainder', 5: 'outer', 6: 'ground'}
+
+    def term_e(y):
+        W.grad(y)
+        t = W.tsum.clone(); t = t.sum(1) if t.dim() > 1 else t
+        return np.array([float(t[k]) for k in names])
+    k_next = int(np.argmin(np.abs(dense['s']-(step+12))))
+    has_next = abs(int(dense['s'][k_next])-(step+12)) == 0
+    for li, a0 in enumerate(legs):
+        side = float(np.sign(X0[a0, 1].mean()-X0[:, 1].mean()))
+        bins = [a0[(zr[a0] >= ed[i]) & (zr[a0] < ed[i+1])] for i in range(7)]
+        bt = [torch.as_tensor(b, device=dev) for b in bins]
+        paw = bt[0]; knee = bt[3]
+        cz = lambda u_: np.round([float(u_[0]), side*float(u_[1]), float(u_[2])], 3).tolist()
+        print('  leg %d: paw at %s, knee at %s (x, y out of the mid plane, z); paw velocity %s, knee velocity %s; ground on the paw: normal %.2e, tangential %.2e, contact cells %d; on the whole leg: normal %.2e, %d cells' % (li, cz(x[paw].mean(0)-torch.tensor([0., float(com[1]), 0.], dtype=f64, device=dev)), cz(x[knee].mean(0)-torch.tensor([0., float(com[1]), 0.], dtype=f64, device=dev)), cz(v[paw].mean(0)), cz(v[knee].mean(0)), float(fn[paw].sum()), float(ff[paw].norm(dim=1).sum()), int((fn[paw] > 0).sum()), float(fn[torch.as_tensor(a0, device=dev)].sum()), int((fn[torch.as_tensor(a0, device=dev)] > 0).sum())), flush=True)
+        # the paw slides? its horizontal force from the ground's own energy
+        e_ = 1e-6
+        for ax, nm in ((0, 'x'), (1, 'y')):
+            xp, xm_ = x.clone(), x.clone(); xp[paw, ax] += e_; xm_[paw, ax] -= e_
+            print('    the ground\'s energy against the paw moved in %s: %+.2e' % (nm, -(term_e(xp)[5]-term_e(xm_)[5])/(2*e_)), flush=True)
+        # slice by slice, the force on it per term
+        for i, b in enumerate(bt):
+            row = {}
+            for ax in range(3):
+                xp, xm_ = x.clone(), x.clone(); xp[b, ax] += e_; xm_[b, ax] -= e_
+                row[ax] = -(term_e(xp)-term_e(xm_))/(2*e_)
+            print('    slice %d: force (x, y out, z) %s; %s' % (i, cz(-g0[b].sum(0)*1e3), ' '.join('%s %s' % (nm_, np.round([1e3*row[0][j_], 1e3*side*row[1][j_], 1e3*row[2][j_]], 2).tolist()) for j_, nm_ in enumerate(names.values()))), flush=True)
+        # moments about each joint on the part below it
+        for j in (2, 3, 4, 5):
+            below = torch.as_tensor(np.concatenate(bins[:j]), device=dev)
+            jx = x[bt[j]].mean(0)
+            Mt = tau[below].sum(0)
+            Mgr = torch.linalg.cross(x[below]-jx, fg_[below]).sum(0)
+            Mn = torch.linalg.cross(x[below]-jx, -g0[below]).sum(0)
+            print('    moment about the joint at slice %d on what is below it: the cells\' couples %s |%.2e|; the ground %s |%.2e|; all the forces %s |%.2e|' % (j, np.round(Mt.cpu().numpy()*1e4, 2).tolist(), float(Mt.norm()), np.round(Mgr.cpu().numpy()*1e4, 2).tolist(), float(Mgr.norm()), np.round(Mn.cpu().numpy()*1e4, 2).tolist(), float(Mn.norm())), flush=True)
+        # the modes, with the ground, and the motion to come
+        a_ = a0[zr[a0] < .15]; at = torch.as_tensor(a_, device=dev); N = len(a_)
+        Mv = np.repeat(V0[a_], 3)
+
+        def force(y):
+            W.grad(y); W.reread_light(); _, gg = W.grad(y)
+            return gg[at].flatten().clone()
+        f0 = force(x)
+        K = torch.zeros(3*N, 3*N, dtype=f64)
+        for jj in range(3*N):
+            y = x.clone(); y[at[jj//3], jj % 3] += 1e-7
+            K[:, jj] = ((force(y)-f0)/1e-7).cpu()
+        K = K.numpy()
+        w, Q = np.linalg.eig(K/Mv[:, None]); o = np.argsort(w.real); w, Q = w.real[o], Q.real[:, o]
+        W.grad(x); W.reread(); W.grad(x)
+        if has_next:
+            xn_ = dense['x'][k_next]
+            u = xn_[a_]-x[at].cpu().numpy()
+            top = np.isin(a_, np.concatenate(bins[-1:]))
+            u = u-(u[top].mean(0) if top.any() else 0.)
+            un = u.flatten(); nu = np.sqrt((Mv*un*un).sum())
+        print('    modes: lowest real omega^2 %s; negative %d; the motion of the next .01 s, |u| rms %.4f' % (np.round(w[:6], 0).tolist(), int((w < -1.).sum()), (nu/np.sqrt(Mv.sum())) if has_next else -1.), flush=True)
+        for i in range(4):
+            q_ = Q[:, i]; nq = np.sqrt((Mv*q_*q_).sum()); q_ = q_/nq
+            qr = q_.reshape(N, 3)
+            pk = np.isin(a_, bins[0])
+            sh = (V0[a_][:, None]*qr*qr).sum(1)
+            print('      mode %d, omega^2 %.0f: paw %s, knee %s (x, y out, z), the force along it %+.2e; cos with the motion %s' % (i, w[i], np.round([qr[pk, 0].mean(), side*qr[pk, 1].mean(), qr[pk, 2].mean()], 2).tolist(), np.round([qr[np.isin(a_, bins[3]), 0].mean(), side*qr[np.isin(a_, bins[3]), 1].mean(), qr[np.isin(a_, bins[3]), 2].mean()], 2).tolist(), float((-f0.cpu().numpy()*q_).sum()), ('%+.2f' % ((Mv*un*q_).sum()/nu)) if has_next else '-'), flush=True)
