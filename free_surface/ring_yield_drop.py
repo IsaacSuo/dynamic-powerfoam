@@ -1,5 +1,7 @@
 """ring_yield.py on PAC-NeRF's plasticine scene 0 against its MPM particles, as merged_drop.py: the shape of elastic scene 0, the scene's E, nu, yield stress and start velocity, gravity, the ground at y = -0.05 with friction large enough for the MPM's sticky ground.
 Per frame (1/24 s): height and widths (ours: the cap cells' outermost points), the centre of mass, Chamfer in both directions against 30000 of the particles. Frames saved on the way (x, radii, L, yielded), every --every steps; the log line-buffered; no timeout.
+Without the MPM's particles (--data without simulation_data.zip, as on a rented server): scene 0 only, its parameters from the repository's copy (foams/fourier8k_clean/plasticine_scene0.json),
+the frames our own shape only; the shape against the MPM afterwards by flow_spreads.py on the frames. Exit 1 when a step's solve did not converge.
   python free_surface/ring_yield_drop.py --foam <dir with dem_exact_single> --save <dir> --tag <tag>"""
 import argparse
 import io
@@ -12,7 +14,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import warp as wp
-from plyfile import PlyData
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
@@ -60,31 +61,43 @@ a_.add_argument('--save-state', type=int, nargs='*', default=[], help='checkpoin
 a_.add_argument('--load-state', type=Path, default=None)
 a_.add_argument('--soft-tol', type=float, default=.1, help='of the weight: a step that ends over the tolerance but under this goes on, counted and logged (.1 is at most a .1 m/s kick to one site)')
 a_.add_argument('--no-hold', action='store_true', help="the ground only presses; the MPM's sticky ground holds tension, up to the material's yield here")
+a_.add_argument('--data', type=Path, default=ROOT, help="PAC-NeRF's data: gt/plasticine.json and simulation_data.zip (the MPM's particles); without the zip, scene 0 against nothing")
+a_.add_argument('--fit-floor', type=float, default=1e-2, help='the fitted skin\'s fit floored where its walls do not see, the springs\' own fit there (merged_ul.py, as ring_yield_lion.py); 0: off')
+a_.add_argument('--block-graph', choices=('direct', 'springs'), default='direct', help='the preconditioner\'s blocks coloured on the direct interactions or on the springs alone (ring_moment.block_colours)')
 args = a_.parse_args()
-gt = json.loads((ROOT/'gt'/'plasticine.json').read_text())[str(args.scene)]
+have_truth = (args.data/'simulation_data.zip').exists()
+gpath = args.data/'gt'/'plasticine.json'
+if not gpath.exists():                                                                 # (the repository's copy of scene 0's line of PAC-NeRF's gt/plasticine.json)
+    gpath = Path(__file__).resolve().parent.parent/'foams'/'fourier8k_clean'/'plasticine_scene0.json'
+gt = json.loads(gpath.read_text())[str(args.scene)]
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
 g = np.load(args.foam/'dem_exact_single'/'geometry.npz'); cl = np.load(args.foam/'dem_exact_single'/'cells.npz')
 X0, r0, V0, C0 = g['points'], cl['radii'], g['masses'], g['contacts']; n = len(X0)
 args.save.mkdir(parents=True, exist_ok=True)
-Z = zipfile.ZipFile(ROOT/'simulation_data.zip')
+Z = zipfile.ZipFile(args.data/'simulation_data.zip') if have_truth else None
 
 
 def truth(k, scene=None):
+    from plyfile import PlyData
     v = PlyData.read(io.BytesIO(Z.read('simulation_data/plasticine/%d/%d.ply' % (args.scene if scene is None else scene, k))))['vertex']
     return np.stack([v['x'], v['y'], v['z']], 1).astype(np.float64)+OFFSET
 
 
-# every scene starts as scene 0 turned, particle by particle: the foam of scene 0 turned with it
-p0_, pk_ = truth(0, 0), truth(0)
-c0_, ck_ = p0_.mean(0), pk_.mean(0)
-U_, _, Vt_ = np.linalg.svd((pk_-ck_).T@(p0_-c0_))
-R_s = U_@np.diag([1., 1., np.sign(np.linalg.det(U_@Vt_))])@Vt_
-print('scene %d: E %.1f, nu %.4f, yield %.1f; turned from scene 0 by %.1f degrees, particle residual %.1e' % (args.scene, gt['E'], nu, gt['ys'], np.degrees(np.arccos(np.clip((np.trace(R_s)-1)/2, -1, 1))), np.abs((p0_-c0_)@R_s.T-(pk_-ck_)).max()), flush=True)
-X0 = ck_+(X0-c0_)@R_s.T; C0 = ck_+(C0-c0_)@R_s.T
-rng = np.random.default_rng(0)
-Gt = [truth(k) for k in range(args.frames+1)]
-pick = rng.choice(len(Gt[0]), 30000, replace=False)
-Gp = [torch.as_tensor(p[pick], device=dev).float() for p in Gt]
+if have_truth:
+    # every scene starts as scene 0 turned, particle by particle: the foam of scene 0 turned with it
+    p0_, pk_ = truth(0, 0), truth(0)
+    c0_, ck_ = p0_.mean(0), pk_.mean(0)
+    U_, _, Vt_ = np.linalg.svd((pk_-ck_).T@(p0_-c0_))
+    R_s = U_@np.diag([1., 1., np.sign(np.linalg.det(U_@Vt_))])@Vt_
+    print('scene %d: E %.1f, nu %.4f, yield %.1f; turned from scene 0 by %.1f degrees, particle residual %.1e' % (args.scene, gt['E'], nu, gt['ys'], np.degrees(np.arccos(np.clip((np.trace(R_s)-1)/2, -1, 1))), np.abs((p0_-c0_)@R_s.T-(pk_-ck_)).max()), flush=True)
+    X0 = ck_+(X0-c0_)@R_s.T; C0 = ck_+(C0-c0_)@R_s.T
+    rng = np.random.default_rng(0)
+    Gt = [truth(k) for k in range(args.frames+1)]
+    pick = rng.choice(len(Gt[0]), 30000, replace=False)
+    Gp = [torch.as_tensor(p[pick], device=dev).float() for p in Gt]
+else:
+    assert args.scene == 0, 'without the MPM\'s particles only scene 0 (the foam is its start; another scene is it turned by the particles)'
+    print('scene %d: E %.1f, nu %.4f, yield %.1f (from %s); no MPM particles at %s: our shape only, against the MPM afterwards by flow_spreads.py' % (args.scene, gt['E'], nu, gt['ys'], gpath, args.data), flush=True)
 
 
 def chamfer(a, b, chunk=1024):
@@ -98,6 +111,8 @@ def chamfer(a, b, chunk=1024):
 
 mass = torch.as_tensor(V0, dtype=f64, device=dev); M = float(mass.sum()); M3 = mass[:, None]
 W = (RingMoment if args.moment else RingYield)(X0, r0, V0, g["pairs"], g["areas"], C0, E, nu, ys, theta=1. if args.explicit else .5, kappa=args.kappa, eps_cut=args.eps_cut, hold=not args.no_hold, ledger=True, vol_tol=args.vol_tol)
+W.fit_floor = args.fit_floor
+W.block_graph = args.block_graph
 W.set_ball((0., 1., 0.), -.05, args.mu)
 W.start()
 W.prepare()
@@ -116,8 +131,8 @@ ST.hold_after = args.hold_after
 
 ST.set_state(W.X.clone(), torch.tensor(gt['v'], dtype=f64, device=dev).expand(n, 3).clone(), fg/M3)
 h = float(np.median(V0))**(1/3)
-print('plasticine, ring springs with the tensor limit: E %.1f, nu %.4f, yield %.1f Pa (yield strain %.4f, cell limit e_y %.4f), kappa %g, v0 %s; foam %s: %d cells, h %.2f mm; dt 1/%d, tol %g of the weight, friction %g; MPM %d particles' % (
-    gt['E'], nu, gt['ys'], gt['ys']/gt['E'], W.ey, args.kappa, np.round(gt['v'], 4).tolist(), args.foam.name, n, 1e3*h, round(1/args.dt), args.tol, args.mu, len(Gt[0])), flush=True)
+print('plasticine, ring springs with the tensor limit: E %.1f, nu %.4f, yield %.1f Pa (yield strain %.4f, cell limit e_y %.4f), kappa %g, v0 %s; foam %s: %d cells, h %.2f mm; dt 1/%d, tol %g of the weight, friction %g; the fit floor %g, the blocks coloured on %s; MPM %d particles' % (
+    gt['E'], nu, gt['ys'], gt['ys']/gt['E'], W.ey, args.kappa, np.round(gt['v'], 4).tolist(), args.foam.name, n, 1e3*h, round(1/args.dt), args.tol, args.mu, W.fit_floor, args.block_graph, len(Gt[0]) if have_truth else 0), flush=True)
 
 
 def ours():
@@ -131,6 +146,14 @@ def spreads(p):
 
 
 def row(k):
+    if not have_truth:                                                                 # (our shape only; the MPM's columns nan)
+        o = ours()
+        oh = (o.max(0).values-o.min(0).values).cpu().numpy()
+        com = ((M3*ST.tx).sum(0)/M).cpu().numpy(); so = spreads(ST.tx)
+        print('FRAME %2d t %.3f: height %.3f; x width %.3f, z width %.3f; spreads of the sites 1-99 %% x %.3f y %.3f z %.3f; com %s; low %.4f (no MPM here)' % (
+            k, k/24, oh[1], oh[0], oh[2], so[0], so[1], so[2], np.round(com, 4).tolist(), float(o[:, 1].min())), flush=True)
+        nan_ = float('nan')
+        return (k, k/24, *oh, nan_, nan_, nan_, *com, nan_, nan_, nan_, float(o[:, 1].min()), nan_, nan_, nan_)
     o = ours(); gp = Gt[k]
     oh = (o.max(0).values-o.min(0).values).cpu().numpy(); gh = gp.max(0)-gp.min(0)
     c1, c2 = chamfer(o, Gp[k])
@@ -213,11 +236,13 @@ def unpack(o, st):
 
 
 s_first = 1
+failed = False
 hist_, off_ = [], set()
 if args.load_state is not None:
     ck = torch.load(args.load_state, weights_only=False)
     unpack(W, ck['W']); unpack(ST, ck['ST'])
     ST.aa_m, ST.hold_after = args.aa, args.hold_after                                       # (the command line over the checkpoint's)
+    W.fit_floor, W.block_graph = args.fit_floor, args.block_graph
     s_first = ck['s']+1
     print('from step %d of %s' % (ck['s'], args.load_state), flush=True)
 ST.eta, ST.eta_out = args.eta, args.eta_out
@@ -273,6 +298,7 @@ for s in range(s_first, nsteps+1):
             print('    %d: %.2f; %.3f %.3f; beta %.3f; %d; V %.2f; y %.1f' % (c_, float(g_[c_])/wref, float(sf[c_, 2]), float(sf[c_, 0]), float(W.ty['be'][W._gid[c_]]), int(W._yld[c_]), float(W.V0[c_]/W.V0.median()), float(ST.tz[c_, 1]+.05)/h), flush=True)
         np.savez(args.save/('fail_%s.npz' % args.tag), x=ST.tx.cpu().numpy(), v=ST.tv.cpu().numpy(), a=ST.ta.cpu().numpy(), z=ST.tz.cpu().numpy(), step=s, g=wp_t(ST.a['gz']).cpu().numpy())
         print('step %d, t %.4f: the solve did not converge (|g| / weight %s after %d Newton iterations); CG %s; |g| %s; ratio %s' % (s, s*args.dt, math.sqrt(g2)/wref if math.isfinite(g2) else g2, its, [a__[0] for a__ in tr_][:30], ['%.3g' % (a__[4]/wref) for a__ in tr_][:30], ['%.2g' % a__[5] for a__ in tr_][:30]), flush=True)
+        failed = True
         break
     ST.end()
     nit.append(its); npr.append(e_); nrd.append(ST.stats['outer']); ncl.append(int(W.ul_stats['cut_cells'])); nfe.append(ST.stats['rejected'])
@@ -317,3 +343,5 @@ save()
 ni, np_ = np.array(nit), np.array(npr)
 print('Newton per step: median %d, 99 %% %d, max %d, steps above 50: %d of %d; products per step: median %d, max %d, total %d; plastic work %.4f (cells %.4f, halves %.4f); outer iterations per step median %d, max %d; on the cut at the end %d; rejected %d; steps over the tolerance %d' % (np.median(ni), np.percentile(ni, 99), ni.max(), int((ni > 50).sum()), len(ni), np.median(np_), np_.max(), np_.sum(), W.Wp, W.Wp_cell, W.Wp_half, int(np.median(nrd)), int(np.max(nrd)), int(ncl[-1]) if ncl else 0, int(np.sum(nfe)), nsoft), flush=True)
 print('done: %.0f s' % (time.time()-t0), flush=True)
+if failed:                                                                           # (a run that stopped on a solve that did not converge exits 1, for a remote job's status)
+    raise SystemExit(1)
