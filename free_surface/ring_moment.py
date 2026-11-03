@@ -279,6 +279,35 @@ class RingMoment(RingYield):
         self._qkey_n, self._qi_n, self._qj_n = key_s.clone(), qi, qj
         return self.kshare*(wi+wj)
 
+    def _fit_prior(self, Qp, x, lo_s, hi_s):
+        """the springs' own fit where the walls do not see (merged_ul.update_ul, fit_floor; 11-03 the lion's settling: a ground cell of a hind leg kept 3 walls, nearly in one
+        plane, its fit's largest coefficient 3.7e4 / h against the median's 1.2 / h, its block 2e10, the solve 1e5 products a step). The fit with a prior G_p in the
+        floored directions, min sum_walls w |du - G d|^2 + |(G - G_p) E^1/2|^2, is G = S (M + E)^-1 + G_p E (M + E)^-1; G_p the increment of the cell's springs' fit, at
+        x and at the step's start x_n: A = sum_halves w (x_hi - x_lo) (x) q, G_p = (A - A_n) A_n^-1, from the centres alone (the fit F_f is not: its outer layer reads the
+        cut's F, which reads this fit). Under a uniform increment both read it, so G does: the patch test holds. As fit entries, each half at a floored cell c:
+        (c, its partner, +-Q^T A_n^-T w q), Q = E (M + E)^-1 from update_ul. A cell whose own halves do not span (A_n's singular values under 1e-3 of the largest)
+        keeps the floor alone"""
+        if self._wi is None:
+            return None
+        kf, Q = Qp
+        n, dev = self.n, x.device
+        wi, wj, qi, qj = self._wi, self._wj, self._qi_n, self._qj_n
+        ds = x[hi_s]-x[lo_s]
+        An = torch.zeros(n, 3, 3, dtype=f64, device=dev)
+        An.index_add_(0, lo_s, wi[:, None, None]*ds[:, :, None]*qi[:, None, :]); An.index_add_(0, hi_s, wj[:, None, None]*ds[:, :, None]*qj[:, None, :])
+        sv = torch.linalg.svdvals(An[kf])
+        ok = sv[:, 2] > 1e-3*sv[:, 0]
+        self.ul_stats['fit_prior_cells'], self.ul_stats['fit_prior_lone'] = int(ok.sum()), int((~ok).sum())
+        if not bool(ok.any()):
+            return None
+        kk = kf[ok]
+        Tm = torch.zeros(n, 3, 3, dtype=f64, device=dev)
+        Tm[kk] = Q[ok].transpose(1, 2)@torch.linalg.inv(An[kk]).transpose(1, 2)              # (Q^T A_n^-T)
+        on = torch.zeros(n, dtype=torch.bool, device=dev); on[kk] = True
+        a, b = on[lo_s] & (wi > 0), on[hi_s] & (wj > 0)
+        Ra = torch.einsum('fab,fb->fa', Tm[lo_s[a]], wi[a, None]*qi[a]); Rb = -torch.einsum('fab,fb->fa', Tm[hi_s[b]], wj[b, None]*qj[b])
+        return torch.cat([lo_s[a], hi_s[b]]), torch.cat([hi_s[a], lo_s[b]]), torch.cat([Ra, Rb])
+
     def _set_halves(self, x):
         T = self.tr
         if self._wi is None:

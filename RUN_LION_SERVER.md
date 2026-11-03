@@ -49,12 +49,13 @@ mkdir -p out
 nohup python -u free_surface/ring_yield_lion.py \
   --foam foams/fourier_lion_8k_round_minsp_only_clean --save out/lion --tag full \
   --moment --true-blocks --colour 1.19 --jump --ground-cut \
-  --tol 1e-2 --T 1.2 --every 6 \
+  --tol 1e-2 --fit-floor 1e-2 --T 1.2 --every 6 \
   --save-state 336 480 600 720 840 960 1080 1200 1320 1440 \
   > out/lion_full.log 2>&1 &
 ```
 
 - `--tol 1e-2`：求解容差，默认是 1e-3。实测 1e-2 和 1e-3 跑 24 步后位置差的均方根约 1e-4 h，速度、质心、动能、能量平衡都一致；落地后快约 2.6 倍。
+- `--fit-floor 1e-2`：拟合皮的梯度拟合在墙看不清的方向上垫底，那个方向改用格子自己弹簧的拟合（11-03 起是默认值，写出来只为清楚）。不加这一项时，泡沫里少数只靠一个平面挂着的表面格子会让拟合系数放大到上万倍，服务器那次从 t = 0.595 起每步十几万次乘积。
 - `--every 6`：每 6 步（0.005 s）存一帧。
 - `--save-state`：在这些步存完整状态，用于续跑。336 在第一次受地面推力之前，之后每 120 步（0.1 s）一个。
 
@@ -71,23 +72,18 @@ nohup python -u free_surface/ring_yield_lion.py \
 nohup python -u free_surface/ring_yield_lion.py \
   --foam foams/fourier_lion_8k_round_minsp_only_clean --save out/lion --tag full2 \
   --moment --true-blocks --colour 1.19 --jump --ground-cut \
-  --tol 1e-2 --T 1.2 --every 6 --load-state out/lion/state_full_720.pt \
+  --tol 1e-2 --fit-floor 1e-2 --T 1.2 --every 6 --load-state out/lion/state_full_720.pt \
   --save-state 840 960 1080 1200 1320 1440 \
   > out/lion_full2.log 2>&1 &
 ```
 
 续跑的帧文件从载入的那一步开始，前面多一帧 t = 0 的静止状态。
 
-## 速度（本机 RTX 5070 Ti Laptop 实测）
+## 速度
 
-| 阶段 | 每步 |
-|---|---|
-| 自由落体（t < 0.28） | 约 0.26 s |
-| 冲击（0.28–0.40），tol 1e-3 | 约 3–4 s |
-| 落地后（> 0.40），tol 1e-3 | 约 18 s |
-| 落地后（> 0.40），tol 1e-2 | 约 6.8 s |
-
-- 按 tol 1e-2 估计，本机跑完 1.2 s 约需 2 小时。
+- A800 实测（tol 1e-2，还没有 `--fit-floor` 时）：t = 0 到 0.57 共 440 s，落地后每步约 0.75 s；从 0.595 起拟合退化，每步要 80～130 s。
+- 加了 `--fit-floor 1e-2` 后，在同一个 t = 0.6 状态上，原来 10.5 万次乘积的那一步变成 222 次。按 0.75 s 一步估计，A800 上跑完 1.2 s 约 20～30 分钟；这个数还没有整段实跑验证过。
+- 本机 RTX 5070 Ti Laptop（加 `--fit-floor` 之前）：自由落体约 0.26 s 一步，冲击段（tol 1e-3）约 3～4 s 一步。
 - 同一个设置跑两次，耗时可能差很多：GPU 上双精度原子加法的累加顺序不固定，冲击段对舍入很敏感，轨迹会分岔。
 
 ## 注意

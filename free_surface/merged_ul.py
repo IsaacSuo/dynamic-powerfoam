@@ -206,6 +206,12 @@ class MergedUL(PlasticUL):
         """each wall's share as material: 1 for a wall whose pair has a spring, 0 for the others (a free surface to both)"""
         return conn.to(f64)
 
+    fit_floor = 0.                                                                 # (the fit's floor: off by default, update_ul)
+
+    def _fit_prior(self, Qp, x, lo_s, hi_s):
+        """the fit entries of a prior in the directions the walls do not see (update_ul, fit_floor): none here; RingMoment's, the springs' own fit"""
+        return None
+
     ground_cut = False
 
     def set_ground_cut(self, c0, normal=(0., 0., 1.)):
@@ -292,6 +298,17 @@ class MergedUL(PlasticUL):
         Mi = torch.stack([c0, c1, c2], 1)/torch.where(sing, torch.ones_like(det), det)[:, None, None]
         if bool(sing.any()):
             Mi[sing] = torch.linalg.pinv(M[sing])
+        Qp = None
+        if self.fit_floor > 0:                                                      # (a cell whose walls do not see a direction: M's eigenvalues floored at fit_floor of its largest, and
+            ev = torch.linalg.eigvalsh(M)                                           #  the floor's part E taken from the springs' own fit, G = S (M + E)^-1 + G_p E (M + E)^-1, _fit_prior)
+            fl = (ev[:, 0] < self.fit_floor*ev[:, 2]) | (ev[:, 2] <= 0)
+            st['fit_floored'] = int(fl.sum())
+            if bool(fl.any()):
+                kf = torch.nonzero(fl)[:, 0]
+                lam, Vq = torch.linalg.eigh(M[kf])
+                lf = torch.maximum(lam, (self.fit_floor*lam[:, 2:]).clamp(min=0.))
+                Mi[kf] = (Vq*torch.where(lf > 0, 1/lf.clamp(min=1e-300), torch.zeros_like(lf))[:, None, :])@Vq.transpose(1, 2)
+                Qp = (kf, (Vq*torch.where(lf > 0, 1-lam/lf.clamp(min=1e-300), torch.ones_like(lf))[:, None, :])@Vq.transpose(1, 2))
         vd = ww[:, None]*dd
         Ri = torch.einsum('fa,fab->fb', vd, Mi[li]); Rj = torch.einsum('fa,fab->fb', -vd, Mi[lj])
         ml = len(li)
@@ -300,6 +317,15 @@ class MergedUL(PlasticUL):
         t['S'].zero_(); t['O'].zero_(); t['R'].zero_()
         t['S'][:2*ml] = torch.cat([li, lj]).to(torch.int32); t['O'][:2*ml] = torch.cat([lj, li]).to(torch.int32); t['R'][:2*ml] = torch.cat([Ri, Rj])
         self._ml = ml
+        st['fit_prior'] = 0
+        if Qp is not None:
+            ent = self._fit_prior(Qp, x, lo_s, hi_s)
+            if ent is not None:
+                Sp, Op, Rp = ent; npr = len(Sp)
+                if 2*ml+npr > len(t['S']):
+                    raise RuntimeError('update_ul: %d fit entries and %d of the springs\' prior over the capacity %d' % (2*ml, npr, len(t['S'])))
+                t['S'][2*ml:2*ml+npr] = Sp.to(torch.int32); t['O'][2*ml:2*ml+npr] = Op.to(torch.int32); t['R'][2*ml:2*ml+npr] = Rp
+                st['fit_prior'] = npr
         tiny = self.V0 < self._ul_agg*self.V0.median()
         m1, m2 = tiny[ic] & ~tiny[jc], tiny[jc] & ~tiny[ic]
         as_, ao_ = torch.cat([ic[m1], jc[m2]]), torch.cat([jc[m1], ic[m2]])

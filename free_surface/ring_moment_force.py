@@ -772,3 +772,49 @@ def geom_check(W, ST, V0, cells=(2636, 4560, 4709, 4190, 2123, 910)):
     print('the 8 largest fit gains: ' + ', '.join('%d (%.1e / h, %d entries, V0 %.2f)' % (c, float(gain[c])*h_, int(cntf[c]), float(V0[c]/np.median(V0))) for c in og.tolist()), flush=True)
     o = torch.argsort(shape, descending=True)[:8]
     print('the 8 most elongated: ' + ', '.join('%d (%.0f, V0 %.2f, ground %.2f h^2)' % (c, float(shape[c]), float(V0[c]/np.median(V0)), float(gA[c])/h_**2) for c in o.tolist()), flush=True)
+
+
+def fit_check(W, ST, V0):
+    """the fit with its floor (W.fit_floor, merged_ul.update_ul, RingMoment._fit_prior) at a real state's step start: how many cells floored, the coefficients' sizes;
+    the patch test, a uniform increment G* read by every cell's fit (the floored ones through the springs' prior); the whole energy's gradient against differences"""
+    from free_surface.closure_warp import k_Gul
+    x = ST.tx.clone()
+    h_ = float(np.median(V0)**(1/3))
+    W.update_ul(x)
+    if W.selfc is not None:
+        W.update_self(x)
+    us = W.ul_stats; t = W.tul; n, dev = W.n, W.dev
+    m2 = 2*W._ml; npr = us.get('fit_prior', 0)
+    S_, O_, R_ = t['S'].long(), t['O'].long(), t['R']
+    gw = torch.zeros(n, dtype=f64, device=dev).index_reduce_(0, S_[:m2], R_[:m2].norm(dim=1), 'amax', include_self=True)
+    print('the fit floor %g: floored cells %d, with the springs\' prior %d (alone %d), the prior\'s entries %d; the walls\' largest coefficient max %.2e / h (median cell %.2f / h)' % (
+        W.fit_floor, us.get('fit_floored', 0), us.get('fit_prior_cells', 0), us.get('fit_prior_lone', 0), npr, float(gw.max())*h_, float(gw.median())*h_), flush=True)
+    if npr:
+        print('  the prior\'s coefficients: max %.2e / h, median %.2e / h' % (float(R_[m2:m2+npr].norm(dim=1).max())*h_, float(R_[m2:m2+npr].norm(dim=1).median())*h_), flush=True)
+    torch.manual_seed(3)
+    Gs = 1e-3*torch.randn(3, 3, dtype=f64, device=dev)
+    c = x.mean(0)
+    x1 = x+(x-c)@Gs.T
+    G0 = wp.zeros(n, dtype=wp.mat33d, device=dev)
+    wp.launch(k_Gul, len(t['S']), inputs=[wp.from_torch(x1.contiguous(), dtype=wp.vec3d), W.ul['xn'], W.ul['S'], W.ul['O'], W.ul['R']], outputs=[G0])
+    G0 = wp.to_torch(G0, requires_grad=False)
+    has = torch.zeros(n, dtype=torch.bool, device=dev); has[S_[:m2+npr]] = True
+    e = (G0-Gs).flatten(1).norm(dim=1)/float(Gs.norm())
+    fl = torch.zeros(n, dtype=torch.bool, device=dev)
+    if npr:
+        fl[S_[m2:m2+npr]] = True
+    print('  the patch test (a uniform increment of size %.1e): every cell with a fit off by max %.1e; the floored ones with the prior max %.1e' % (
+        float(Gs.norm()), float(e[has].max()), float(e[fl].max()) if bool(fl.any()) else 0.), flush=True)
+    used = t['used'] != 0
+    bad = has & (e > 1e-6)
+    print('  off by over 1e-6: %d cells, of them merged into a neighbour\'s fit (V0 under %.2f of the median, their own fit unused) %d; the rest: %s' % (
+        int(bad.sum()), W._ul_agg, int((bad & used).sum()), ', '.join('%d (off %.2f, V0 %.2f median)' % (c, float(e[c]), float(V0[c]/np.median(V0))) for c in torch.nonzero(bad & ~used)[:, 0].tolist()[:8])), flush=True)
+    W.grad(x); W.reread()
+    d1 = torch.randn_like(x); d1 = d1/d1.norm(dim=1).max()
+    xp = x+.02*h_*d1
+    e0, g0 = W.grad(xp); g0 = g0.clone()
+    d = torch.randn_like(x); d = d/d.norm(dim=1).max()
+    for ee in (1e-5*h_, 1e-6*h_):
+        Ep, _ = W.grad(xp+ee*d); Em, _ = W.grad(xp-ee*d)
+        fd = float(Ep-Em)/(2*ee); an = float((g0*d).sum())
+        print('  the whole energy, step %.0e h: central difference %.8e, gradient %.8e, rel. error %.2e' % (ee/h_, fd, an, abs(fd-an)/max(abs(an), 1e-300)), flush=True)
