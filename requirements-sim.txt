@@ -1,0 +1,7 @@
+# the lion drop simulation only (free_surface/ring_yield_lion.py and its checks), the versions it was run with (11-03).
+# torch: the CUDA build matching the server's driver first, e.g.
+#   pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+warp-lang==1.10.0
+numpy==2.2.6
+scipy==1.15.3
+tqdm==4.67.1

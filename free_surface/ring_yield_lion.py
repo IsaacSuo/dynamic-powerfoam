@@ -54,6 +54,7 @@ a_.add_argument('--jump', action='store_true', help='with --colour: a wall witho
 a_.add_argument('--ground-cut', action='store_true', help='the ground as a plane of the cut (MergedUL.set_ground_cut), the Hertz ground off')
 a_.add_argument('--watch-ground', action='store_true', help='with --ground-cut: after every step, the centre points under the plane and what their cells had at the step\'s start')
 a_.add_argument('--probe-kernels', action='store_true', help='at the loaded state: one evaluation kernel by kernel (ring_moment_force.kernel_times), then stop')
+a_.add_argument('--trace-solves', action='store_true', help='after every step, its solve outer iteration by outer: the inner solves, products, edges, |g| / tol')
 a_.add_argument('--cuda-profile', action='store_true', help='cudaProfilerStart / Stop around the steps (nsys --capture-range=cudaProfilerApi)')
 args = a_.parse_args()
 E, nu, C0, v0 = 10648.614517785627/1000, .3912951704721983, -.2, (0., 0., -.245)
@@ -205,10 +206,18 @@ if args.cuda_profile:
 nit, npr, nout = [], [], []
 tbeg, tsol, rcg = [], [], [W._recut.stats['cg']]
 nsteps = int(round(args.T/args.dt))
+failed = False
 for s in range(s_first, nsteps+1):
     tb_ = time.time(); ST.begin(); ts_ = time.time()                                       # (the step's start, the cut and the lists, apart from the solve)
     e_, its, g2 = ST.solve(tol, lambda g_: .5*tol)
     tbeg.append(ts_-tb_); tsol.append(time.time()-ts_); rcg.append(W._recut.stats['cg'])
+    if args.trace_solves:
+        tr_ = ST.stats['trace']; parts_ = []
+        for o_ in sorted(set(a__[7] for a__ in tr_)):
+            q_ = [a__ for a__ in tr_ if a__[7] == o_]
+            parts_.append('o%d: |g| %.1f -> %.1f tol, %d solves, products %s, edge %d, neg %d, refused %d' % (
+                o_, q_[0][4]/tol, q_[-1][4]/tol, len(q_), '+'.join(str(a__[0]) for a__ in q_), sum(a__[1] for a__ in q_), sum(a__[2] for a__ in q_), sum(not a__[6] for a__ in q_)))
+        print('trace step %d (%.1f s, %d products): ' % (s, tsol[-1], e_)+'; '.join(parts_), flush=True)
     if not math.isfinite(g2) or math.sqrt(g2) > tol:
         tr_ = ST.stats['trace']
         gz = wp_t(ST.a['gz']).norm(dim=1); top = torch.argsort(gz, descending=True)[:6]
@@ -235,6 +244,7 @@ for s in range(s_first, nsteps+1):
                     c_, float(gz[c_])/wref, bool(hasg_[c_]), float(Ag_[c_]/V_[c_]**(2/3)), float(ht_[c_]), float(W._ulr[c_])/h, float(rat_[c_]), float(Gn_[c_])), flush=True)
         np.savez(args.save/('fail_%s.npz' % args.tag), x=ST.tx.cpu().numpy(), v=ST.tv.cpu().numpy(), a=ST.ta.cpu().numpy(), z=ST.tz.cpu().numpy(), step=s)
         save()
+        failed = True
         break
     if ST.stats.get('aa_nan', 0):
         print('AA step %d: the extrapolation read NaN %d times, back to the plain point' % (s, ST.stats['aa_nan']), flush=True)
@@ -284,3 +294,5 @@ save()
 ni, no, np_ = np.array(nit), np.array(nout), np.array(npr)
 print('steps %d of %d; outer per step: median %d, 99 %% %d, max %d; products per step: median %d, max %d, total %d' % (len(ni), nsteps, np.median(no), np.percentile(no, 99), no.max(), np.median(np_), np_.max(), np_.sum()), flush=True)
 print('done: %.0f s' % (time.time()-t0), flush=True)
+if failed:                                                                           # (a run that stopped on a solve that did not converge exits 1, for a remote job's status)
+    raise SystemExit(1)
