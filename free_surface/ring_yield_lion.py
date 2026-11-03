@@ -53,6 +53,8 @@ a_.add_argument('--colour', type=float, default=0., help='ring_moment.py\'s colo
 a_.add_argument('--jump', action='store_true', help='with --colour: a wall without a spring counts by the jump test (RingMoment.set_jump_share), no weightless springs')
 a_.add_argument('--ground-cut', action='store_true', help='the ground as a plane of the cut (MergedUL.set_ground_cut), the Hertz ground off')
 a_.add_argument('--watch-ground', action='store_true', help='with --ground-cut: after every step, the centre points under the plane and what their cells had at the step\'s start')
+a_.add_argument('--probe-geom', action='store_true', help='at the loaded state: some cells\' cut geometry (ring_moment_force.geom_check), then stop')
+a_.add_argument('--probe-blocks', action='store_true', help='at the loaded state: the preconditioner\'s coloured diagonal blocks against each cell\'s own (ring_moment_force.block_check), then stop')
 a_.add_argument('--probe-kernels', action='store_true', help='at the loaded state: one evaluation kernel by kernel (ring_moment_force.kernel_times), then stop')
 a_.add_argument('--trace-solves', action='store_true', help='after every step, its solve outer iteration by outer: the inner solves, products, edges, |g| / tol')
 a_.add_argument('--cuda-profile', action='store_true', help='cudaProfilerStart / Stop around the steps (nsys --capture-range=cudaProfilerApi)')
@@ -175,6 +177,14 @@ if args.probe_ground:
     from free_surface.ring_moment_force import ground_check
     ground_check(W, ST, V0)
     raise SystemExit
+if args.probe_geom:
+    from free_surface.ring_moment_force import geom_check
+    geom_check(W, ST, V0)
+    raise SystemExit
+if args.probe_blocks:
+    from free_surface.ring_moment_force import block_check
+    block_check(W, ST, V0)
+    raise SystemExit
 if args.probe_kernels:
     from free_surface.ring_moment_force import kernel_times
     kernel_times(W, ST, V0)
@@ -218,6 +228,10 @@ for s in range(s_first, nsteps+1):
             parts_.append('o%d: |g| %.1f -> %.1f tol, %d solves, products %s, edge %d, neg %d, refused %d' % (
                 o_, q_[0][4]/tol, q_[-1][4]/tol, len(q_), '+'.join(str(a__[0]) for a__ in q_), sum(a__[1] for a__ in q_), sum(a__[2] for a__ in q_), sum(not a__[6] for a__ in q_)))
         print('trace step %d (%.1f s, %d products): ' % (s, tsol[-1], e_)+'; '.join(parts_), flush=True)
+        gz_ = wp_t(ST.a['gz']).norm(dim=1); tg_ = torch.argsort(gz_, descending=True)[:8]
+        sv_ = torch.linalg.svdvals(W._Fe[W._gid][tg_].cpu()); sf_ = torch.linalg.svdvals(W._Ft[tg_].cpu())
+        print('  the residual at the end: |g| / tol total %.2f, the 8 largest cells hold %.0f %% of |g|^2: %s' % (float(gz_.norm())/tol, 100*float((gz_[tg_]**2).sum()/(gz_**2).sum()), ', '.join(
+            'cell %d |g| %.2f tol, F_e %.2f %.2f %.3f, fit %.2f %.2f %.2f, V0 %.2f median' % (c_, float(gz_[c_])/tol, *sv_[k_].tolist(), *sf_[k_].tolist(), float(V0[c_]/np.median(V0))) for k_, c_ in enumerate(tg_.tolist()))), flush=True)
     if not math.isfinite(g2) or math.sqrt(g2) > tol:
         tr_ = ST.stats['trace']
         gz = wp_t(ST.a['gz']).norm(dim=1); top = torch.argsort(gz, descending=True)[:6]

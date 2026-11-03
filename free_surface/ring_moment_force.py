@@ -666,3 +666,109 @@ def kernel_times(W, ST, V0, reps=10):
             torch.cuda.synchronize()
             print('  the pair contact alone, %s: %.4f ms a launch over the capacity %d (%d pairs listed)' % (nm, 1e3*(time.perf_counter()-t_)/200, sc['K'], int((W.tsc['i'] != W.tsc['k']).sum())), flush=True)
         W.grad(x1)
+
+
+def block_check(W, ST, V0, h=1e-9, chunk=1):
+    """the preconditioner's diagonal blocks (ring_moment.exact_blocks: products on the colours of the springs' graph squared) against each cell's own block, every cell
+    perturbed alone (3 products a cell): which blocks the colouring gets wrong (a coupling outside the springs' graph: a cut wall between cells with no spring, a contact
+    pair), by how much, and where (contact pairs, a ground face); at a real state's step start"""
+    import time
+    import scipy.sparse as sp_
+    x = ST.tx.clone()
+    W.update_ul(x)
+    if W.selfc is not None:
+        W.update_self(x)
+    W.grad(x); W.reread()
+    z = x.clone()
+    _, g0 = W.grad(z); g0 = g0.clone()
+    n, dev = W.n, W.dev
+    a_, b_ = np.array(W.tlo.cpu()), np.array(W.thi.cpu())
+    A = sp_.csr_matrix((np.ones(len(a_)), (a_, b_)), shape=(n, n)); A = A+A.T
+    A2 = (A+A@A).tocsr()
+    col = np.full(n, -1)
+    ip, jx = A2.indptr, A2.indices
+    for i in np.argsort(-np.diff(ip)):
+        c = col[jx[ip[i]:ip[i+1]]]
+        used = set(c[c >= 0].tolist()); k = 0
+        while k in used:
+            k += 1
+        col[i] = k
+    nc = int(col.max())+1
+    col_t = torch.as_tensor(col, device=dev)
+    Kc = torch.zeros(n, 3, 3, dtype=f64, device=dev)
+    for c in range(nc):
+        m = col_t == c
+        for ax in range(3):
+            d = torch.zeros(n, 3, dtype=f64, device=dev); d[m, ax] = 1.
+            _, g1 = W.grad(z+h*d)
+            Kc[m, :, ax] = ((g1-g0)/h)[m]
+    t0 = time.time()
+    Ke = torch.zeros(n, 3, 3, dtype=f64, device=dev)
+    for i in range(n):
+        for ax in range(3):
+            d = torch.zeros(n, 3, dtype=f64, device=dev); d[i, ax] = 1.
+            _, g1 = W.grad(z+h*d)
+            Ke[i, :, ax] = (g1[i]-g0[i])/h
+    cm = 4*W.V0/ST.dt**2 if hasattr(ST, 'dt') else None
+    err = (Kc-Ke).flatten(1).norm(dim=1)/Ke.flatten(1).norm(dim=1).clamp(min=1e-300)
+    ev = torch.linalg.eigvalsh(.5*(Ke+Ke.transpose(1, 2)).cpu()).to(dev)
+    pairs = torch.zeros(n, dtype=torch.long, device=dev)
+    if W.selfc is not None:
+        t = W.tsc; on = t['i'] != t['k']
+        pairs.index_add_(0, t['i'][on].long(), torch.ones(int(on.sum()), dtype=torch.long, device=dev)); pairs.index_add_(0, t['k'][on].long(), torch.ones(int(on.sum()), dtype=torch.long, device=dev))
+    gf = W._g_face if getattr(W, 'ground_cut', False) else torch.zeros(n, dtype=torch.bool, device=dev)
+    print('colours %d (%d products); each cell alone %.0f s (%d products)' % (nc, 3*nc, time.time()-t0, 3*n), flush=True)
+    for thr in (.01, .1, .5, 1.):
+        bad = err > thr
+        print('  blocks off by more than %3.0f %%: %4d cells; of them with contact pairs %d, with a ground face %d' % (100*thr, int(bad.sum()), int((bad & (pairs > 0)).sum()), int((bad & gf).sum())), flush=True)
+    ok = err <= .01
+    print('  cells with contact pairs %d (their blocks off > 10 %%: %d); cells without %d (off > 10 %%: %d)' % (int((pairs > 0).sum()), int(((pairs > 0) & (err > .1)).sum()), int((pairs == 0).sum()), int(((pairs == 0) & (err > .1)).sum())), flush=True)
+    o = torch.argsort(err, descending=True)[:10]
+    for i in o.tolist():
+        print('  cell %5d: off %.2f, own block eigenvalues %s, contact pairs %d, a ground face %s, V0 %.2f median' % (
+            i, float(err[i]), np.array2string(ev[i].cpu().numpy(), precision=3), int(pairs[i]), bool(gf[i]), float(V0[i]/np.median(V0))), flush=True)
+    for i in (2636, 4560, 4709, 4190, 2123, 7009):
+        if i < n:
+            print('  cell %5d (the slow step\'s): off %.3f, own block eigenvalues %s, contact pairs %d, a ground face %s' % (i, float(err[i]), np.array2string(ev[i].cpu().numpy(), precision=3), int(pairs[i]), bool(gf[i])), flush=True)
+
+
+def geom_check(W, ST, V0, cells=(2636, 4560, 4709, 4190, 2123, 910)):
+    """the cut's geometry of some cells at a real state's step start: the cut volume against its target V0 e^L, 1 / V as the gradient reads it, the walls (count, area),
+    the ground face, the open area (|a|, the closure's), the ball's radius, the centre's height; against the median cell"""
+    x = ST.tx.clone()
+    W.update_ul(x)
+    G = W._ulG
+    n, dev = W.n, W.dev
+    h_ = float(np.median(V0)**(1/3))
+    V = G.V.detach(); Vt = W.V0*torch.exp(W.tul['Ln'])
+    kp = G.wall_A.detach() > 0
+    i, j, A = G.i[kp].long(), G.j[kp].long(), G.wall_A.detach()[kp]
+    Aw = torch.zeros(n, dtype=f64, device=dev).index_add(0, i, A).index_add(0, j, A)
+    nw = torch.zeros(n, dtype=torch.long, device=dev).index_add(0, i, torch.ones_like(i)).index_add(0, j, torch.ones_like(j))
+    gA = torch.zeros(n, dtype=f64, device=dev)
+    if getattr(W, 'ground_cut', False):
+        gA.index_add_(0, G.g_i.long(), G.g_A.detach())
+    a_ = W.tul['a'].norm(dim=1); Vi = W.tul['Vi']
+    pA = G.patch_A.detach(); r = W._ulr
+    ht = (x@W._recut.ng-W._recut.c0) if getattr(W, 'ground_cut', False) else x[:, 2]
+    shape = (Aw+gA+pA)/V**(2/3)                                                              # (the surface over V^(2/3): a ball 4.84, a cube 6)
+    med = lambda v: float(v.median())
+    print('the median cell: V %.2e, walls %.0f of area %.2f h^2, open |a| %.3f h^2, radius %.2f h; surface / V^(2/3) %.2f' % (
+        med(V), float(nw.float().median()), med(Aw)/h_**2, med(a_)/h_**2, med(r)/h_, med(shape)), flush=True)
+    print('cells with surface / V^(2/3) over 20: %d, over 100: %d; 1 / V over 100 x the median\'s: %d' % (int((shape > 20).sum()), int((shape > 100).sum()), int((Vi > 100*Vi.median()).sum())), flush=True)
+    for c in cells:
+        print('  cell %5d: V / V0 e^L %.3f (V %.2e, V0 %.2f median), 1 / V %.2e (median %.2e); walls %d of area %.2f h^2, the ground face %.3f h^2, the sphere part %.3f h^2, open |a| %.3f h^2; surface / V^(2/3) %.1f; radius %.2f h, the centre %.2f h over the plane' % (
+            c, float(V[c]/Vt[c]), float(V[c]), float(V0[c]/np.median(V0)), float(Vi[c]), float(Vi.median()), int(nw[c]), float(Aw[c])/h_**2, float(gA[c])/h_**2, float(pA[c])/h_**2, float(a_[c])/h_**2, float(shape[c]), float(r[c])/h_, float(ht[c])/h_), flush=True)
+    # the fit's matrix (merged_ul.update_ul: M = sum over the cell's counted walls of (A / L) d d^T): its eigenvalues, the fit's gain 1 / its smallest one
+    t = W.tul; m_ = W._ml
+    S_, O_, Rr = t['S'][:2*m_].long(), t['O'][:2*m_].long(), t['R'][:2*m_]
+    gain = torch.zeros(n, dtype=f64, device=dev).index_reduce_(0, S_, Rr.norm(dim=1), 'amax', include_self=True)
+    cntf = torch.zeros(n, dtype=torch.long, device=dev).index_add(0, S_, torch.ones_like(S_))
+    print('the fit (Ge = sum_k R_k (x_k - x_i)): its largest coefficient |R| median %.2f / h, 99 %% %.2f / h, max %.2e / h; cells over 100 / h: %d' % (
+        float(gain.median())*h_, float(torch.quantile(gain, .99))*h_, float(gain.max())*h_, int((gain*h_ > 100).sum())), flush=True)
+    for c in cells:
+        print('  cell %5d: the fit\'s entries %d, its largest coefficient |R| %.3e / h' % (c, int(cntf[c]), float(gain[c])*h_), flush=True)
+    og = torch.argsort(gain, descending=True)[:8]
+    print('the 8 largest fit gains: ' + ', '.join('%d (%.1e / h, %d entries, V0 %.2f)' % (c, float(gain[c])*h_, int(cntf[c]), float(V0[c]/np.median(V0))) for c in og.tolist()), flush=True)
+    o = torch.argsort(shape, descending=True)[:8]
+    print('the 8 most elongated: ' + ', '.join('%d (%.0f, V0 %.2f, ground %.2f h^2)' % (c, float(shape[c]), float(V0[c]/np.median(V0)), float(gA[c])/h_**2) for c in o.tolist()), flush=True)
