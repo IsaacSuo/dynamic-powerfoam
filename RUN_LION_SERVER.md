@@ -20,6 +20,8 @@
 
 ## 装环境
 
+仓库是私有的，clone 前要先在服务器上登录 GitHub：可以用 `gh auth login`，也可以用个人访问令牌（HTTPS 让输密码时填令牌）或 SSH 密钥（地址换成 `git@github.com:IsaacSuo/dynamic-powerfoam.git`）。
+
 ```bash
 git clone -b spring-moment https://github.com/IsaacSuo/dynamic-powerfoam.git
 cd dynamic-powerfoam
