@@ -52,6 +52,7 @@ a_.add_argument('--true-blocks', action='store_true', help='the preconditioner o
 a_.add_argument('--colour', type=float, default=0., help='ring_moment.py\'s colour contact at this sigma (graph steps; the lion\'s 1.19), with --moment')
 a_.add_argument('--jump', action='store_true', help='with --colour: a wall without a spring counts by the jump test (RingMoment.set_jump_share), no weightless springs')
 a_.add_argument('--ground-cut', action='store_true', help='the ground as a plane of the cut (MergedUL.set_ground_cut), the Hertz ground off')
+a_.add_argument('--block-graph', choices=('direct', 'springs'), default='direct', help='the preconditioner\'s blocks coloured on the direct interactions (the springs, the cut\'s counted walls, the fit\'s entries, the contact pairs) squared, or on the springs\' graph alone (before 11-03)')
 a_.add_argument('--fit-floor', type=float, default=1e-2, help='the fit (the fitted skin\'s gradient) floored where its walls do not see: M\'s eigenvalues under this of its largest, the springs\' own fit there (merged_ul.update_ul, RingMoment._fit_prior); 0 off (11-03: off, the server run\'s settling took 1e5 products a step from t .595)')
 a_.add_argument('--watch-ground', action='store_true', help='with --ground-cut: after every step, the centre points under the plane and what their cells had at the step\'s start')
 a_.add_argument('--probe-fit', action='store_true', help='at the loaded state: the fit and its floor, the patch test, the gradient (ring_moment_force.fit_check), then stop')
@@ -81,6 +82,7 @@ if args.ground_cut:
     W.set_ground_cut(C0)
     print('the ground in the cut at z = %g (mirror sites), one-sided faces; no Hertz ground' % C0, flush=True)
 W.fit_floor = args.fit_floor
+W.block_graph = args.block_graph
 W.prepare()
 fg = -args.g*M3*up; wref = float((9.8*M3*up).norm()); tol = args.tol*wref
 wtot = 9.8*M                                                                         # (pushes over the whole weight; wref, the sites' weights' norm, about it / sqrt(n), scales the gradient's tolerance)
@@ -163,6 +165,7 @@ if args.load_state is not None:
     unpack(W, ck_['W']); unpack(ST, ck_['ST']); rest_radii()
     W.true_blocks = args.true_blocks; ST._pre_age = 0; ST.aa_m = args.aa; ST.pre_every = args.pre_every
     W.fit_floor = args.fit_floor                                                         # (the command line's, not the checkpoint's)
+    W.block_graph = args.block_graph
     W.elastic_births = not args.no_elastic_births and not args.jump                       # (the command line's, not the checkpoint's)
     ground_k()
     fg.copy_(-args.g*M3*up); wp.to_torch(ST.a['fg'], requires_grad=False).copy_(-args.g*M3*up)      # (the command line's gravity over the checkpoint's: fg shares the array the state was just written into)

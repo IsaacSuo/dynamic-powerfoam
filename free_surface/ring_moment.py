@@ -377,22 +377,46 @@ class RingMoment(RingYield):
             T['Mo'][m] = Tr@T['Mo'][m]@Tr.transpose(1, 2)
 
 
-def exact_blocks(W, z, g0, cm, h=1e-9):
-    """the diagonal 3 x 3 blocks of the frozen problem's Hessian, cm on the diagonal included: by products on the colours of the springs' graph squared, nothing assumed of the terms. Returns the blocks and the products used"""
-    n, dev = W.n, W.dev
-    a_, b_ = np.array(W.tlo.cpu()), np.array(W.thi.cpu())
-    A = sp.csr_matrix((np.ones(len(a_)), (a_, b_)), shape=(n, n)); A = A+A.T
-    A2 = (A+A@A).tocsr()
+def greedy_colours(A2):
+    """a greedy colouring of the graph A2 (scipy csr, symmetric), the largest degree first: no two neighbours alike"""
+    n = A2.shape[0]
     col = np.full(n, -1)
     ip, jx = A2.indptr, A2.indices
-    for i in np.argsort(-np.diff(ip)):                                                     # (greedy, the largest first)
+    for i in np.argsort(-np.diff(ip)):
         c = col[jx[ip[i]:ip[i+1]]]
-        used = set(c[c >= 0].tolist())
-        k = 0
-        while k in used:
-            k += 1
-        col[i] = k
-    nc = int(col.max())+1
+        c = c[c >= 0]
+        if len(c) == 0:
+            col[i] = 0
+            continue
+        u = np.zeros(int(c.max())+2, dtype=bool); u[c] = True
+        col[i] = int(np.argmin(u))
+    return col, int(col.max())+1
+
+
+def block_colours(W, springs_only=False):
+    """the colours exact_blocks perturbs together: no two cells of a colour coupled in the frozen problem's Hessian as far as its direct interactions go, the springs,
+    the fit's entries (the counted walls of the cut, the springs' prior), the merged cells' entries and the contact pairs, squared (a cell's energy reads its neighbours,
+    so two cells one neighbour apart couple). springs_only: the springs' graph alone, as before 11-03 (at the lion's settling it got 446 of 7460 blocks wrong by over 10 %,
+    the contacts' and the cut's walls without a spring)"""
+    n = W.n
+    a, b = [W.tlo], [W.thi]
+    if not springs_only:
+        t = W.tul
+        a += [t['S'].long(), t['As'].long()]; b += [t['O'].long(), t['Ao'].long()]
+        if getattr(W, 'selfc', None) is not None:
+            a.append(W.tsc['i'].long()); b.append(W.tsc['k'].long())
+    a, b = torch.cat(a), torch.cat(b)
+    k = a != b
+    a, b = a[k].cpu().numpy(), b[k].cpu().numpy()
+    A = sp.csr_matrix((np.ones(len(a)), (a, b)), shape=(n, n)); A = A+A.T; A.data[:] = 1.
+    return greedy_colours((A+A@A).tocsr())
+
+
+def exact_blocks(W, z, g0, cm, h=1e-9):
+    """the diagonal 3 x 3 blocks of the frozen problem's Hessian, cm on the diagonal included: by products on block_colours, nothing assumed of the terms. Returns the blocks and the products used"""
+    n, dev = W.n, W.dev
+    col, nc = block_colours(W, springs_only=getattr(W, 'block_graph', 'direct') == 'springs')
+    W.ul_stats['block_colours'] = nc
     col_t = torch.as_tensor(col, device=dev)
     K = torch.zeros(n, 3, 3, dtype=f64, device=dev)
     for c in range(nc):

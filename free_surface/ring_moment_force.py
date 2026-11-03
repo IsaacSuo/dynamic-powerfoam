@@ -668,12 +668,11 @@ def kernel_times(W, ST, V0, reps=10):
         W.grad(x1)
 
 
-def block_check(W, ST, V0, h=1e-9, chunk=1):
-    """the preconditioner's diagonal blocks (ring_moment.exact_blocks: products on the colours of the springs' graph squared) against each cell's own block, every cell
-    perturbed alone (3 products a cell): which blocks the colouring gets wrong (a coupling outside the springs' graph: a cut wall between cells with no spring, a contact
-    pair), by how much, and where (contact pairs, a ground face); at a real state's step start"""
+def block_check(W, ST, V0, h=1e-9):
+    """the preconditioner's diagonal blocks (ring_moment.exact_blocks on ring_moment.block_colours) against each cell's own block, every cell perturbed alone (3 products a
+    cell): the springs' graph alone (as before 11-03) and the direct interactions' graph; which blocks each gets wrong, by how much, the colours (3 products each)"""
     import time
-    import scipy.sparse as sp_
+    from free_surface.ring_moment import block_colours
     x = ST.tx.clone()
     W.update_ul(x)
     if W.selfc is not None:
@@ -682,26 +681,6 @@ def block_check(W, ST, V0, h=1e-9, chunk=1):
     z = x.clone()
     _, g0 = W.grad(z); g0 = g0.clone()
     n, dev = W.n, W.dev
-    a_, b_ = np.array(W.tlo.cpu()), np.array(W.thi.cpu())
-    A = sp_.csr_matrix((np.ones(len(a_)), (a_, b_)), shape=(n, n)); A = A+A.T
-    A2 = (A+A@A).tocsr()
-    col = np.full(n, -1)
-    ip, jx = A2.indptr, A2.indices
-    for i in np.argsort(-np.diff(ip)):
-        c = col[jx[ip[i]:ip[i+1]]]
-        used = set(c[c >= 0].tolist()); k = 0
-        while k in used:
-            k += 1
-        col[i] = k
-    nc = int(col.max())+1
-    col_t = torch.as_tensor(col, device=dev)
-    Kc = torch.zeros(n, 3, 3, dtype=f64, device=dev)
-    for c in range(nc):
-        m = col_t == c
-        for ax in range(3):
-            d = torch.zeros(n, 3, dtype=f64, device=dev); d[m, ax] = 1.
-            _, g1 = W.grad(z+h*d)
-            Kc[m, :, ax] = ((g1-g0)/h)[m]
     t0 = time.time()
     Ke = torch.zeros(n, 3, 3, dtype=f64, device=dev)
     for i in range(n):
@@ -709,28 +688,28 @@ def block_check(W, ST, V0, h=1e-9, chunk=1):
             d = torch.zeros(n, 3, dtype=f64, device=dev); d[i, ax] = 1.
             _, g1 = W.grad(z+h*d)
             Ke[i, :, ax] = (g1[i]-g0[i])/h
-    cm = 4*W.V0/ST.dt**2 if hasattr(ST, 'dt') else None
-    err = (Kc-Ke).flatten(1).norm(dim=1)/Ke.flatten(1).norm(dim=1).clamp(min=1e-300)
-    ev = torch.linalg.eigvalsh(.5*(Ke+Ke.transpose(1, 2)).cpu()).to(dev)
+    print('each cell alone: %.0f s (%d products)' % (time.time()-t0, 3*n), flush=True)
     pairs = torch.zeros(n, dtype=torch.long, device=dev)
     if W.selfc is not None:
         t = W.tsc; on = t['i'] != t['k']
         pairs.index_add_(0, t['i'][on].long(), torch.ones(int(on.sum()), dtype=torch.long, device=dev)); pairs.index_add_(0, t['k'][on].long(), torch.ones(int(on.sum()), dtype=torch.long, device=dev))
-    gf = W._g_face if getattr(W, 'ground_cut', False) else torch.zeros(n, dtype=torch.bool, device=dev)
-    print('colours %d (%d products); each cell alone %.0f s (%d products)' % (nc, 3*nc, time.time()-t0, 3*n), flush=True)
-    for thr in (.01, .1, .5, 1.):
-        bad = err > thr
-        print('  blocks off by more than %3.0f %%: %4d cells; of them with contact pairs %d, with a ground face %d' % (100*thr, int(bad.sum()), int((bad & (pairs > 0)).sum()), int((bad & gf).sum())), flush=True)
-    ok = err <= .01
-    print('  cells with contact pairs %d (their blocks off > 10 %%: %d); cells without %d (off > 10 %%: %d)' % (int((pairs > 0).sum()), int(((pairs > 0) & (err > .1)).sum()), int((pairs == 0).sum()), int(((pairs == 0) & (err > .1)).sum())), flush=True)
-    o = torch.argsort(err, descending=True)[:10]
-    for i in o.tolist():
-        print('  cell %5d: off %.2f, own block eigenvalues %s, contact pairs %d, a ground face %s, V0 %.2f median' % (
-            i, float(err[i]), np.array2string(ev[i].cpu().numpy(), precision=3), int(pairs[i]), bool(gf[i]), float(V0[i]/np.median(V0))), flush=True)
-    for i in (2636, 4560, 4709, 4190, 2123, 7009):
-        if i < n:
-            print('  cell %5d (the slow step\'s): off %.3f, own block eigenvalues %s, contact pairs %d, a ground face %s' % (i, float(err[i]), np.array2string(ev[i].cpu().numpy(), precision=3), int(pairs[i]), bool(gf[i])), flush=True)
-
+    for name, so in (('the springs\' graph alone', True), ('the direct interactions', False)):
+        t1 = time.time()
+        col, nc = block_colours(W, springs_only=so)
+        tc = time.time()-t1
+        col_t = torch.as_tensor(col, device=dev)
+        Kc = torch.zeros(n, 3, 3, dtype=f64, device=dev)
+        for c in range(nc):
+            m = col_t == c
+            for ax in range(3):
+                d = torch.zeros(n, 3, dtype=f64, device=dev); d[m, ax] = 1.
+                _, g1 = W.grad(z+h*d)
+                Kc[m, :, ax] = ((g1-g0)/h)[m]
+        err = (Kc-Ke).flatten(1).norm(dim=1)/Ke.flatten(1).norm(dim=1).clamp(min=1e-300)
+        print('%s: %d colours (%d products; the colouring %.2f s); blocks off by over 1 %% %d, 10 %% %d, 50 %% %d, 100 %% %d; the worst %.2f; cells with contact pairs off by over 10 %% %d' % (
+            name, nc, 3*nc, tc, int((err > .01).sum()), int((err > .1).sum()), int((err > .5).sum()), int((err > 1.).sum()), float(err.max()), int(((pairs > 0) & (err > .1)).sum())), flush=True)
+        o = torch.argsort(err, descending=True)[:4]
+        print('  the worst: ' + ', '.join('cell %d off %.2f (contact pairs %d, V0 %.2f median)' % (i, float(err[i]), int(pairs[i]), float(V0[i]/np.median(V0))) for i in o.tolist()), flush=True)
 
 def geom_check(W, ST, V0, cells=(2636, 4560, 4709, 4190, 2123, 910)):
     """the cut's geometry of some cells at a real state's step start: the cut volume against its target V0 e^L, 1 / V as the gradient reads it, the walls (count, area),
