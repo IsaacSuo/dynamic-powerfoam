@@ -426,15 +426,22 @@ def k_closure_adj_np(J: wp.array(dtype=mat99), F_adj: wp.array(dtype=wp.mat33d),
 def k_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.array(dtype=wp.float64), xn: wp.array(dtype=wp.vec3d),
            ng: wp.vec3d, bpar: wp.array(dtype=wp.float64), kt: wp.array(dtype=wp.float64), bound: wp.array(dtype=wp.float64),
            lamt: wp.array(dtype=wp.vec3d), FB: wp.array(dtype=wp.mat33d), roff: wp.array(dtype=wp.vec3d), xa: wp.array(dtype=wp.vec3d),
-           delta: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), ff: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
+           Fst: wp.array(dtype=wp.mat33d), delta: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64), ff: wp.array(dtype=wp.vec3d),
+           terms: wp.array2d(dtype=wp.float64)):
     """bpar = (cs, wt, c0, E*, mu, material): material 1 (ClosureWarp.glue_point 'material', 11-06): the glue holds the
     material point at the bottom of the cell's deformed ball, x_c = x_B + F_B roff (roff and its anchor xa at the step's
-    start: k_mid_ball), its slip over the step measured there and its force acting there; 0: at the centre (the site)"""
+    start: k_mid_ball), its slip over the step measured there and its force acting there; 0: at the centre (the site).
+    bpar[6] 1 (ClosureWarp.set_ball_shape 'deformed', 11-06): the normal contact of the cell's deformed ball x_B + F_B (R S^2)
+    with the plane, delta = R |F_e^T n| - (n . x_e - c0) (its support function: no lowest-point search), F_e = cs F_B -
+    (cs - 1) F_n the step-end F; the normal force then acts at the support point x_B - R F_e F_e^T n / |F_e^T n|"""
     c = wp.tid()
     B = cbody[c]
     cs, wt, c0, Es, mu = bpar[0], bpar[1], bpar[2], bpar[3], bpar[4]
     xe = cs*x[B]-(cs-wp.float64(1.0))*xn[c]
     d = R[c]-(wp.dot(ng, xe)-c0)
+    if bpar[6] > wp.float64(0.0):
+        Fe = cs*FB[B]-(cs-wp.float64(1.0))*Fst[B]
+        d = R[c]*wp.length(wp.transpose(Fe)@ng)-(wp.dot(ng, xe)-c0)
     delta[c] = d
     zero = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
     F = wp.float64(0.0)
@@ -468,8 +475,8 @@ def k_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.array(
 
 @wp.kernel(enable_backward=False)
 def k_ball_adj(cbody: wp.array(dtype=int), ng: wp.vec3d, bpar: wp.array(dtype=wp.float64), fn: wp.array(dtype=wp.float64),
-               ff: wp.array(dtype=wp.vec3d), roff: wp.array(dtype=wp.vec3d), terms_adj: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d),
-               F_adj: wp.array(dtype=wp.mat33d)):
+               ff: wp.array(dtype=wp.vec3d), roff: wp.array(dtype=wp.vec3d), R: wp.array(dtype=wp.float64), FB: wp.array(dtype=wp.mat33d),
+               Fst: wp.array(dtype=wp.mat33d), terms_adj: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d), F_adj: wp.array(dtype=wp.mat33d)):
     """dE/dx_B = -cs wt (F_n n + f) (the tangential force f in the plane); material (bpar[5]): f acts at x_B + F_B roff, so
     dE/dF_B = -cs wt f (x) roff as well (to the neighbours through the closure's adjoint)"""
     c = wp.tid()
@@ -478,6 +485,11 @@ def k_ball_adj(cbody: wp.array(dtype=int), ng: wp.vec3d, bpar: wp.array(dtype=wp
     wp.atomic_add(x_adj, cbody[c], -(cs*wt)*(a6*fn[c]*ng+a8*ff[c]))
     if bpar[5] > wp.float64(0.0):
         wp.atomic_add(F_adj, cbody[c], -(cs*wt*a8)*wp.outer(ff[c], roff[c]))
+    if bpar[6] > wp.float64(0.0) and fn[c] > wp.float64(0.0):              # (d delta / dF_B = cs R n (x) F_e^T n / |F_e^T n|)
+        B = cbody[c]
+        Fe = cs*FB[B]-(cs-wp.float64(1.0))*Fst[B]
+        u = wp.transpose(Fe)@ng
+        wp.atomic_add(F_adj, B, (cs*wt*a6*fn[c]*R[c]/wp.length(u))*wp.outer(ng, u))
 
 
 @wp.kernel(enable_backward=False)
@@ -1079,6 +1091,7 @@ class ClosureWarp(SkinWarp):
         self.cap_ul = False                                                         # (set_cap_ul: UL's F, no cap)
         self.nr, self.ndof, self.chain = 0, self.n, None                            # (set_chain: rigid chain cells with their own rotation)
         self.glue_point = 'site'                                                    # (set_glue_point: where the ground's glue holds a cell)
+        self.ball_shape = 'rigid'                                                   # (set_ball_shape: the normal contact's ball, rigid or deformed with F_B)
         self.mass_mode, self.cm_cache, self.cm_spacing, self.cmass = 'consistent', None, 1.5e-3, None   # (prepare(): the cells' consistent mass,
                                                                                     # free_surface/consistent_mass.py; 'lumped': the sites' own, for comparisons)
         self._only0, self._only1 = wp.zeros(1, dtype=int, device=dev), wp.array([1], dtype=int, device=dev)
@@ -1118,14 +1131,24 @@ class ClosureWarp(SkinWarp):
         self._ball_moduli()
         z = lambda dt_: wp.zeros(k, dtype=dt_, device=dev)
         self.ball = dict(k=k, body=wp.from_torch(cbody.to(torch.int32).contiguous(), dtype=wp.int32), R=T(R.to(f64)),
-                         ng=wp.vec3d(*[float(a_) for a_ in normal]), par=wp.array(np.array([1., 1., float(c0), self.Es, float(mu), 0.]), dtype=wp.float64, device=dev),
+                         ng=wp.vec3d(*[float(a_) for a_ in normal]), par=wp.array(np.array([1., 1., float(c0), self.Es, float(mu), 0., 0.]), dtype=wp.float64, device=dev),
                          xn=z(wp.vec3d), kt=z(wp.float64), bound=z(wp.float64), lamt=z(wp.vec3d), roff=z(wp.vec3d), xa=z(wp.vec3d),
                          Fst=wp.from_torch(torch.eye(3, dtype=f64, device=dev).repeat(self.n, 1, 1).contiguous(), dtype=wp.mat33d))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tball, self.tbxn, self.tbkt, self.tbbound, self.tblamt = (tt(self.ball[a_]) for a_ in ('par', 'xn', 'kt', 'bound', 'lamt'))
         self.tbroff, self.tbxa, self.tbFst = (tt(self.ball[a_]) for a_ in ('roff', 'xa', 'Fst'))
         self.tbR = tt(self.ball['R'])
-        self.set_glue_point(self.glue_point)
+        self.set_glue_point(self.glue_point); self.set_ball_shape(self.ball_shape)
+
+    def set_ball_shape(self, shape):
+        """the ground's normal contact (11-06): 'rigid' the cell's ball about its site (Hertz on R - height), 'deformed'
+        its deformed ball x_B + F_B (R S^2): overlap R |F_e^T n| - height (the support function, closed form), the normal
+        force at the support point, on F_B too (as set_glue_point's 'material'). A pressed, sheared, rolling foot's
+        material spreads and moves out; the rigid ball's contact stays under its site"""
+        assert shape in ('rigid', 'deformed')
+        self.ball_shape = shape
+        if self.ball is not None:
+            self.tball[6] = 1. if shape == 'deformed' else 0.
 
     def set_glue_point(self, where):
         """where the ground's glue holds a touching cell (11-06): 'site' its centre (the ball's centre), 'material' the
@@ -1651,11 +1674,11 @@ class ClosureWarp(SkinWarp):
                                                    outputs=[x.grad, y.grad, B['F'].grad]), arrays=[x, y, B['F'], B['terms']])
         bl = self.ball
         if bl is not None:
-            wp.launch(k_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt'], B['F'], bl['roff'], bl['xa']],
-                      outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']], record_tape=False)
+            wp.launch(k_ball, bl['k'], inputs=[x, bl['body'], bl['R'], bl['xn'], bl['ng'], bl['par'], bl['kt'], bl['bound'], bl['lamt'], B['F'], bl['roff'], bl['xa'],
+                                               bl['Fst']], outputs=[B['bdelta'], B['bfn'], B['bff'], B['terms']], record_tape=False)
             if tape is not None:
-                tape.record_func(lambda: wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], bl['roff'], B['terms'].grad],
-                                                   outputs=[x.grad, B['F'].grad]), arrays=[x, B['F'], B['terms']])
+                tape.record_func(lambda: wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], bl['roff'], bl['R'], B['F'], bl['Fst'],
+                                                                         B['terms'].grad], outputs=[x.grad, B['F'].grad]), arrays=[x, B['F'], B['terms']])
         sc = self.selfc
         if sc is not None:
             wp.launch(k_self, sc['K'], inputs=[x, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['d0'], sc['Reff'], bl['par'], sc['Esp']],
@@ -2440,7 +2463,7 @@ def k_mid_begin(x: wp.array(dtype=wp.vec3d), v: wp.array(dtype=wp.vec3d), a: wp.
 
 @wp.kernel(enable_backward=False)
 def k_mid_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.array(dtype=wp.float64), ng: wp.vec3d, c0: wp.float64,
-               g8: wp.float64, cb: wp.float64, Fst: wp.array(dtype=wp.mat33d), xn: wp.array(dtype=wp.vec3d), kt: wp.array(dtype=wp.float64),
+               g8: wp.float64, cb: wp.float64, Fst: wp.array(dtype=wp.mat33d), bpar: wp.array(dtype=wp.float64), xn: wp.array(dtype=wp.vec3d), kt: wp.array(dtype=wp.float64),
                bound: wp.array(dtype=wp.float64), roff: wp.array(dtype=wp.vec3d), xa: wp.array(dtype=wp.vec3d)):
     """the balls' step-start data: centre, Mindlin k_t = 8 G* (R delta_n)^1/2 (g8 = 8 G*), bound mu F_n (cb = 4 / 3 mu E*);
     the glue's material point: roff = -R F^T n / |F^T n| (the deformed ball's bottom, F = Fst at the step's start) and its
@@ -2453,6 +2476,8 @@ def k_mid_ball(x: wp.array(dtype=wp.vec3d), cbody: wp.array(dtype=int), R: wp.ar
     xa[c] = x[cbody[c]]+Fb@r
     xc = x[cbody[c]]
     dn = wp.max(R[c]-(wp.dot(ng, xc)-c0), wp.float64(0.0))
+    if bpar[6] > wp.float64(0.0):                                          # (the deformed ball's overlap: its support function)
+        dn = wp.max(R[c]*wp.length(Ftn)-(wp.dot(ng, xc)-c0), wp.float64(0.0))
     sq = wp.sqrt(R[c]*dn)
     xn[c] = xc
     kt[c] = g8*sq
@@ -2732,7 +2757,7 @@ class MidpointStep:
         if self.smooth_pred and self._vp is not None:                               # (the start only: v, a averaged over two steps, without the mode reversing every step, which is not in z;
             h_ = self.th*self.dt                                                    # v_n = v_avg + a dt / 2, so exact for constant a, as the plain predictor)
             self.tz.copy_(self.tx+.5*h_*(self.tv+self._vp)+.5*(.5*h_*self.dt+h_*h_)*(self.ta+self._ap))
-        wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8*self.glue_scale, self.cb, bl['Fst']],
+        wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8*self.glue_scale, self.cb, bl['Fst'], bl['par']],
                   outputs=[bl['xn'], bl['kt'], bl['bound'], bl['roff'], bl['xa']])
         g2 = self._eval(0.)[PS_GQ2]
         self._accept()
