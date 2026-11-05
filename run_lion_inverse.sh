@@ -9,12 +9,16 @@
 # (LM on the Vid2Sim video) -> eval (frames 0-23 at the fitted material and at the ground-truth one: IoU, errors) ->
 # summary (summary.txt, and lion_inverse_results.tgz with everything to copy back). A finished stage is skipped on a
 # rerun; an interrupted LM resumes from its last accepted point. Settings by environment: PY (python), JOBS (runs at
-# once; default from the GPU's free memory, about 4.5 GB each, at most 7), OUT (default out_inverse).
+# once; default from the GPU's free memory, about 4.5 GB each, at most 7), FOAMSET (lion, default: the old foam;
+# lion_vfc: the 11-06 foam whose tail is a chain of single spheres, with CHAIN=1 rigid chain cells by default),
+# OUT (default out_inverse, out_inverse_vfc for lion_vfc).
 set -uo pipefail
 cd "$(dirname "$0")"
 export PYTHONPATH=$PWD${PYTHONPATH:+:$PYTHONPATH}
 PY=${PY:-python}
-OUT=${OUT:-out_inverse}
+FOAMSET=${FOAMSET:-lion}                                       # lion: fourier_lion_8k_round_clean; lion_vfc: the 11-06 round_vertex_faces_chain foam
+if [ "$FOAMSET" = lion_vfc ]; then CHAIN=${CHAIN:-1}; OUT=${OUT:-out_inverse_vfc}; else CHAIN=${CHAIN:-0}; OUT=${OUT:-out_inverse}; fi
+FA="--foam inverse_data/$FOAMSET/foam --chain $CHAIN"         # (every lion_inverse.py call: the foam, the rigid chain cells)
 mkdir -p "$OUT"
 LI="$PY -u free_surface/lion_inverse.py"
 # the materials (ln E, nu, ln beta): Vid2Sim's ground truth E 10648.6, nu 0.3913; synthetic truth beta 0.08
@@ -50,24 +54,26 @@ assert torch.cuda.is_available(), 'no CUDA device'" || die "env: no usable GPU /
 stage_check() {
   if [ -f "$OUT/check.ok" ]; then say "check: done before, skipped"; return; fi
   say "check 1/2: frame 0, our silhouette against the masks"
-  $LI check > "$OUT/check.log" 2>&1 || die "check failed, see $OUT/check.log"
+  $LI check $FA > "$OUT/check.log" 2>&1 || die "check failed, see $OUT/check.log"
   grep -E "^V[0-9]+:|mean" "$OUT/check.log"
-  $PY - "$OUT/check.log" <<'EOF' || die "check 1/2: IoU differs from this machine's (see above)"
+  $PY - "$OUT/check.log" $FOAMSET <<'EOF' || die "check 1/2: IoU differs from this machine's (see above)"
 import re, sys
-ref = [0.9607, 0.9178, 0.9608, 0.9640, 0.9629, 0.9772, 0.9637, 0.9380, 0.9604, 0.9574, 0.9580, 0.9243]   # 11-06, RTX 5070 Ti
+ref = dict(lion=[0.9607, 0.9178, 0.9608, 0.9640, 0.9629, 0.9772, 0.9637, 0.9380, 0.9604, 0.9574, 0.9580, 0.9243],     # 11-06, RTX 5070 Ti
+           lion_vfc=[0.9929, 0.9953, 0.9942, 0.9942, 0.9920, 0.9942, 0.9945, 0.9916, 0.9939, 0.9941, 0.9932, 0.9923])[sys.argv[2]]
 got = [float(m.group(1)) for m in re.finditer(r'^V\d+: IoU ([0-9.]+)', open(sys.argv[1]).read(), re.M)]
 bad = [(k, g, r) for k, (g, r) in enumerate(zip(got, ref)) if abs(g-r) > 2e-3]
 print('IoU against this machine: %d views, largest difference %.4f' % (len(got), max(abs(g-r) for g, r in zip(got, ref))))
 sys.exit(1 if len(got) != 12 or bad else 0)
 EOF
   say "check 2/2: a forward at the ground truth to frame 8 (about a minute after the first compile)"
-  $LI run --theta $GT_LNE $GT_NU -2.995732 --frames 8 --out "$OUT/smoke.npz" > "$OUT/smoke.log" 2>&1 || die "the smoke forward failed, see $OUT/smoke.log"
+  $LI run $FA --theta $GT_LNE $GT_NU -2.995732 --frames 8 --out "$OUT/smoke.npz" > "$OUT/smoke.log" 2>&1 || die "the smoke forward failed, see $OUT/smoke.log"
   grep -E "frame [678] |done" "$OUT/smoke.log"
-  $PY - "$OUT/smoke.log" <<'EOF' || die "check 2/2: the trajectory differs from this machine's (see above)"
+  $PY - "$OUT/smoke.log" $FOAMSET <<'EOF' || die "check 2/2: the trajectory differs from this machine's (see above)"
 import re, sys
 s = open(sys.argv[1]).read()
 z = {int(k): float(v) for k, v in re.findall(r'frame (\d+) \(t [0-9.]+ s, [0-9.]+ s\): com z (-?[0-9.]+) m', s)}
-ref = {5: 0.1590, 6: 0.0158, 7: -0.1179, 8: -0.1224}                      # 11-06, RTX 5070 Ti
+ref = dict(lion={5: 0.1590, 6: 0.0158, 7: -0.1179, 8: -0.1224},                       # 11-06, RTX 5070 Ti
+           lion_vfc={5: 0.1645, 6: 0.0191, 7: -0.1254, 8: -0.1343})[sys.argv[2]]       # (with --chain 1)
 d = max(abs(z.get(k, 9.)-v) for k, v in ref.items())
 print('com z at frames 5-8 against this machine: largest difference %.4f m' % d)
 sys.exit(0 if d <= 1e-3 else 1)
@@ -81,7 +87,7 @@ run_lm() {   # name obs start [extra]
   local res=""; [ -f "$OUT/$name/lm.json" ] && res="--resume"
   say "$name: LM ($obs observations), $JOBS runs at once ${res:+(resuming)}"
   # (the LM's own log in $OUT/$name.log; its progress lines also here, as they come)
-  $LI lm --obs $obs --start $start --frames 15 --jobs $JOBS --out "$OUT/$name" $res "$@" 2>&1 | tee -a "$OUT/$name.log" \
+  $LI lm $FA --obs $obs --start $start --frames 15 --jobs $JOBS --out "$OUT/$name" $res "$@" 2>&1 | tee -a "$OUT/$name.log" \
     | grep --line-buffered -E "^it |runs \(|forward's error|identifiability|stop|final|Traceback|Error"
   local rc=${PIPESTATUS[0]}
   [ $rc -eq 0 ] && [ -f "$OUT/$name/final_theta.json" ] || die "$name: LM stopped with code $rc, see $OUT/$name.log (rerun this script to resume)"
@@ -106,7 +112,7 @@ stage_real() { run_lm real real "$REAL_START"; }
 stage_lmsmoke() {   # (not part of `all`) one LM iteration on 7 frames of synthetic data: does the first step stay inside the cap?
   rm -rf "$OUT/lmsmoke" "$OUT/lmsmoke.log"
   say "lmsmoke: one LM iteration, synthetic, frames 0-7 (about 20-30 min)"
-  $LI lm --obs synth --truth $SYN_TRUTH --start $SYN_START --frames 7 --iters 1 --jobs $JOBS --out "$OUT/lmsmoke" 2>&1 | tee "$OUT/lmsmoke.log" \
+  $LI lm $FA --obs synth --truth $SYN_TRUTH --start $SYN_START --frames 7 --iters 1 --jobs $JOBS --out "$OUT/lmsmoke" 2>&1 | tee "$OUT/lmsmoke.log" \
     | grep --line-buffered -E "^it |runs \(|forward's error|identifiability|stop|final|Traceback|Error"
   $PY - "$OUT/lmsmoke/lm.json" <<'EOF' || die "lmsmoke: no LM history"
 import json, sys
@@ -124,19 +130,19 @@ stage_eval() {
     [ -f "$OUT/real/final_theta.json" ] || die "eval: no $OUT/real/final_theta.json (run the real stage first)"
     local th; th=$($PY -c "import json; print(' '.join('%.17g' % v for v in json.load(open('$OUT/real/final_theta.json'))['theta']))")
     say "eval: frames 0-23 at the fitted material ($th)"
-    $LI eval --theta $th --out "$OUT/real_eval" > "$OUT/real_eval.log" 2>&1 || die "eval failed, see $OUT/real_eval.log"
+    $LI eval $FA --theta $th --out "$OUT/real_eval" > "$OUT/real_eval.log" 2>&1 || die "eval failed, see $OUT/real_eval.log"
     grep "^eval" "$OUT/real_eval.log"
   fi
   if [ ! -f "$OUT/gt_eval/eval.json" ]; then
     say "eval: frames 0-23 at the ground-truth E, nu (beta 0.05), for reference"
-    $LI eval --theta $GT_LNE $GT_NU -2.995732 --out "$OUT/gt_eval" > "$OUT/gt_eval.log" 2>&1 || say "eval at the ground truth failed (see $OUT/gt_eval.log), going on"
+    $LI eval $FA --theta $GT_LNE $GT_NU -2.995732 --out "$OUT/gt_eval" > "$OUT/gt_eval.log" 2>&1 || say "eval at the ground truth failed (see $OUT/gt_eval.log), going on"
     grep "^eval" "$OUT/gt_eval.log" || true
   fi
 }
 
 stage_summary() {
   {
-    echo "lion inverse, $(date '+%Y-%m-%d %H:%M'), branch $(git rev-parse --abbrev-ref HEAD) $(git rev-parse --short HEAD), $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
+    echo "lion inverse ($FOAMSET, chain $CHAIN), $(date '+%Y-%m-%d %H:%M'), branch $(git rev-parse --abbrev-ref HEAD) $(git rev-parse --short HEAD), $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
     cat "$OUT/synth_verdict.txt" 2>/dev/null
     for n in synth real; do [ -f "$OUT/$n/lm.json" ] && $PY -c "
 import json; h=[e for e in json.load(open('$OUT/$n/lm.json')) if e['accepted']]

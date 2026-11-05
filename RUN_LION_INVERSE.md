@@ -30,6 +30,18 @@ tail -f lion_inverse.log          # 看进度，Ctrl-C 只停止查看
 - `JOBS`：同时运行的进程数，默认按空闲显存计算，每个约 4.5 GB，最多 7 个；
 - `OUT`：输出目录，默认 `out_inverse`。
 
+**换用 11-06 的新泡沫**（`fourier_vid2sim_lion_8k_round_vertex_faces_chain`，尾巴是一串单球）：
+
+```bash
+FOAMSET=lion_vfc nohup bash run_lion_inverse.sh > lion_inverse_vfc.log 2>&1 &
+```
+
+- 输出写到 `out_inverse_vfc/`，和旧泡沫的 `out_inverse/` 分开。
+- 默认打开链格子处理（`CHAIN=1`）：墙数 ≤ 2 的 22 个格子当作刚体，各自带转动自由度；和它们相连的粘结按平行粘结取全模量。
+- 新泡沫第 0 帧的 IoU 是 0.992–0.995，旧泡沫是 0.92–0.98。
+- 真值参数下跑到第 8 帧只要 10 s，旧泡沫是 55 s。
+- check 段用新泡沫自己的参考数字。
+
 下面各节说明脚本里每一步做的是什么。
 
 ## 跑的是什么

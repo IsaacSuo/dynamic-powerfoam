@@ -166,14 +166,36 @@ class Silhouette:
         return self.torch.stack((cx, cy, sx, sy, m0.sqrt()), 1)
 
 
+FOAM = DATA/'foam'                                                                 # (--foam: another foam of the same lion, frame and cameras)
+
+
 def load_foam():
-    F = DATA/'foam'
-    cells = dict(np.load(F/'dem_exact_single'/'cells.npz')); g = dict(np.load(F/'dem_exact_single'/'geometry.npz'))
-    site = np.load(F/'patch_site.npz')['patch_site']
+    """cells, geometry and the ground balls' cells: patch_site.npz if the foam has one, else None (the exposed spheres,
+    ClosureTerms.c_body: on inverse_data/lion/foam the same 4024 cells in the same order as its patch_site, 11-06)"""
+    cells = dict(np.load(FOAM/'dem_exact_single'/'cells.npz')); g = dict(np.load(FOAM/'dem_exact_single'/'geometry.npz'))
+    site = np.load(FOAM/'patch_site.npz')['patch_site'] if (FOAM/'patch_site.npz').exists() else None
     return cells, g, site
 
 
 # ---------------------------------------------------------------- one forward
+CHAIN = 0                                                                          # (--chain 1: ClosureWarp.set_chain, the rigid chain cells)
+
+
+def chain_colouring(W, i_, j_, colouring):
+    """probe_blocks' colouring over the sites and set_chain's rotation entries: a rotation entry coupled to its cell and to
+    every site and rotation its cell's bonds reach"""
+    n = W.n; ck = W._ck_t.cpu().numpy()
+    dof = lambda c: [c]+([n+int(ck[c])] if ck[c] >= 0 else [])
+    ei, ej = [], []
+    for a, b in zip(i_.tolist(), j_.tolist()):
+        for u in dof(a):
+            for v in dof(b):
+                ei.append(u); ej.append(v)
+    for c in W.chain.tolist():
+        ei.append(c); ej.append(n+int(ck[c]))
+    return colouring(np.array(ei), np.array(ej), W.ndof)
+
+
 def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True):
     """one run at theta = (lnE, nu, lnbeta) to frame `frames`: dict(f (frames + 1, views, 5), x, r per frame if asked,
     stats); raises RuntimeError at a step that does not converge"""
@@ -192,21 +214,30 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True):
     W = ClosureWarp(st)
     W.set_viscosity(beta*W.mu, beta*(W.lam+2*W.mu/3), DT)
     W.visc_weight = 2.; W.total_mode()
-    boc = torch.as_tensor(np.asarray(g['body_of_cell']), device=dev).long(); site = torch.as_tensor(site_np, device=dev).long()
+    boc = torch.as_tensor(np.asarray(g['body_of_cell']), device=dev).long()
+    site = st.c_body.clone() if site_np is None else torch.as_tensor(site_np, device=dev).long()
     cbody = boc[site]; Rb = torch.as_tensor(cells['radii'], dtype=f64, device=dev)[site]
     upt = tuple(1. if k == UP else 0. for k in range(3))
     W.set_ball(cbody, Rb, upt, C0, 0.)                                               # (frictionless; no self contact)
     W.set_cap_positions(); W.set_cap_floor(0.)
+    nr = W.set_chain() if CHAIN else 0
     W.prepare()
     n = W.n; X = st.X; mass = m.mass.to(f64); M3 = mass[:, None]
     up = torch.tensor(upt, dtype=f64, device=dev); fg = -9.8*M3*up; ref = float(fg.norm())
-    Kbb = probe_blocks(W, X, colouring(st.i.cpu().numpy(), st.j.cpu().numpy(), n))
-    W.visc_ref(X)
+    if nr:
+        mass_e = torch.cat([mass, W.rot_inertia(mass)]); Xe = W.X_ext
+        Kbb = probe_blocks(W, Xe, chain_colouring(W, st.i.cpu().numpy(), st.j.cpu().numpy(), colouring))
+        print('  chain cells %d (bonds touching them %d), rotational inertia / m r^2 0.4' % (nr, W.chain_bonds), flush=True)
+    else:
+        mass_e, Xe = mass, X
+        Kbb = probe_blocks(W, X, colouring(st.i.cpu().numpy(), st.j.cpu().numpy(), n))
+    W.visc_ref(Xe)
     W.tball[0], W.tball[1] = 2., .5
-    CG = TrustCG(W, mass, DT, per=2, product_iters=1); ST = MidpointStep(W, CG, mass, Kbb, fg, DT, 0.)
+    fg_e = W.ext(fg)
+    CG = TrustCG(W, mass_e, DT, per=2, product_iters=1); ST = MidpointStep(W, CG, mass_e, Kbb, fg_e, DT, 0.)
     ST.smooth_pred = ST.carry_delta = True                                           # (dem_old1's: the same solution, faster)
     tl = tol*ref
-    ST.set_state(X, torch.tensor(V0, dtype=f64, device=dev).expand_as(X).clone(), fg/M3)
+    ST.set_state(Xe, W.ext(torch.tensor(V0, dtype=f64, device=dev).expand_as(X).clone()), fg_e/mass_e[:, None])
     sil = Silhouette()
     r0 = torch.as_tensor(cells['radii'], dtype=f64, device=dev)
     fs, xs, rs = [sil.features(X, r0).cpu().numpy()], [X.cpu().numpy().astype(np.float32)], [r0.cpu().numpy().astype(np.float32)]
@@ -219,8 +250,8 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True):
         ST.end(); prods += p_
         if s % SPF:
             continue
-        x = ST.tx.clone()
-        W.grad(x); Fb = W.tF.clone()
+        xe = ST.tx.clone(); x = xe[:n]
+        W.grad(xe); Fb = W.tF.clone()
         r = r0*torch.linalg.det(Fb).abs().clamp(min=1e-6)**(1/3)
         fs.append(sil.features(x, r).cpu().numpy())
         if save_frames:
@@ -280,7 +311,7 @@ def run_batch(thetas, frames, tol, out, jobs, tag):
                 paths[k].unlink()
             log = open(out/('%s_%d.log' % (tag, k)), 'w')
             cmd = [sys.executable, '-u', str(Path(__file__).resolve()), 'run', '--theta', *['%.17g' % v for v in th], '--frames', str(frames),
-                   '--tol', '%g' % tols[k], '--out', str(paths[k])]
+                   '--tol', '%g' % tols[k], '--out', str(paths[k]), '--foam', str(FOAM), '--chain', str(CHAIN)]
             live[k] = (subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(ROOT), env=env), log)
         time.sleep(2)
         for k in list(live):
@@ -464,16 +495,23 @@ def cmd_eval(a):
 
 
 def main():
+    global FOAM, CHAIN
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
-    sub.add_parser('check')
+    q = sub.add_parser('check')
+    q.add_argument('--foam', type=Path, default=FOAM)
+    q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q = sub.add_parser('run')
+    q.add_argument('--foam', type=Path, default=FOAM)
+    q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--theta', type=float, nargs=3, required=True)
     q.add_argument('--frames', type=int, default=15)
     q.add_argument('--tol', type=float, default=1e-3)
     q.add_argument('--out', type=Path, required=True)
     q.add_argument('--save-frames', action='store_true')
     q = sub.add_parser('lm')
+    q.add_argument('--foam', type=Path, default=FOAM)
+    q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--out', type=Path, required=True)
     q.add_argument('--obs', choices=('real', 'synth'), default='real')
     q.add_argument('--truth', type=float, nargs=3, default=[math.log(GT['E']), GT['nu'], math.log(.05)], help='--obs synth: theta of the observations')
@@ -490,11 +528,16 @@ def main():
     q.add_argument('--resume', action='store_true')
     q.add_argument('--relative', type=int, default=1, help='1: features minus their own frame 0 (both sides)')
     q = sub.add_parser('eval')
+    q.add_argument('--foam', type=Path, default=FOAM)
+    q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--theta', type=float, nargs=3, required=True)
     q.add_argument('--out', type=Path, required=True)
     q.add_argument('--held', type=int, nargs='*', default=[5])
     q.add_argument('--tol', type=float, default=1e-3)
     a = p.parse_args()
+    FOAM = Path(a.foam).resolve()
+    CHAIN = int(getattr(a, 'chain', 0))
+    print('foam: %s%s' % (FOAM, ', chain cells rigid with their own rotation' if CHAIN else ''), flush=True)
     dict(check=cmd_check, run=cmd_run, lm=cmd_lm, eval=cmd_eval)[a.cmd](a)
 
 

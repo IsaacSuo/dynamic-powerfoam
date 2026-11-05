@@ -571,6 +571,66 @@ def k_bonds_fused(x: wp.array(dtype=wp.vec3d), q: wp.array(dtype=wp.vec4d), bi: 
 
 
 
+@wp.func
+def quat_exp(p: wp.vec3d):
+    """the unit quaternion of the rotation vector p (a series below |p|^2 1e-12: smooth for the adjoint at 0)"""
+    t2 = wp.dot(p, p)
+    w = wp.float64(0.0)
+    s = wp.float64(0.0)
+    if t2 < wp.float64(1e-12):
+        w = wp.float64(1.0)-t2/wp.float64(8.0)+t2*t2/wp.float64(384.0)
+        s = wp.float64(0.5)-t2/wp.float64(48.0)+t2*t2/wp.float64(3840.0)
+    else:
+        t = wp.sqrt(t2)
+        w = wp.cos(t*wp.float64(0.5))
+        s = wp.sin(t*wp.float64(0.5))/t
+    return wp.vec4d(w, s*p[0], s*p[1], s*p[2])
+
+
+@wp.kernel
+def k_F8c(S: wp.array(dtype=wp.mat33d), x: wp.array(dtype=wp.vec3d), ck: wp.array(dtype=int), qn: wp.array(dtype=wp.vec4d), n: int,
+          F: wp.array(dtype=wp.mat33d), R: wp.array(dtype=wp.mat33d), q: wp.array(dtype=wp.vec4d)):
+    """k_F8, and for a chain cell (ck >= 0, set_chain, 11-06) the rigid body's own rotation instead: q = exp(x[n + ck]) q_n
+    (x[n + ck] the rotation since the step's start, world frame), R = R(q), F = R (no deformation inside the cell)"""
+    b = wp.tid()
+    k = ck[b]
+    if k >= 0:
+        qq = quat_mul(quat_exp(x[n+k]), qn[k])
+        Rb = quat_mat(qq)
+        F[b] = Rb; R[b] = Rb; q[b] = qq
+    else:
+        Fb = S[b]
+        Rb = rot_proper(Fb)
+        F[b] = Fb; R[b] = Rb; q[b] = mat_quat(Rb)
+
+
+@wp.kernel
+def k_volume_w(F: wp.array(dtype=wp.mat33d), Vd: wp.array(dtype=wp.float64), Vdet: wp.array(dtype=wp.float64), V: wp.array(dtype=wp.float64),
+               matp: wp.array(dtype=wp.float64), Lref: wp.array(dtype=wp.float64), barrier: wp.float64, w: wp.array(dtype=wp.float64),
+               lj: wp.array(dtype=wp.float64), terms: wp.array2d(dtype=wp.float64)):
+    """skin_warp.k_volume with a weight per cell (0 for a chain cell: a rigid body keeps its volume)"""
+    b = wp.tid()
+    J = (Vd[b]+wp.determinant(F[b])*Vdet[b])/V[b]
+    L = wp.float64(0.0)
+    if J < barrier:
+        L = wp.log(barrier)+(J-barrier)/barrier-(J-barrier)*(J-barrier)/(wp.float64(2.0)*barrier*barrier)
+    else:
+        L = wp.log(J)
+    lj[b] = L
+    wp.atomic_add(terms, 1, b % NSLOT, w[b]*V[b]*wp.float64(0.5)*matp[2]*L*L)
+    Lv = L-Lref[b]
+    wp.atomic_add(terms, 7, b % NSLOT, w[b]*V[b]*wp.float64(0.5)*matp[3]*Lv*Lv)
+
+
+@wp.kernel(enable_backward=False)
+def k_mid_pre_rot(R: wp.array(dtype=wp.mat33d), chain: wp.array(dtype=int), K: wp.array(dtype=wp.mat33d), c1: wp.float64,
+                  cm: wp.array(dtype=wp.float64), n: int, P: wp.array(dtype=wp.mat33d)):
+    """k_mid_pre for a chain cell's rotation entry n + k: R K R^T (1 + 2 beta / dt) + 4 I / dt^2, R the cell's"""
+    k = wp.tid()
+    Rb = R[chain[k]]
+    P[n+k] = Rb@K[n+k]@wp.transpose(Rb)*c1+cm[n+k]*wp.identity(n=3, dtype=wp.float64)
+
+
 @wp.kernel
 def k_F8(S: wp.array(dtype=wp.mat33d), F: wp.array(dtype=wp.mat33d), R: wp.array(dtype=wp.mat33d), q: wp.array(dtype=wp.vec4d)):
     """skin_warp.k_F with Mt^-1 = I; R the nearest proper rotation (rot_proper, 10-27)"""
@@ -1008,6 +1068,7 @@ class ClosureWarp(SkinWarp):
         self.cap_eps = 0.                                                           # (set_cap_floor: the floor on its normal)
         self.cap_wall = False                                                       # (set_cap_walls: the walls' cap)
         self.cap_ul = False                                                         # (set_cap_ul: UL's F, no cap)
+        self.nr, self.ndof, self.chain = 0, self.n, None                            # (set_chain: rigid chain cells with their own rotation)
         self._only0, self._only1 = wp.zeros(1, dtype=int, device=dev), wp.array([1], dtype=int, device=dev)
         z = lambda n_, dt_: wp.zeros(n_, dtype=dt_, device=dev)
         self.eta = self.lamv = self.smu = self.slam = 0.
@@ -1100,6 +1161,73 @@ class ClosureWarp(SkinWarp):
         P['nr'] = st.mA.clone().contiguous()
         self.capnr, self.capeps = T(P['nr'], wp.vec3d), wp.array([0.], dtype=wp.float64, device='cuda')
         self.cap_pos = True
+
+    def set_chain(self, cells=None):
+        """chain cells as rigid bodies with their own rotation (11-06, user: a tail of single spheres; the one-way cap's
+        2-ring fit has no 3 independent offsets there and the rest state is not stress-free), before prepare() and after
+        set_cap_positions(). cells: default every cell with at most 2 walls (topology, no threshold). For them:
+        - a rotation DOF each: the solver's unknowns are x (n sites) then the nr rotations since the step's start (world
+          frame), ndof = n + nr; q = exp(x[n + k]) q_n (k_F8c), F_B = R (no deformation inside the cell);
+        - no volume, variance or outer-layer energy (a rigid body's are constant); the one-way cap's fit not used (M2^-1 = I
+          only to keep its unused value finite);
+        - every bond touching one carries the whole material as a parallel bond: kn = E A / L, ks = G A / L, kb = E I / L,
+          kt = G J / L, I = A^2 / 4 pi, J = 2 I (a disk of the wall's area), per unit density as the rest;
+        - rotational inertia 2/5 m r^2 (r of the equal-volume sphere; m = V, per unit density): rot_inertia().
+        Without set_chain nothing changes (ndof = n)"""
+        st = self.st; n = self.n; dev = st.X.device
+        nwall = torch.bincount(torch.cat([st.i, st.j]).long(), minlength=n)
+        ch = torch.nonzero(nwall <= 2).flatten() if cells is None else torch.as_tensor(cells, device=dev).long()
+        self.nr = int(len(ch)); self.ndof = n+self.nr
+        if self.nr == 0:
+            self.chain = None
+            return 0
+        self.chain = ch
+        ck = torch.full((n,), -1, dtype=torch.int32, device=dev); ck[ch] = torch.arange(self.nr, dtype=torch.int32, device=dev)
+        self._ck_t = ck; self.ck = wp.from_torch(ck, dtype=wp.int32)
+        self.chain_w = wp.from_torch(ch.to(torch.int32).contiguous(), dtype=wp.int32)
+        self._qn_t = torch.zeros(self.nr, 4, dtype=f64, device=dev); self._qn_t[:, 0] = 1.
+        self.qn = wp.from_torch(self._qn_t, dtype=wp.vec4d)
+        isc = torch.zeros(n, dtype=torch.bool, device=dev); isc[ch] = True
+        bt = isc[st.i.long()] | isc[st.j.long()]                                     # (the bonds touching a chain cell)
+        mu, lam = self.mu, self.lam
+        E = mu*(3*lam+2*mu)/(lam+mu); G = mu
+        A, L = st.A[bt], st.L[bt]; I = A*A/(4*math.pi)
+        kch = torch.stack([E*A/L, G*A/L, E*I/L, G*2*I/L], 1)
+        self._kb_t[bt] = kch; self._kb_unit = self._kb_t/self.mu
+        self._wv_t[bt] = 0.; self._wv_unit[bt] = 0.
+        cN = st.c_N.clone(); cN[isc[st.c_body]] = 0.
+        self._cN_chain = cN.contiguous(); self.cN = wp.from_torch(self._cN_chain, dtype=wp.mat33d)
+        self._wvol_t = (~isc).to(f64).contiguous(); self.wvol = wp.from_torch(self._wvol_t, dtype=wp.float64)
+        if self.cap_pos:
+            self._pos['M2i'][ch] = torch.eye(3, dtype=f64, device=dev)
+        self.chain_bonds = int(bt.sum())
+        return self.nr
+
+    def rot_inertia(self, mass):
+        """the chain cells' rotational inertia 2/5 m r^2 (r = (3 V / 4 pi)^1/3), m = mass[chain]"""
+        r = (3*self.st.V[self.chain]/(4*math.pi))**(1/3)
+        return .4*mass[self.chain]*r*r
+
+    def ext(self, x, rot=None):
+        """sites (n, 3) and the chain rotations (nr, 3; default 0) as one (ndof, 3) array"""
+        if self.nr == 0:
+            return x
+        r = torch.zeros(self.nr, 3, dtype=x.dtype, device=x.device) if rot is None else rot
+        return torch.cat([x, r], 0)
+
+    def chain_end(self, tx):
+        """the step's end for the chain rotations: q_n <- exp(x[n + k]) q_n, then x[n + k] = 0 (the next step counts from there)"""
+        if self.nr == 0:
+            return
+        p = tx[self.n:]
+        t = p.norm(dim=1, keepdim=True)
+        s = torch.where(t > 1e-12, torch.sin(.5*t)/t.clamp(min=1e-300), .5-t*t/48)
+        qe = torch.cat([torch.cos(.5*t), s*p], 1)
+        a, b = qe, self._qn_t
+        q = torch.stack([a[:, 0]*b[:, 0]-(a[:, 1:]*b[:, 1:]).sum(1),
+                         *(a[:, 0:1]*b[:, 1:]+b[:, 0:1]*a[:, 1:]+torch.linalg.cross(a[:, 1:], b[:, 1:], dim=1)).unbind(1)], 1)
+        self._qn_t.copy_(q/q.norm(dim=1, keepdim=True))
+        tx[self.n:] = 0.
 
     def set_cap_ul(self, agg=.1, Kw=None, Ka=None, vol_tol=1e-5):
         """UL's F instead of the fitted skin, after set_self_contact (its colours and cut), before prepare(): each step re-solves the radii for V0 det F_n and re-cuts (update_ul), the fit on the cut's walls
@@ -1452,7 +1580,10 @@ class ClosureWarp(SkinWarp):
             self._closure_a(B)
             if tape is not None:
                 tape.record_func(lambda: self._closure_a_adj(B), arrays=[B['S'], B['Fc']])
-        wp.launch(k_F8, n, inputs=[B['Fc']], outputs=[B['F'], B['R'], B['q']])
+        if self.chain is None:
+            wp.launch(k_F8, n, inputs=[B['Fc']], outputs=[B['F'], B['R'], B['q']])
+        else:                                                                       # (the chain cells' own rotation, on the tape:
+            wp.launch(k_F8c, n, inputs=[B['Fc'], x, self.ck, self.qn, n], outputs=[B['F'], B['R'], B['q']])   # its adjoint into x[n:])
         hand = self.hand_adjoints and tape is not None
         bonds_in = [x, B['q'], self.bi, self.bj, self.mri, self.mrj, self.n0, self.kb, rf['d'], rf['th'], self.matp, pl['dp'], pl['thp']]
         if hand:                                                                    # (the gradient pass: forward and adjoint fused)
@@ -1466,7 +1597,10 @@ class ClosureWarp(SkinWarp):
                 tape.record_func(lambda: wp.launch(k_walls_adj, self.nb, inputs=walls_in+[B['Vd'].grad], outputs=[x.grad, B['F'].grad, B['R'].grad]),
                                  arrays=[x, B['F'], B['R'], B['Vd']])
         wp.launch(k_patches, self.nc, inputs=[B['F'], B['R'], self.cb, self.cr, self.cN, self.matp, rf['P'], pl['Pp']], outputs=[B['terms']])
-        wp.launch(k_volume, n, inputs=[B['F'], B['Vd'], self.Vdet, self.V, self.matp, rf['L'], self.barrier], outputs=[B['lj'], B['terms']])
+        if self.chain is None:
+            wp.launch(k_volume, n, inputs=[B['F'], B['Vd'], self.Vdet, self.V, self.matp, rf['L'], self.barrier], outputs=[B['lj'], B['terms']])
+        else:
+            wp.launch(k_volume_w, n, inputs=[B['F'], B['Vd'], self.Vdet, self.V, self.matp, rf['L'], self.barrier, self.wvol], outputs=[B['lj'], B['terms']])
         wp.launch(k_variance, self.nb, inputs=[B['lj'], rf['L'], self.bi, self.bj, self.wv, self.matp], outputs=[B['terms']])
         ct = self.ct
         if ct is not None:
@@ -1517,9 +1651,10 @@ class ClosureWarp(SkinWarp):
             self.rho = self._rho()
             assert self.rho < 1, 'scheme A: the coupled closure\'s block-Jacobi does not contract (rho %.3f)' % self.rho
             self.n_lin = self.sweep_mult*max(8, int(math.ceil(math.log(1e-13)/math.log(max(self.rho, 1e-3))))+4)
-        self.xw = wp.zeros(self.n, dtype=wp.vec3d, device='cuda', requires_grad=True)
+        self.xw = wp.zeros(self.ndof, dtype=wp.vec3d, device='cuda', requires_grad=True)   # (sites, then the chain rotations)
         self.yw = wp.zeros(self.npt, dtype=wp.vec3d, device='cuda', requires_grad=True)
-        wp.to_torch(self.xw, requires_grad=False).copy_(self.st.X)                  # (the warm-up runs at rest: at x = 0 the
+        self.X_ext = self.ext(self.st.X)
+        wp.to_torch(self.xw, requires_grad=False).copy_(self.X_ext)                 # (the warm-up runs at rest: at x = 0 the
         self.tape = wp.Tape()                                                       # closure is degenerate and its NaN would
                                                                                     # stay in the warm start)
         def run(products=False):
@@ -2043,7 +2178,7 @@ class TrustCG:
     in a: z, p (the step; MidpointStep's dz), g0 (dE/dx at z), Pinv, cm = 4 m / dt^2, tr (scalars)"""
     def __init__(self, W, mass, dt, per=2, h=1e-9, product_iters=1, lr_cols=0):
         self.W, self.per, self.h = W, per, float(h)
-        n = W.n; dev = 'cuda'; B = W.B
+        n = W.ndof; dev = 'cuda'; B = W.B                                            # (ndof: the sites, then set_chain's rotations; mass the same length)
         self.lr = None
         if lr_cols:                                                                 # (the preconditioner's low-rank term, set_lr; lr_cols its capacity)
             zi = lambda k_: wp.zeros(k_, dtype=int, device=dev)
@@ -2076,8 +2211,8 @@ class TrustCG:
             wp.launch(k_tr_beta, 1, inputs=[A['tr']])
             wp.launch(k_tr_dir, n, inputs=[A['y'], A['tr']], outputs=[A['d']])
         W.cold()
-        self.t['z'].copy_(W.st.X)                                                  # (the warm-up at rest, a finished CG: nothing
-        W.linear_closure = False; W.grad(W.st.X); self.save(); W.linear_closure = True   # moves; compiled outside the capture)
+        self.t['z'].copy_(W.X_ext)                                                 # (the warm-up at rest, a finished CG: nothing
+        W.linear_closure = False; W.grad(W.X_ext); self.save(); W.linear_closure = True   # moves; compiled outside the capture)
         self.t['tr'].zero_(); self.t['tr'][TR_DONE] = 1.
         iteration()
         wp.capture_begin()
@@ -2138,7 +2273,7 @@ class TrustCG:
     def solve(self, g, delta, stop, cap):
         """the subproblem for the gradient g (a Warp array) with z, g0, Pinv in a; delta <= 0: the preconditioned
         gradient's length. Returns dict(K products, EDGE, NEG, PMP |p|_M^2, DELTA, GP g . p, PHP p . H p); p in a['p']"""
-        A, n = self.a, self.W.n
+        A, n = self.a, self.W.ndof
         tr = self.t['tr']
         tr.zero_(); tr[TR_DELTA] = float(delta); tr[TR_STOP] = float(stop); tr[TR_CAP] = float(cap)
         wp.launch(k_tr_init, n, inputs=[g, A['Pinv']], outputs=[A['r'], A['y'], A['d'], A['p'], A['Hp'], A['tr']])
@@ -2350,18 +2485,19 @@ class MidpointStep:
         self._vp = self._ap = self.delta_start = None
         self.pre_every, self._pre_age = 1, 0
         self.th = .5
-        n = W.n; dev = 'cuda'
+        n = W.ndof; dev = 'cuda'                                                     # (ndof: set_chain's rotations after the sites; mass, Kbb, fg that long)
         z = lambda dt_, k=n: wp.zeros(k, dtype=dt_, device=dev)
         A = CG.a
+        mlin = mass.to(f64).clone(); mlin[W.n:] = 0.                                 # (the momentum sum: the sites' masses only)
         self.a = dict(x=z(wp.vec3d), v=z(wp.vec3d), a=z(wp.vec3d), xt=z(wp.vec3d), gz=z(wp.vec3d), P=z(wp.mat33d), mv=z(wp.vec3d, 1),
-                      m=wp.from_torch(mass.to(f64).contiguous(), dtype=wp.float64), cm=A['cm'], z=A['z'], g0=A['g0'], Pinv=A['Pinv'], dz=A['p'],
+                      m=wp.from_torch(mlin.contiguous(), dtype=wp.float64), cm=A['cm'], z=A['z'], g0=A['g0'], Pinv=A['Pinv'], dz=A['p'],
                       K=wp.from_torch(Kbb.to(f64).contiguous(), dtype=wp.mat33d), fg=wp.from_torch(fg.to(f64).contiguous(), dtype=wp.vec3d))
         self.ps = wp.zeros(8, dtype=wp.float64, device=dev)
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tx, self.tv, self.ta, self.tps, self.tK = tt(self.a['x']), tt(self.a['v']), tt(self.a['a']), tt(self.ps), tt(self.a['K'])
         self.tz = tt(self.a['z'])
         self.K0, self.mu0 = self.tK.clone(), W.mu
-        self.mtot = float(mass.sum()); self.c0 = float(W.tball[2])
+        self.mtot = float(mass[:W.n].sum()); self.c0 = float(W.tball[2])
         self.update_material(muf)
         self.stats = {}
 
@@ -2370,7 +2506,7 @@ class MidpointStep:
             wp.launch(k_mid_query, n, inputs=[A['z'], A['dz'], self.ps], outputs=[W.xw])
             W._run()
             wp.launch(k_mid_pi, n, inputs=[W.xw, A['xt'], A['x'], A['cm'], A['fg'], W.xw.grad, W.B['loss']], outputs=[A['gz'], A['g0'], self.ps])
-        tt(self.a['z']).copy_(W.st.X); tt(self.a['x']).copy_(W.st.X); tt(self.a['xt']).copy_(W.st.X)
+        tt(self.a['z']).copy_(W.X_ext); tt(self.a['x']).copy_(W.X_ext); tt(self.a['xt']).copy_(W.X_ext)
         it0 = W.iters
         W.iters = int(eval_iters)                                                   # (the evaluations' closure steps)
         pi()                                                                        # (compile at rest, outside the capture)
@@ -2411,7 +2547,7 @@ class MidpointStep:
 
     def _accept(self):
         """the last evaluation is z: Pi, |g|^2 kept, the closure's state saved for the products"""
-        wp.launch(k_mid_accept, self.W.n, inputs=[self.W.xw, self.ps], outputs=[self.a['z']])
+        wp.launch(k_mid_accept, self.W.ndof, inputs=[self.W.xw, self.ps], outputs=[self.a['z']])
         self.CG.save()
 
     def begin(self):
@@ -2429,7 +2565,7 @@ class MidpointStep:
     def solve(self, tol_abs, cg_tol_abs):
         """the step's Newton iterations from the predictor, after begin(); repeatable until end(). pre_ul: the blocks of W.ul_blocks at the step's start in the bodies' frames
         in place of the rest blocks; pre_self: the self contacts in them. stats' trace: per Newton iteration (products, edge, negative, CG stop, |g|, ratio, taken)"""
-        W, A, bl, n = self.W, self.a, self.W.ball, self.W.n
+        W, A, bl, n = self.W, self.a, self.W.ball, self.W.ndof
         wp.launch(k_mid_begin, n, inputs=[A['x'], A['v'], A['a'], self.dt, self.th], outputs=[A['xt'], A['z']])
         if self.smooth_pred and self._vp is not None:                               # (the start only: v, a averaged over two steps, without the mode reversing every step, which is not in z;
             h_ = self.th*self.dt                                                    # v_n = v_avg + a dt / 2, so exact for constant a, as the plain predictor)
@@ -2454,7 +2590,9 @@ class MidpointStep:
                     Kd, lr = W.ul_blocks(self.lr_thr, self.lr_cap)
                     self.tK.copy_(W.tR.transpose(1, 2)@Kd@W.tR)
             if (its == 1 and fresh) or self.lr_thr is None:                         # (with the low-rank term P stays as at the step's first iteration: S goes with its D)
-                wp.launch(k_mid_pre, n, inputs=[W.B['R'], A['K'], self.c1, A['cm']], outputs=[A['P']])
+                wp.launch(k_mid_pre, W.n, inputs=[W.B['R'], A['K'], self.c1, A['cm']], outputs=[A['P']])
+                if W.nr:
+                    wp.launch(k_mid_pre_rot, W.nr, inputs=[W.B['R'], W.chain_w, A['K'], self.c1, A['cm'], W.n], outputs=[A['P']])
                 wp.launch(k_mid_pre_ball, bl['k'], inputs=[bl['body'], bl['R'], W.B['bdelta'], bl['ng'], self.e4, bl['kt'], bl['bound'], self.muf],
                           outputs=[A['P']])
                 if self.pre_self and W.selfc is not None:
@@ -2510,7 +2648,8 @@ class MidpointStep:
         if self.smooth_pred:
             self._vp, self._ap = self.tv.clone(), self.ta.clone()
         self._pre_age -= 1
-        wp.launch(k_mid_end, n, inputs=[A['z'], self.dt, self.th, A['m']], outputs=[A['x'], A['v'], A['a'], A['mv']])
+        wp.launch(k_mid_end, W.ndof, inputs=[A['z'], self.dt, self.th, A['m']], outputs=[A['x'], A['v'], A['a'], A['mv']])
+        W.chain_end(self.tx)                                                         # (the chain rotations: q_n updated, x[n:] back to 0)
         wp.launch(k_mid_vmax, 1, inputs=[A['mv'], self.mtot], outputs=[self.ps])
 
     def vmax(self):
