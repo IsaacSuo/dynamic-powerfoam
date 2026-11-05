@@ -1170,8 +1170,12 @@ class ClosureWarp(SkinWarp):
           frame), ndof = n + nr; q = exp(x[n + k]) q_n (k_F8c), F_B = R (no deformation inside the cell);
         - no volume, variance or outer-layer energy (a rigid body's are constant); the one-way cap's fit not used (M2^-1 = I
           only to keep its unused value finite);
-        - every bond touching one carries the whole material as a parallel bond: kn = E A / L, ks = G A / L, kb = E I / L,
-          kt = G J / L, I = A^2 / 4 pi, J = 2 I (a disk of the wall's area), per unit density as the rest;
+        - every bond touching one carries the whole material as a rod segment: kn = E A / L, ks = G A / L, kb = E I / L,
+          kt = G J / L, I = A^2 / 4 pi, J = 2 I, per unit density as the rest, A the cross-section of the cylinder with
+          the segment's volume, (V_i + V_j) / 2 L (11-06, user: the tail is a solid tail the spheres only approximate; the
+          walls' necks gave a rod 16 x softer in bending than that, median over the tail, some joints near hinges; the
+          body's energy and mass go by the cells' volumes too). Checked against the discrete rod and Timoshenko on a
+          straight chain (scratch chain_beam.py);
         - rotational inertia 2/5 m r^2 (r of the equal-volume sphere; m = V, per unit density): rot_inertia().
         Without set_chain nothing changes (ndof = n)"""
         st = self.st; n = self.n; dev = st.X.device
@@ -1191,7 +1195,7 @@ class ClosureWarp(SkinWarp):
         bt = isc[st.i.long()] | isc[st.j.long()]                                     # (the bonds touching a chain cell)
         mu, lam = self.mu, self.lam
         E = mu*(3*lam+2*mu)/(lam+mu); G = mu
-        A, L = st.A[bt], st.L[bt]; I = A*A/(4*math.pi)
+        L = st.L[bt]; A = .5*(st.V[st.i.long()[bt]]+st.V[st.j.long()[bt]])/L; I = A*A/(4*math.pi)   # (the equal-volume rod's section)
         kch = torch.stack([E*A/L, G*A/L, E*I/L, G*2*I/L], 1)
         self._kb_t[bt] = kch; self._kb_unit = self._kb_t/self.mu
         self._wv_t[bt] = 0.; self._wv_unit[bt] = 0.
