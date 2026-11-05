@@ -1,0 +1,10 @@
+# the lion's material identification (free_surface/lion_inverse.py), the versions it was run with (11-06, conda env om)
+# torch: the CUDA build matching the server's driver first, e.g.
+#   pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cu128
+warp-lang==1.10.0
+numpy==2.2.6
+scipy==1.15.3
+numba==0.61.2
+pillow==12.0.0
+PyYAML==6.0.3
+tqdm==4.67.1
