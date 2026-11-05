@@ -2,6 +2,34 @@
 
 分支 `lion-inverse`（从 `worktree-dem-contact` 分出）。需要的数据都在仓库里，即 `inverse_data/lion/` 下的真值掩码、相机、坐标偏移和泡沫，不需要其它工作区，也不需要 Power Foam 渲染器。
 
+## 一条命令跑完（无人值守）
+
+```bash
+cd /root/dynamic-powerfoam && git fetch origin && git checkout lion-inverse
+conda activate lion
+nohup bash run_lion_inverse.sh > lion_inverse.log 2>&1 &
+tail -f lion_inverse.log          # 看进度，Ctrl-C 只停止查看
+```
+
+脚本按顺序执行以下各段：
+- `env`：缺包时装上 `requirements-inverse.txt`，不动 torch。
+- `check`：第 0 帧 IoU 和第 5–8 帧质心，和本机的数字逐项对比，对不上就停下并说明原因。
+- `synth`：合成数据，并判定 PASS 或 FAIL。FAIL 不会中止，后面照常跑。
+- `real`：真值视频。
+- `eval`：拟合出的材料和真值材料各跑一次全 24 帧。
+- `summary`：写 `out_inverse/summary.txt`，并打包 `lion_inverse_results.tgz`。最后只需要把这个包拷回来。
+
+**中断后续跑**：重跑同一条命令即可。已经完成的段会自动跳过，LM 从最后一次被接受的点接着跑。
+
+**也可以单独跑某一段**：`bash run_lion_inverse.sh check`，其余段同理。
+
+**可选的环境变量**：
+- `PY`：python 路径，默认 `python`；
+- `JOBS`：同时运行的进程数，默认按空闲显存计算，每个约 4.5 GB，最多 7 个；
+- `OUT`：输出目录，默认 `out_inverse`。
+
+下面各节说明脚本里每一步做的是什么。
+
 ## 跑的是什么
 
 **正向模型**是旧 DEM，和 10-31 本机的 `dem_old1` 那次完全相同：
