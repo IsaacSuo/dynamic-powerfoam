@@ -16,7 +16,9 @@ sys.path.insert(0, str(ROOT))
 import free_surface.lion_inverse as li
 lnb, out = float(sys.argv[1]), sys.argv[2]
 li.set_scene('pacnerf_e0')
-rec = dict(t=[], com=[], F=[], tau_site=[], tau_ball=[], tau_mat=[], cop_site=[], cop_ball=[], cop_mat=[], Fn=[], n=[])
+if len(sys.argv) > 3:
+    li.GLUE = sys.argv[3]
+rec = dict(t=[], com=[], F=[], tau_model=[], tau_site=[], tau_ball=[], tau_mat=[], cop_site=[], cop_ball=[], cop_mat=[], Fn=[], n=[])
 maps = {k: [] for k in range(5, 10)}
 
 
@@ -32,7 +34,7 @@ def probe(s, W, ST, cbody, Rb):
     t = s*li.DT
     rec['t'].append(t); rec['com'].append(c.cpu().numpy())
     if not bool(on.any()):
-        for k in ('F', 'tau_site', 'tau_ball', 'tau_mat', 'cop_site', 'cop_ball', 'cop_mat'):
+        for k in ('F', 'tau_model', 'tau_site', 'tau_ball', 'tau_mat', 'cop_site', 'cop_ball', 'cop_mat'):
             rec[k].append(np.zeros(3))
         rec['Fn'].append(0.); rec['n'].append(0)
         return
@@ -42,6 +44,8 @@ def probe(s, W, ST, cbody, Rb):
     xm = xs-R[:, None]*torch.einsum('nij,nj->ni', FB, Ftn)/Ftn.norm(dim=1, keepdim=True)
     w = fn[on]/fn[on].sum()
     rec['F'].append(f.sum(0).cpu().numpy())
+    xt = xs+torch.einsum('nij,nj->ni', FB, W.tbroff[on]) if W.glue_point == 'material' else xs   # (where the model applies the tangential force)
+    rec['tau_model'].append((torch.linalg.cross(xs-c, fn[on][:, None]*up)+torch.linalg.cross(xt-c, ff[on])).sum(0).cpu().numpy())
     for nm, xp in (('site', xs), ('ball', xb), ('mat', xm)):
         rec['tau_'+nm].append(torch.linalg.cross(xp-c, f).sum(0).cpu().numpy())
         rec['cop_'+nm].append((w[:, None]*xp).sum(0).cpu().numpy())

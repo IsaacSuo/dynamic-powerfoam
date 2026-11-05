@@ -35,7 +35,7 @@ for p in mfiles:
 z = np.load(dfile)
 t, c, F = z['t'], z['com'], z['F']
 G0 = -.05
-tau_s, tau_m = z['tau_site']@at, z['tau_mat']@at
+tau_s, tau_m = (z['tau_model'] if 'tau_model' in z else z['tau_site'])@at, z['tau_mat']@at
 cops = ((z['cop_site']-c)*np.array([1, 0, 1]))@ef; copm = ((z['cop_mat']-c)*np.array([1, 0, 1]))@ef
 Hm = c[:, 1]-G0
 runs.append(('ours (sites)', t, F@ef, F[:, 1], tau_s, None, None, 1e3*np.where(z['Fn'] > 0, cops, 0), tau_m))
