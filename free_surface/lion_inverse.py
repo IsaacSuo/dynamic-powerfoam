@@ -1,7 +1,7 @@
 """Material identification of the Vid2Sim lion with the old DEM (fitted skin, one-way cap, Hertz ground, no self contact,
 as dem_contact_lion.py's dem_old1 run on 10-31: the smoothed start and the carried region on), pure elasticity.
 
-Unknowns theta = (ln E, nu, ln beta); fixed from the dataset: the foam's rest state (inverse_data/lion/foam, the
+Unknowns (ln E, nu, ln beta), solved for as (ln mu, ln K/mu, ln beta) (11-06, see phi_of); fixed from the dataset: the foam's rest state (inverse_data/lion/foam, the
 fourier_lion_8k_round_clean cells), start velocity (0, 0, -g dt / 2) with Vid2Sim's dt 0.05 (vid2sim_to_springgaus.py),
 gravity -z, the ground z = -0.2 in the foam's frame (-0.7 in the world: x_world = x_foam - offset), frictionless (mu 0).
 No self contact: Vid2Sim's ground truth has none (user, 11-06). beta is bounded below by --beta-min (default 0.05: the
@@ -40,8 +40,23 @@ DATA = ROOT/'inverse_data'/'lion'
 DT, UP, C0, V0 = 1/1200, 2, -.2, (0., 0., -.245)
 FPS, SPF, NFRAMES = 20, 60, 24
 GT = dict(E=10648.614517785627, nu=.3912951704721983)
-PARAMS = ('lnE', 'nu', 'lnbeta')
-NU_RANGE = (.01, .49)
+PARAMS = ('lnmu', 'lnk', 'lnbeta')                                                 # LM's unknowns (11-06): shear modulus, k = K / mu, beta
+NU_RANGE = (0., .49)
+LNK_RANGE = (math.log(2/3), math.log(2*(1+NU_RANGE[1])/(3*(1-2*NU_RANGE[1]))))     # (nu 0 .. 0.49: k 2/3 .. 49.7)
+
+
+def phi_of(th):
+    """(ln E, nu, ln beta) -> (ln mu, ln k, ln beta), mu = E / 2 (1 + nu) in Pa, k = K / mu = 2 (1 + nu) / 3 (1 - 2 nu).
+    11-06: in nu the silhouettes' response is strongly nonlinear (k grows from 2.2 at nu 0.3 to 50 at 0.49), and the
+    first Gauss-Newton step from nu 0.3 ran to the bound 0.49 on a synthetic truth of 0.391"""
+    E, nu = math.exp(th[0]), float(th[1])
+    return np.array([math.log(E/(2*(1+nu))), math.log(2*(1+nu)/(3*(1-2*nu))), float(th[2])])
+
+
+def theta_of(ph):
+    """(ln mu, ln k, ln beta) -> (ln E, nu, ln beta): E = 9 k mu / (3 k + 1), nu = (3 k - 2) / 2 (3 k + 1)"""
+    mu, k = math.exp(ph[0]), math.exp(ph[1])
+    return np.array([math.log(9*k*mu/(3*k+1)), (3*k-2)/(2*(3*k+1)), float(ph[2])])
 
 
 # ---------------------------------------------------------------- the observation
@@ -299,43 +314,43 @@ def cmd_lm(a):
     held_c = lambda f_: float(((rel(f_)[1:K+1][:, held]-obs[1:K+1][:, held])**2).sum())
     path = out/'lm.json'
     hist = json.loads(path.read_text()) if a.resume and path.exists() else []
-    th = np.array([e['theta'] for e in hist if e['accepted']][-1]) if hist else np.array(a.start, float)
+    if hist and 'phi' not in hist[-1]:
+        raise SystemExit('%s is from the version with nu as the unknown (before 11-06): delete %s and start again' % (path, out))
+    th = np.array([e['phi'] for e in hist if e['accepted']][-1]) if hist else phi_of(np.array(a.start, float))   # (th: phi from here on)
     it0 = max([e['it'] for e in hist], default=0)
-
-    def clamp(t_):
-        t_ = t_.copy(); t_[1] = min(max(t_[1], NU_RANGE[0]), NU_RANGE[1]); t_[2] = max(t_[2], lnb_min)
-        return t_
+    lo_b, hi_b = np.array([-math.inf, LNK_RANGE[0], lnb_min]), np.array([math.inf, LNK_RANGE[1], math.inf])
+    clamp = lambda t_: np.minimum(np.maximum(t_, lo_b), hi_b)
+    eps = np.array(a.eps, float)
 
     def log(it, t_, c_, f_, acc, info):
-        e = dict(it=it, theta=t_.tolist(), E=math.exp(t_[0]), nu=t_[1], beta=math.exp(t_[2]), cost=c_, accepted=acc,
-                 rms=math.sqrt(c_/(K*len(fit)*5)) if math.isfinite(c_) else None, held=held_c(f_) if f_ is not None else None,
-                 log10E_err=abs(t_[0]-math.log(GT['E']))/math.log(10), nu_err=abs(t_[1]-GT['nu']), **info)
+        q = theta_of(t_)
+        e = dict(it=it, phi=t_.tolist(), theta=q.tolist(), E=math.exp(q[0]), nu=q[1], beta=math.exp(q[2]), mu=math.exp(t_[0]), k=math.exp(t_[1]),
+                 cost=c_, accepted=acc, rms=math.sqrt(c_/(K*len(fit)*5)) if math.isfinite(c_) else None, held=held_c(f_) if f_ is not None else None,
+                 log10E_err=abs(q[0]-math.log(GT['E']))/math.log(10), nu_err=abs(q[1]-GT['nu']), **info)
         hist.append(e); path.write_text(json.dumps(hist, indent=1))
-        print('it %d %s: E %.1f (log10 error %.3f), nu %.4f, beta %.4f; cost %.4e (RMS %.3f px; held view %s)' % (
-            it, 'accepted' if acc else 'rejected', e['E'], e['log10E_err'], e['nu'], e['beta'], c_, e['rms'] if e['rms'] else float('nan'),
-            '%.4e' % e['held'] if e['held'] is not None else '-'), flush=True)
+        print('it %d %s: E %.1f (log10 error %.3f), nu %.4f, beta %.4f (mu %.1f, K/mu %.3f); cost %.4e (RMS %.3f px; held view %s)' % (
+            it, 'accepted' if acc else 'rejected', e['E'], e['log10E_err'], e['nu'], e['beta'], e['mu'], e['k'], c_,
+            e['rms'] if e['rms'] else float('nan'), '%.4e' % e['held'] if e['held'] is not None else '-'), flush=True)
 
     def jac(t_):
-        """central differences, all 2p runs at once; a parameter at its bound: the pair moved inside"""
+        """central differences in phi (steps --eps), all 2p runs at once; a parameter at its bound: the pair moved inside"""
         ths, steps = [], []
         for j in range(3):
-            tp, tm = t_.copy(), t_.copy(); tp[j] += a.eps; tm[j] -= a.eps
-            if j == 1 and tm[1] < NU_RANGE[0]:
-                tm[1], tp[1] = NU_RANGE[0], NU_RANGE[0]+2*a.eps
-            if j == 1 and tp[1] > NU_RANGE[1]:
-                tp[1], tm[1] = NU_RANGE[1], NU_RANGE[1]-2*a.eps
-            if j == 2 and tm[2] < lnb_min:
-                tm[2], tp[2] = lnb_min, lnb_min+2*a.eps
+            tp, tm = t_.copy(), t_.copy(); tp[j] += eps[j]; tm[j] -= eps[j]
+            if tm[j] < lo_b[j]:
+                tm[j], tp[j] = lo_b[j], lo_b[j]+2*eps[j]
+            if tp[j] > hi_b[j]:
+                tp[j], tm[j] = hi_b[j], hi_b[j]-2*eps[j]
             ths += [tp, tm]; steps.append(tp[j]-tm[j])
-        fs = run_batch(ths, K, a.tol, out/'runs', a.jobs, 'jac')
+        fs = run_batch([theta_of(t__) for t__ in ths], K, a.tol, out/'runs', a.jobs, 'jac')
         if any(f_ is None for f_ in fs):
             raise SystemExit('a difference run failed: %s' % [k for k, f_ in enumerate(fs) if f_ is None])
         J_ = np.stack([(flat(fs[2*j])-flat(fs[2*j+1]))/steps[j] for j in range(3)], 1)
-        np.savez(out/'jac.npz', theta=t_, J=J_)
+        np.savez(out/'jac.npz', phi=t_, theta=theta_of(t_), J=J_)
         return J_
 
     # the start: the run at tol and at --ref-tol (the forward's own error), together
-    f, f_ref = run_batch([th, th], K, [a.tol, a.ref_tol], out/'runs', a.jobs, 'start')
+    f, f_ref = run_batch([theta_of(th)]*2, K, [a.tol, a.ref_tol], out/'runs', a.jobs, 'start')
     if f is None or f_ref is None:
         raise SystemExit('the start run failed')
     dvec = flat(f)-flat(f_ref)
@@ -352,15 +367,16 @@ def cmd_lm(a):
                 return np.linalg.lstsq(J, -r, rcond=None)[0]
             return np.linalg.lstsq(np.vstack((J, np.diag(np.sqrt(mu*D)))), np.concatenate((-r, np.zeros(3))), rcond=None)[0]
         res = float(np.linalg.norm(J@np.linalg.lstsq(J, dvec, rcond=None)[0]))
-        while True:
+        ok = lambda s_: dn(s_) <= radius and float(np.abs(s_).max()) <= a.max_step   # (the region and, from the first step on,
+        while True:                                                                  # at most --max-step in any parameter)
             mu, s_ = 0., step(0.)
-            if dn(s_) > radius:
+            if not ok(s_):
                 lo, hi = 0., 1.
-                while dn(step(hi)) > radius:
+                while not ok(step(hi)):
                     lo, hi = hi, 2*hi
                 for _ in range(60):
                     m_ = .5*(lo+hi)
-                    lo, hi = (m_, hi) if dn(step(m_)) > radius else (lo, m_)
+                    lo, hi = (m_, hi) if not ok(step(m_)) else (lo, m_)
                 mu, s_ = hi, step(hi)
             tt = clamp(th+s_); s_ = tt-th
             pred, slope = float(np.linalg.norm(J@s_)), float(2*r@(J@s_))
@@ -370,7 +386,7 @@ def cmd_lm(a):
             if slope >= 0:
                 print('LM: the step (at a bound) does not descend: stop', flush=True)
                 return finish(a, th)
-            f_t = run_batch([tt], K, a.tol, out/'runs', 1, 'trial')[0]
+            f_t = run_batch([theta_of(tt)], K, a.tol, out/'runs', 1, 'trial')[0]
             c_t = float(flat(f_t)@flat(f_t)) if f_t is not None else math.inf
             kap = c_t-c-slope
             al = -slope/(2*kap) if kap > 0 else math.inf
@@ -387,10 +403,11 @@ def cmd_lm(a):
     return finish(a, th)
 
 
-def finish(a, th):
+def finish(a, ph):
+    th = theta_of(ph)
     print('final theta: E %.2f, nu %.4f, beta %.5f; log10 E error %.3f, nu error %.4f' % (
         math.exp(th[0]), th[1], math.exp(th[2]), abs(th[0]-math.log(GT['E']))/math.log(10), abs(th[1]-GT['nu'])), flush=True)
-    (a.out/'final_theta.json').write_text(json.dumps(dict(theta=th.tolist(), E=math.exp(th[0]), nu=th[1], beta=math.exp(th[2]))))
+    (a.out/'final_theta.json').write_text(json.dumps(dict(theta=th.tolist(), phi=ph.tolist(), E=math.exp(th[0]), nu=th[1], beta=math.exp(th[2]))))
     return th
 
 
@@ -439,7 +456,8 @@ def main():
     q.add_argument('--held', type=int, nargs='*', default=[5])
     q.add_argument('--tol', type=float, default=1e-3)
     q.add_argument('--ref-tol', type=float, default=2e-3)
-    q.add_argument('--eps', type=float, default=1e-2, help='central differences\' step in theta')
+    q.add_argument('--eps', type=float, nargs=3, default=[.01, .05, .01], help='central differences\' steps in (ln mu, ln k, ln beta)')
+    q.add_argument('--max-step', type=float, default=.3, help='at most this change of any of ln mu, ln k, ln beta per step (the first one too)')
     q.add_argument('--beta-min', type=float, default=.05)
     q.add_argument('--iters', type=int, default=15)
     q.add_argument('--jobs', type=int, default=7, help='runs at once (an iteration has 6 difference runs)')

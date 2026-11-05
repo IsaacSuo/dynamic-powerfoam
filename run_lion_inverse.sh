@@ -80,9 +80,10 @@ run_lm() {   # name obs start [extra]
   if [ -f "$OUT/$name/final_theta.json" ]; then say "$name: done before, skipped"; return; fi
   local res=""; [ -f "$OUT/$name/lm.json" ] && res="--resume"
   say "$name: LM ($obs observations), $JOBS runs at once ${res:+(resuming)}"
-  $LI lm --obs $obs --start $start --frames 15 --jobs $JOBS --out "$OUT/$name" $res "$@" > "$OUT/$name.log" 2>&1
-  local rc=$?
-  grep -E "^it |stop|final" "$OUT/$name.log" | tail -30
+  # (the LM's own log in $OUT/$name.log; its progress lines also here, as they come)
+  $LI lm --obs $obs --start $start --frames 15 --jobs $JOBS --out "$OUT/$name" $res "$@" 2>&1 | tee -a "$OUT/$name.log" \
+    | grep --line-buffered -E "^it |runs \(|forward's error|stop|final|Traceback|Error"
+  local rc=${PIPESTATUS[0]}
   [ $rc -eq 0 ] && [ -f "$OUT/$name/final_theta.json" ] || die "$name: LM stopped with code $rc, see $OUT/$name.log (rerun this script to resume)"
   say "$name: finished"
 }
@@ -101,6 +102,22 @@ EOF
 }
 
 stage_real() { run_lm real real "$REAL_START"; }
+
+stage_lmsmoke() {   # (not part of `all`) one LM iteration on 7 frames of synthetic data: does the first step stay inside the cap?
+  rm -rf "$OUT/lmsmoke" "$OUT/lmsmoke.log"
+  say "lmsmoke: one LM iteration, synthetic, frames 0-7 (about 20-30 min)"
+  $LI lm --obs synth --truth $SYN_TRUTH --start $SYN_START --frames 7 --iters 1 --jobs $JOBS --out "$OUT/lmsmoke" 2>&1 | tee "$OUT/lmsmoke.log" \
+    | grep --line-buffered -E "^it |runs \(|forward's error|stop|final|Traceback|Error"
+  $PY - "$OUT/lmsmoke/lm.json" <<'EOF' || die "lmsmoke: no LM history"
+import json, sys
+h = json.load(open(sys.argv[1]))
+a, b = h[0], h[1]
+d = [abs(x-y) for x, y in zip(b['phi'], a['phi'])]
+print('lmsmoke: first step %s; change of (ln mu, ln K/mu, ln beta) %s, largest %.3f (cap 0.3); nu %.4f -> %.4f (truth 0.3913); E %.1f -> %.1f (truth 10648.6)' % (
+    'accepted' if b['accepted'] else 'rejected', ['%.3f' % v for v in d], max(d), a['nu'], b['nu'], a['E'], b['E']))
+sys.exit(0 if max(d) <= .3+1e-9 else 1)
+EOF
+}
 
 stage_eval() {
   if [ ! -f "$OUT/real_eval/eval.json" ]; then
@@ -135,8 +152,9 @@ case "${1:-all}" in
   check) stage_check ;;
   synth) stage_synth ;;
   real) stage_real ;;
+  lmsmoke) stage_lmsmoke ;;
   eval) stage_eval ;;
   summary) stage_summary ;;
   all) stage_env; stage_check; stage_synth; stage_real; stage_eval; stage_summary; say "all done" ;;
-  *) echo "usage: bash run_lion_inverse.sh [all|env|check|synth|real|eval|summary]"; exit 2 ;;
+  *) echo "usage: bash run_lion_inverse.sh [all|env|check|lmsmoke|synth|real|eval|summary]"; exit 2 ;;
 esac
