@@ -103,6 +103,7 @@ class ClosureTerms:
         z1 = torch.zeros(n, dtype=dt, device=dev)
         front = z1.index_add(0, self.i, self.wi*self.A*self.hi/3).index_add(0, self.j, self.wj*self.A*self.hj/3)
         pt, rt = tt(p), tt(r)
+        self.r = rt                                                                 # (all cells' radii: the consistent mass's cell moments)
         G = Geometry(pt, rt, structure_triangulation(np.asarray(p), np.asarray(r), device=dev))
         self.c_body = torch.nonzero(G.patch_A > 0).flatten()                       # the exposed spheres
         self.c_r, self.c_A, self.c_N = rt[self.c_body], G.patch_A[self.c_body].detach(), G.patch_nn[self.c_body].detach()

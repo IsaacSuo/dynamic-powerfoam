@@ -1,0 +1,156 @@
+{
+ "source": "data/pacnerf/data/elastic/0",
+ "frame": 0,
+ "offset": [
+  0.5,
+  -0.050000000000000044,
+  0.5
+ ],
+ "box_min": [
+  -0.5,
+  0.1,
+  -0.5
+ ],
+ "box_max": [
+  0.5,
+  1.0,
+  0.5
+ ],
+ "ground_y_in_scene": -0.050000000000000044,
+ "views": 11,
+ "checks": {
+  "r_5_0": {
+   "projected": [
+    200.0,
+    92.4
+   ],
+   "mask_centroid": [
+    199.3,
+    100.3
+   ],
+   "inside": true,
+   "mask_pixels": 6007
+  },
+  "r_10_0": {
+   "projected": [
+    200.0,
+    91.9
+   ],
+   "mask_centroid": [
+    199.2,
+    100.0
+   ],
+   "inside": true,
+   "mask_pixels": 5761
+  },
+  "r_2_0": {
+   "projected": [
+    200.0,
+    98.0
+   ],
+   "mask_centroid": [
+    199.9,
+    107.0
+   ],
+   "inside": true,
+   "mask_pixels": 7250
+  },
+  "r_4_0": {
+   "projected": [
+    200.0,
+    179.5
+   ],
+   "mask_centroid": [
+    199.4,
+    180.9
+   ],
+   "inside": true,
+   "mask_pixels": 9440
+  },
+  "r_1_0": {
+   "projected": [
+    200.0,
+    105.8
+   ],
+   "mask_centroid": [
+    199.9,
+    114.2
+   ],
+   "inside": true,
+   "mask_pixels": 8080
+  },
+  "r_6_0": {
+   "projected": [
+    200.0,
+    103.3
+   ],
+   "mask_centroid": [
+    199.0,
+    112.0
+   ],
+   "inside": true,
+   "mask_pixels": 7657
+  },
+  "r_0_0": {
+   "projected": [
+    200.0,
+    91.4
+   ],
+   "mask_centroid": [
+    200.1,
+    100.2
+   ],
+   "inside": true,
+   "mask_pixels": 6402
+  },
+  "r_9_0": {
+   "projected": [
+    200.0,
+    91.1
+   ],
+   "mask_centroid": [
+    198.9,
+    100.3
+   ],
+   "inside": true,
+   "mask_pixels": 6273
+  },
+  "r_7_0": {
+   "projected": [
+    200.0,
+    119.7
+   ],
+   "mask_centroid": [
+    198.6,
+    126.5
+   ],
+   "inside": true,
+   "mask_pixels": 8117
+  },
+  "r_3_0": {
+   "projected": [
+    200.0,
+    91.9
+   ],
+   "mask_centroid": [
+    199.5,
+    100.4
+   ],
+   "inside": true,
+   "mask_pixels": 6263
+  },
+  "r_8_0": {
+   "projected": [
+    200.0,
+    112.3
+   ],
+   "mask_centroid": [
+    199.9,
+    119.8
+   ],
+   "inside": true,
+   "mask_pixels": 8122
+  }
+ },
+ "note": "scene = PAC-NeRF world + offset; OpenGL c2w; ground plane y = ground_y_in_scene."
+}

@@ -36,13 +36,30 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-DATA = ROOT/'inverse_data'/'lion'
-DT, UP, C0, V0 = 1/1200, 2, -.2, (0., 0., -.245)
-FPS, SPF, NFRAMES = 20, 60, 24
-GT = dict(E=10648.614517785627, nu=.3912951704721983)
+DT = 1/1200
+SCENE_NAME = 'lion'
+SCENES = dict(                                                                      # (--scene; 11-06: PAC-NeRF for the inversion, Vid2Sim forward only)
+    lion=dict(data='lion', cam='vid2sim', fps=20, nframes=24, up=2, c0=-.2, v0=(0., 0., -.245), mu=0.,
+              gt=dict(E=10648.614517785627, nu=.3912951704721983),
+              photos='/home/fangsuo/py/dynamic-powerfoam/data/vid2sim/ext/lion/data'),
+    pacnerf_e0=dict(data='pacnerf_e0', cam='nerf', fps=24, nframes=14, up=1, c0=-.05,            # (the ground at PAC-NeRF's y = 0,
+                    v0=(-0.4078950600549248, -.5, -0.06629882732047176), mu=1e6,                 # the scene's -0.05; glued, user 11-06)
+                    gt=dict(E=23008.377696598774, nu=.30079413488868173),
+                    photos='/home/fangsuo/py/dynamic-powerfoam/data/pacnerf/data/elastic/0/data'))
+
+
+def set_scene(name):
+    global SCENE, DATA, FPS, SPF, NFRAMES, UP, C0, V0, MU, GT, FOAM
+    SCENE = SCENES[name]; DATA = ROOT/'inverse_data'/SCENE['data']
+    FPS, NFRAMES, UP, C0, V0, MU, GT = SCENE['fps'], SCENE['nframes'], SCENE['up'], SCENE['c0'], SCENE['v0'], SCENE['mu'], SCENE['gt']
+    SPF = int(round(1/(FPS*DT))); FOAM = DATA/'foam'
+
+
+set_scene('lion')
 PARAMS = ('lnmu', 'lnk', 'lnbeta')                                                 # LM's unknowns (11-06): shear modulus, k = K / mu, beta
-NU_RANGE = (0., .49)
-LNK_RANGE = (math.log(2/3), math.log(2*(1+NU_RANGE[1])/(3*(1-2*NU_RANGE[1]))))     # (nu 0 .. 0.49: k 2/3 .. 49.7)
+NU_RANGE = (.01, .49)                                                              # (11-06: at nu 0 the forward failed, Vid2Sim's real stage)
+_k = lambda nu: 2*(1+nu)/(3*(1-2*nu))
+LNK_RANGE = (math.log(_k(NU_RANGE[0])), math.log(_k(NU_RANGE[1])))                # (nu 0.01 .. 0.49: k 0.69 .. 49.7)
 
 
 def phi_of(th):
@@ -61,16 +78,30 @@ def theta_of(ph):
 
 # ---------------------------------------------------------------- the observation
 def cameras():
-    meta = json.loads((DATA/'cameras.json').read_text())
-    off = np.array(json.loads((DATA/'conversion.json').read_text())['offset'], float)
-    cams = [meta['cameras'][nm] for nm in meta['camera_names']]
-    return meta, cams, off
+    """meta (width, height, camera_names), per view K, R, t (OpenCV, world to camera), the foam frame's offset (x_world = x_foam - offset)"""
+    if SCENE['cam'] == 'vid2sim':
+        meta = json.loads((DATA/'cameras.json').read_text())
+        off = np.array(json.loads((DATA/'conversion.json').read_text())['offset'], float)
+        cams = [meta['cameras'][nm] for nm in meta['camera_names']]
+        return meta, cams, off
+    tr = json.loads((DATA/'transforms_all.json').read_text())                       # (NeRF / OpenGL c2w in the foam's own frame)
+    W, H = int(tr['w']), int(tr['h']); focal = .5*W/math.tan(.5*tr['camera_angle_x'])
+    fr = sorted(tr['frames'], key=lambda f_: int(Path(f_['file_path']).name.split('_')[1]))
+    cams, names = [], []
+    for f_ in fr:
+        c2w = np.array(f_['transform_matrix'], float)
+        Rw2c = (c2w[:3, :3]@np.diag([1., -1., -1.])).T
+        cams.append(dict(K=[[focal, 0., (W-1)/2], [0., focal, (H-1)/2], [0., 0., 1.]], R=Rw2c.tolist(), t=(-Rw2c@c2w[:3, 3]).tolist()))
+        names.append(Path(f_['file_path']).name.split('_')[1])
+    return dict(width=W, height=H, camera_names=names), cams, np.zeros(3)
 
 
 def gt_masks():
-    """(views, frames, H, W) alpha in [0, 1], float32"""
+    """(views, frames, H, W) alpha in [0, 1], float32 (PAC-NeRF: frame 0 only for now, the Power Foam scene's masks)"""
     from PIL import Image
     meta, _, _ = cameras()
+    if SCENE['cam'] == 'nerf':
+        return np.stack([np.asarray(Image.open(DATA/'masks'/('r_%s_0.png' % nm)), np.float32)[None]/255. for nm in meta['camera_names']])
     return np.stack([np.stack([np.asarray(Image.open(DATA/'masks'/nm/('%02d.png' % f)), np.float32)/255. for f in range(NFRAMES)])
                      for nm in meta['camera_names']])
 
@@ -90,8 +121,9 @@ def gt_features():
     if path.exists():
         return np.load(path)['f']
     A = gt_masks()
-    f = np.stack([np.stack([moments_np(A[v, k].astype(np.float64)) for v in range(A.shape[0])]) for k in range(NFRAMES)])
-    np.savez(path, f=f)                                                              # (frames, views, 5)
+    f = np.stack([np.stack([moments_np(A[v, k].astype(np.float64)) for v in range(A.shape[0])]) for k in range(A.shape[1])])
+    if A.shape[1] == NFRAMES:                                                        # (frames, views, 5); cached only when complete
+        np.savez(path, f=f)
     return f
 
 
@@ -179,6 +211,7 @@ def load_foam():
 
 # ---------------------------------------------------------------- one forward
 CHAIN = 0                                                                          # (--chain 1: ClosureWarp.set_chain, the rigid chain cells)
+DRAG = 0.                                                                          # (--drag s > 0: the ground's tangential force without memory, k_t x s)
 
 
 def chain_colouring(W, i_, j_, colouring):
@@ -218,12 +251,15 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True):
     site = st.c_body.clone() if site_np is None else torch.as_tensor(site_np, device=dev).long()
     cbody = boc[site]; Rb = torch.as_tensor(cells['radii'], dtype=f64, device=dev)[site]
     upt = tuple(1. if k == UP else 0. for k in range(3))
-    W.set_ball(cbody, Rb, upt, C0, 0.)                                               # (frictionless; no self contact)
+    W.set_ball(cbody, Rb, upt, C0, MU)                                               # (the scene's friction; no self contact)
     W.set_cap_positions(); W.set_cap_floor(0.)
     nr = W.set_chain() if CHAIN else 0
+    W.cm_cache = str(FOAM/'dem_exact_single'/'cell_moments.npz')                    # (the consistent mass's cell moments, by geometry)
     W.prepare()
     n = W.n; X = st.X; mass = m.mass.to(f64); M3 = mass[:, None]
-    up = torch.tensor(upt, dtype=f64, device=dev); fg = -9.8*M3*up; ref = float(fg.norm())
+    up = torch.tensor(upt, dtype=f64, device=dev); fg = -9.8*M3*up; ref = float(fg.norm())   # (the tolerance's scale: the lumped weight)
+    if W.cmass is not None:                                                         # (the consistent weight M g: each cell's at its material)
+        fg = -9.8*torch.as_tensor(W.cmass['rowsum'], dtype=f64, device=dev)[:, None]*up
     if nr:
         mass_e = torch.cat([mass, W.rot_inertia(mass)]); Xe = W.X_ext
         Kbb = probe_blocks(W, Xe, chain_colouring(W, st.i.cpu().numpy(), st.j.cpu().numpy(), colouring))
@@ -234,10 +270,12 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True):
     W.visc_ref(Xe)
     W.tball[0], W.tball[1] = 2., .5
     fg_e = W.ext(fg)
-    CG = TrustCG(W, mass_e, DT, per=2, product_iters=1); ST = MidpointStep(W, CG, mass_e, Kbb, fg_e, DT, 0.)
+    CG = TrustCG(W, mass_e, DT, per=2, product_iters=1); ST = MidpointStep(W, CG, mass_e, Kbb, fg_e, DT, MU)
     ST.smooth_pred = ST.carry_delta = True                                           # (dem_old1's: the same solution, faster)
+    if DRAG > 0:
+        ST.glue_memory, ST.glue_scale = False, DRAG
     tl = tol*ref
-    ST.set_state(Xe, W.ext(torch.tensor(V0, dtype=f64, device=dev).expand_as(X).clone()), fg_e/mass_e[:, None])
+    ST.set_state(Xe, W.ext(torch.tensor(V0, dtype=f64, device=dev).expand_as(X).clone()), W.ext(-9.8*up.expand_as(X).clone()))   # (free fall: a = g)
     sil = Silhouette()
     r0 = torch.as_tensor(cells['radii'], dtype=f64, device=dev)
     fs, xs, rs = [sil.features(X, r0).cpu().numpy()], [X.cpu().numpy().astype(np.float32)], [r0.cpu().numpy().astype(np.float32)]
@@ -311,7 +349,7 @@ def run_batch(thetas, frames, tol, out, jobs, tag):
                 paths[k].unlink()
             log = open(out/('%s_%d.log' % (tag, k)), 'w')
             cmd = [sys.executable, '-u', str(Path(__file__).resolve()), 'run', '--theta', *['%.17g' % v for v in th], '--frames', str(frames),
-                   '--tol', '%g' % tols[k], '--out', str(paths[k]), '--foam', str(FOAM), '--chain', str(CHAIN)]
+                   '--tol', '%g' % tols[k], '--out', str(paths[k]), '--foam', str(FOAM), '--chain', str(CHAIN), '--scene', SCENE_NAME, '--drag', '%g' % DRAG]
             live[k] = (subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(ROOT), env=env), log)
         time.sleep(2)
         for k in list(live):
@@ -494,15 +532,55 @@ def cmd_eval(a):
                                              rep['iou_held_view_train'], rep['iou_future_all_views'], rep['iou_future_held_view']), flush=True)
 
 
+def cmd_show(a):
+    """one forward at --theta to --frames, then the photos with our silhouette's outline (red) for --views: per frame one
+    row of the views (show_<frame>.png), a sheet of all frames (rows) and views (columns), and a GIF"""
+    import torch
+    from PIL import Image
+    a.out.mkdir(parents=True, exist_ok=True)
+    th = np.array(a.theta, float)
+    K = a.frames if a.frames is not None else NFRAMES-1
+    print('show: E %.2f, nu %.4f, beta %.5f; frames 0..%d; views %s' % (math.exp(th[0]), th[1], math.exp(th[2]), K, a.views), flush=True)
+    try:
+        o = forward(th, K, a.tol, save_frames=True, verbose=True)
+    except RuntimeError as e:
+        print('FAILED: %s' % e, flush=True); sys.exit(1)
+    np.savez(a.out/'show_frames.npz', x=o['x'], r=o['r'], f=o['f'], theta=th)
+    sil = Silhouette(); meta, _, _ = cameras(); names = meta['camera_names']
+    photo = lambda v, k: np.asarray(Image.open(Path(SCENE['photos'])/('r_%s_%d.png' % (names[v], k))).convert('RGB'))
+    rows = []
+    for k in range(K+1):
+        m = sil.render(torch.as_tensor(o['x'][k], device='cuda'), torch.as_tensor(o['r'][k], device='cuda')).cpu().numpy() > .5
+        row = []
+        for v in a.views:
+            im = photo(v, k).copy(); mk = m[v]
+            inner = mk.copy(); inner[1:-1, 1:-1] = mk[1:-1, 1:-1] & mk[:-2, 1:-1] & mk[2:, 1:-1] & mk[1:-1, :-2] & mk[1:-1, 2:]
+            edge = mk & ~inner
+            edge = edge | np.roll(edge, 1, 0) | np.roll(edge, 1, 1)                  # (2 px wide)
+            im[edge] = (255, 0, 0)
+            row.append(im)
+        row = np.concatenate(row, 1)
+        Image.fromarray(row).save(a.out/('show_%02d.png' % k)); rows.append(row)
+    Image.fromarray(np.concatenate(rows, 0)).resize((rows[0].shape[1]//2, len(rows)*rows[0].shape[0]//2)).save(a.out/'show_sheet.png')
+    ims = [Image.fromarray(r_) for r_ in rows]
+    ims[0].save(a.out/'show.gif', save_all=True, append_images=ims[1:], duration=1000//FPS*3, loop=0)
+    print('wrote %s: show_00..%02d.png (views %s side by side, red: our silhouette), show_sheet.png, show.gif; run %.0f s' % (
+        a.out, K, a.views, o['stats']['seconds']), flush=True)
+
+
 def main():
-    global FOAM, CHAIN
+    global FOAM, CHAIN, SCENE_NAME, DRAG
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
     q = sub.add_parser('check')
-    q.add_argument('--foam', type=Path, default=FOAM)
+    q.add_argument('--foam', type=Path, default=None)
+    q.add_argument('--scene', default='lion', choices=sorted(SCENES))
+    q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q = sub.add_parser('run')
-    q.add_argument('--foam', type=Path, default=FOAM)
+    q.add_argument('--foam', type=Path, default=None)
+    q.add_argument('--scene', default='lion', choices=sorted(SCENES))
+    q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--theta', type=float, nargs=3, required=True)
     q.add_argument('--frames', type=int, default=15)
@@ -510,7 +588,9 @@ def main():
     q.add_argument('--out', type=Path, required=True)
     q.add_argument('--save-frames', action='store_true')
     q = sub.add_parser('lm')
-    q.add_argument('--foam', type=Path, default=FOAM)
+    q.add_argument('--foam', type=Path, default=None)
+    q.add_argument('--scene', default='lion', choices=sorted(SCENES))
+    q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--out', type=Path, required=True)
     q.add_argument('--obs', choices=('real', 'synth'), default='real')
@@ -527,18 +607,33 @@ def main():
     q.add_argument('--jobs', type=int, default=7, help='runs at once (an iteration has 6 difference runs)')
     q.add_argument('--resume', action='store_true')
     q.add_argument('--relative', type=int, default=1, help='1: features minus their own frame 0 (both sides)')
+    q = sub.add_parser('show')
+    q.add_argument('--foam', type=Path, default=None)
+    q.add_argument('--scene', default='lion', choices=sorted(SCENES))
+    q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
+    q.add_argument('--chain', type=int, default=0)
+    q.add_argument('--theta', type=float, nargs=3, required=True)
+    q.add_argument('--frames', type=int, default=None)
+    q.add_argument('--views', type=int, nargs='+', default=[0, 3, 6, 10])
+    q.add_argument('--tol', type=float, default=1e-3)
+    q.add_argument('--out', type=Path, required=True)
     q = sub.add_parser('eval')
-    q.add_argument('--foam', type=Path, default=FOAM)
+    q.add_argument('--foam', type=Path, default=None)
+    q.add_argument('--scene', default='lion', choices=sorted(SCENES))
+    q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--theta', type=float, nargs=3, required=True)
     q.add_argument('--out', type=Path, required=True)
     q.add_argument('--held', type=int, nargs='*', default=[5])
     q.add_argument('--tol', type=float, default=1e-3)
     a = p.parse_args()
+    SCENE_NAME = a.scene; set_scene(SCENE_NAME)
+    if a.foam is None:
+        a.foam = FOAM
     FOAM = Path(a.foam).resolve()
-    CHAIN = int(getattr(a, 'chain', 0))
+    CHAIN = int(getattr(a, 'chain', 0)); DRAG = float(getattr(a, 'drag', 0.))
     print('foam: %s%s' % (FOAM, ', chain cells rigid with their own rotation' if CHAIN else ''), flush=True)
-    dict(check=cmd_check, run=cmd_run, lm=cmd_lm, eval=cmd_eval)[a.cmd](a)
+    dict(check=cmd_check, run=cmd_run, lm=cmd_lm, eval=cmd_eval, show=cmd_show)[a.cmd](a)
 
 
 if __name__ == '__main__':

@@ -1069,6 +1069,8 @@ class ClosureWarp(SkinWarp):
         self.cap_wall = False                                                       # (set_cap_walls: the walls' cap)
         self.cap_ul = False                                                         # (set_cap_ul: UL's F, no cap)
         self.nr, self.ndof, self.chain = 0, self.n, None                            # (set_chain: rigid chain cells with their own rotation)
+        self.mass_mode, self.cm_cache, self.cm_spacing, self.cmass = 'consistent', None, 1.5e-3, None   # (prepare(): the cells' consistent mass,
+                                                                                    # free_surface/consistent_mass.py; 'lumped': the sites' own, for comparisons)
         self._only0, self._only1 = wp.zeros(1, dtype=int, device=dev), wp.array([1], dtype=int, device=dev)
         z = lambda n_, dt_: wp.zeros(n_, dtype=dt_, device=dev)
         self.eta = self.lamv = self.smu = self.slam = 0.
@@ -1691,6 +1693,36 @@ class ClosureWarp(SkinWarp):
             self.tcpos, self.tslip, self.tff = tt(self.B['cpos']), tt(self.B['slip']), tt(self.B['ff'])
         if self.ball is not None:
             self.tbdelta, self.tbfn, self.tbff = tt(self.B['bdelta']), tt(self.B['bfn']), tt(self.B['bff'])
+        if self.mass_mode == 'consistent' and self.cmass is None:
+            self.build_mass()
+
+    def build_mass(self):
+        """the cells' consistent mass Mh (free_surface/consistent_mass.py) after set_cap_positions and set_chain: its cell
+        moments (sampled at cm_spacing, cached in cm_cache when given) and its rows; cmass = dict(M (scipy CSR, n x n, per
+        unit density), rowsum, d, J). Without the one-way cap: the lumped mass, said so"""
+        if not self.cap_pos:
+            print('  consistent mass: only with the one-way cap (set_cap_positions); the lumped mass instead', flush=True)
+            self.mass_mode = 'lumped'
+            return
+        from free_surface.consistent_mass import cell_moments, mass_matrix
+        st = self.st
+        d, J = cell_moments(st.X.cpu().numpy(), st.r.cpu().numpy(), st.V.cpu().numpy(), self.cm_spacing, self.cm_cache)
+        M = mass_matrix(self, d, J)
+        self.cmass = dict(M=M, rowsum=np.asarray(M.sum(1)).ravel(), d=d, J=J)
+
+    def mass_rows(self, mass):
+        """the solver's inertia over the ndof unknowns as CSR (indptr, indices, values): the consistent Mh plus the lumped
+        mass's departures from V on the sites (mass - V: a clamp's, a scaled inertia's), the chain rotations' inertia on
+        the diagonal; the lumped mass alone without cmass. mass: the solver's (ndof,) torch masses"""
+        import scipy.sparse as sp
+        mass = mass.detach().cpu().numpy().astype(np.float64); n = self.n
+        if self.cmass is None:
+            M = sp.diags(mass).tocsr()
+        else:
+            extra = mass[:n]-self.st.V.cpu().numpy()
+            M = sp.block_diag([self.cmass['M']+sp.diags(extra), sp.diags(mass[n:])], format='csr') if self.nr else (self.cmass['M']+sp.diags(extra)).tocsr()
+        M.sum_duplicates(); M.sort_indices()
+        return M
 
     def cold(self):
         """the closure's warm start reset to I (rest) with its blocks"""
@@ -2004,11 +2036,22 @@ def k_tr_perturb(z: wp.array(dtype=wp.vec3d), d: wp.array(dtype=wp.vec3d), tr: w
 
 
 @wp.kernel(enable_backward=False)
-def k_tr_hd(gE: wp.array(dtype=wp.vec3d), g0: wp.array(dtype=wp.vec3d), d: wp.array(dtype=wp.vec3d), cm: wp.array(dtype=wp.float64),
-            tr: wp.array(dtype=wp.float64), h: wp.float64, Hd: wp.array(dtype=wp.vec3d)):
-    """H d = (4 m / dt^2) d + (dE/dx(z + h d / |d|_max) - dE/dx(z)) |d|_max / h; d . H d into tr"""
+def k_cm_mv(ip: wp.array(dtype=int), ix: wp.array(dtype=int), mv: wp.array(dtype=wp.float64), u: wp.array(dtype=wp.vec3d),
+            c: wp.array(dtype=wp.float64), out: wp.array(dtype=wp.vec3d)):
+    """out = c[0] M u, M the inertia's CSR rows (ClosureWarp.mass_rows: the consistent mass, the same for each component)"""
     i = wp.tid()
-    hd = cm[i]*d[i]+(gE[i]-g0[i])*(wp.max(tr[TR_PMAX], wp.float64(1e-300))/h)
+    s = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
+    for e in range(ip[i], ip[i+1]):
+        s = s+mv[e]*u[ix[e]]
+    out[i] = c[0]*s
+
+
+@wp.kernel(enable_backward=False)
+def k_tr_hd(gE: wp.array(dtype=wp.vec3d), g0: wp.array(dtype=wp.vec3d), d: wp.array(dtype=wp.vec3d), Md: wp.array(dtype=wp.vec3d),
+            tr: wp.array(dtype=wp.float64), h: wp.float64, Hd: wp.array(dtype=wp.vec3d)):
+    """H d = (4 M / dt^2) d (Md, k_cm_mv) + (dE/dx(z + h d / |d|_max) - dE/dx(z)) |d|_max / h; d . H d into tr"""
+    i = wp.tid()
+    hd = Md[i]+(gE[i]-g0[i])*(wp.max(tr[TR_PMAX], wp.float64(1e-300))/h)
     Hd[i] = hd
     wp.atomic_add(tr, TR_DHD, wp.dot(d[i], hd))
 
@@ -2192,11 +2235,27 @@ class TrustCG:
             self.tl = {k_: wp.to_torch(a_, requires_grad=False) for k_, a_ in self.lr.items() if k_ not in ('E', 'M')}
             self.tl['col'].fill_(-1)
         z = lambda dt_: wp.zeros(n, dtype=dt_, device=dev)
-        self.a = dict(z=z(wp.vec3d), p=z(wp.vec3d), d=z(wp.vec3d), r=z(wp.vec3d), y=z(wp.vec3d), Hd=z(wp.vec3d), Hp=z(wp.vec3d),
-                      g0=z(wp.vec3d), Pinv=z(wp.mat33d), cm=wp.from_torch((4*mass.to(f64)/dt**2).contiguous(), dtype=wp.float64),
+        M = W.mass_rows(mass)                                                       # (the inertia: W's consistent mass, or the lumped one)
+        self.M, self.dense = M, W.cmass is not None
+        self.ip, self.ix = wp.array(M.indptr.astype(np.int32), dtype=int, device=dev), wp.array(M.indices.astype(np.int32), dtype=int, device=dev)
+        self.mv = wp.array(M.data.astype(np.float64), dtype=wp.float64, device=dev)
+        self.c4 = wp.array([4/dt**2], dtype=wp.float64, device=dev)                # (1 / (th dt)^2, th = 1/2)
+        self.mdiag = torch.as_tensor(M.diagonal(), dtype=f64, device=dev)
+        self.a = dict(z=z(wp.vec3d), p=z(wp.vec3d), d=z(wp.vec3d), r=z(wp.vec3d), y=z(wp.vec3d), Hd=z(wp.vec3d), Hp=z(wp.vec3d), Md=z(wp.vec3d),
+                      g0=z(wp.vec3d), Pinv=z(wp.mat33d), cm=wp.from_torch((4*self.mdiag/dt**2).contiguous(), dtype=wp.float64),
                       tr=wp.zeros(24, dtype=wp.float64, device=dev), Fs=z(wp.mat33d), Js=z(mat99), ps=z(vec9), Jrs=z(mat99))
         self.t = {k_: wp.to_torch(a_, requires_grad=False) for k_, a_ in self.a.items()
                   if k_ in ('z', 'p', 'd', 'r', 'y', 'Hd', 'Hp', 'g0', 'Pinv', 'cm', 'tr')}
+        if self.dense:                                                              # (the sites' preconditioner: the dense (M_s / (th dt)^2 + kbar)^-1, single
+            assert not lr_cols, 'TrustCG: the consistent mass\'s dense preconditioner without the low-rank term'   # precision, set by MidpointStep.update_material)
+            assert not torch.backends.cuda.matmul.allow_tf32, 'TrustCG: full float32 products (TF32 off)'
+            ns = W.n
+            self.Ainv = torch.zeros(ns, ns, dtype=torch.float32, device=dev)
+            self.r32 = torch.zeros(ns, 3, dtype=torch.float32, device=dev); self.y32 = torch.zeros_like(self.r32)
+            self._tstream = wp.stream_to_torch(wp.get_stream())
+            with torch.cuda.stream(self._tstream):                                 # (cuBLAS's workspace on Warp's stream before any capture)
+                torch.mm(self.Ainv, self.r32, out=self.y32)
+            wp.synchronize_stream(wp.get_stream())
         W.linear_closure = True                                                     # (the products: the closure linearised at z)
 
         def iteration():
@@ -2204,9 +2263,14 @@ class TrustCG:
             wp.launch(k_tr_absmax, n, inputs=[A['d']], outputs=[A['tr']])
             wp.launch(k_tr_perturb, n, inputs=[A['z'], A['d'], A['tr'], self.h], outputs=[W.xw])
             W._run()                                                              # (no tape.reset here: it zeroes the gradients)
-            wp.launch(k_tr_hd, n, inputs=[W.xw.grad, A['g0'], A['d'], A['cm'], A['tr'], self.h], outputs=[A['Hd']])
+            wp.launch(k_cm_mv, n, inputs=[self.ip, self.ix, self.mv, A['d'], self.c4], outputs=[A['Md']])
+            wp.launch(k_tr_hd, n, inputs=[W.xw.grad, A['g0'], A['d'], A['Md'], A['tr'], self.h], outputs=[A['Hd']])
             wp.launch(k_tr_alpha, 1, inputs=[A['tr']])
-            if self.lr is None:
+            if self.dense:
+                wp.launch(k_tr_update_nd, n, inputs=[A['d'], A['Hd'], A['Pinv'], A['tr']], outputs=[A['p'], A['Hp'], A['r'], A['y']])
+                self._dense_apply()
+                wp.launch(k_tr_dots, n, inputs=[A['r'], A['y']], outputs=[A['tr']])
+            elif self.lr is None:
                 wp.launch(k_tr_update, n, inputs=[A['d'], A['Hd'], A['Pinv'], A['tr']], outputs=[A['p'], A['Hp'], A['r'], A['y']])
             else:
                 wp.launch(k_tr_update_nd, n, inputs=[A['d'], A['Hd'], A['Pinv'], A['tr']], outputs=[A['p'], A['Hp'], A['r'], A['y']])
@@ -2229,6 +2293,28 @@ class TrustCG:
     def save(self):
         """the closure at W's last evaluation (the accepted z) as the linearised products' base"""
         self.W.save_closure()
+
+    def _dense_apply(self):
+        """y = Ainv r on the sites (the chain rotations keep their blocks' y), as one cuBLAS product on Warp's stream:
+        ordered with the kernels and captured with them"""
+        ns = self.W.n
+        with torch.cuda.stream(self._tstream):
+            self.r32.copy_(self.t['r'][:ns])
+            torch.mm(self.Ainv, self.r32, out=self.y32)
+            self.t['y'][:ns].copy_(self.y32)
+
+    def set_inertia(self, c):
+        """the inertia's factor c = 1 / (th dt)^2 (the theta method), for the products and the blocks' diagonal"""
+        self.c4.fill_(float(c)); self.t['cm'].copy_(float(c)*self.mdiag)
+
+    def set_dense(self, kbar):
+        """the sites' preconditioner (c M_s + diag(kbar))^-1, c the inertia's factor, kbar the stiffness's own share per site
+        (MidpointStep.update_material: trace / 3 of the rest block, times the viscous factor)"""
+        ns = self.W.n; c = float(self.c4.numpy()[0])
+        A = torch.as_tensor(self.M[:ns, :ns].toarray(), dtype=f64, device=self.Ainv.device)
+        A.mul_(c); A.diagonal().add_(kbar.to(f64))
+        L = torch.linalg.cholesky(A); del A
+        self.Ainv.copy_(torch.cholesky_inverse(L).to(torch.float32)); del L
 
     def _lr_apply(self):
         """y -= D^-1 W S^-1 W^T y, y = D^-1 r on entry"""
@@ -2281,6 +2367,12 @@ class TrustCG:
         tr = self.t['tr']
         tr.zero_(); tr[TR_DELTA] = float(delta); tr[TR_STOP] = float(stop); tr[TR_CAP] = float(cap)
         wp.launch(k_tr_init, n, inputs=[g, A['Pinv']], outputs=[A['r'], A['y'], A['d'], A['p'], A['Hp'], A['tr']])
+        if self.dense:
+            self._dense_apply()
+            with torch.cuda.stream(self._tstream):
+                tr[TR_RZ] = 0.
+                wp.launch(k_tr_rz, n, inputs=[A['r'], A['y']], outputs=[A['tr']])
+                self.t['d'].copy_(self.t['y'])
         if self.lr is not None:
             self._lr_apply()
             tr[TR_RZ] = 0.
@@ -2360,6 +2452,28 @@ def k_mid_pi(zq: wp.array(dtype=wp.vec3d), xt: wp.array(dtype=wp.vec3d), x: wp.a
     gz[i] = g
     g0[i] = gE[i]
     e = wp.float64(0.5)*cm[i]*wp.dot(d, d)-wp.dot(fg[i], zq[i]-x[i])
+    if i == 0:
+        e = e+loss[0]
+    wp.atomic_add(ps, PS_PQ, e)
+    wp.atomic_add(ps, PS_GQ2, wp.dot(g, g))
+
+
+@wp.kernel(enable_backward=False)
+def k_mid_sub(zq: wp.array(dtype=wp.vec3d), xt: wp.array(dtype=wp.vec3d), dq: wp.array(dtype=wp.vec3d)):
+    i = wp.tid()
+    dq[i] = zq[i]-xt[i]
+
+
+@wp.kernel(enable_backward=False)
+def k_mid_pi_m(zq: wp.array(dtype=wp.vec3d), x: wp.array(dtype=wp.vec3d), dq: wp.array(dtype=wp.vec3d), y: wp.array(dtype=wp.vec3d),
+               fg: wp.array(dtype=wp.vec3d), gE: wp.array(dtype=wp.vec3d), loss: wp.array(dtype=wp.float64), gz: wp.array(dtype=wp.vec3d),
+               g0: wp.array(dtype=wp.vec3d), ps: wp.array(dtype=wp.float64)):
+    """k_mid_pi with the inertia's matrix: Pi(zq) = dq . y / 2 - fg . (zq - x) + E, dq = zq - xt, y = (4 / dt^2) M dq (k_cm_mv)"""
+    i = wp.tid()
+    g = y[i]-fg[i]+gE[i]
+    gz[i] = g
+    g0[i] = gE[i]
+    e = wp.float64(0.5)*wp.dot(dq[i], y[i])-wp.dot(fg[i], zq[i]-x[i])
     if i == 0:
         e = e+loss[0]
     wp.atomic_add(ps, PS_PQ, e)
@@ -2486,14 +2600,18 @@ class MidpointStep:
         self.pre_ul = self.pre_self = False
         self.lr_thr, self.lr_cap = None, 0                                          # (W.ul_blocks' low-rank term, needs pre_ul and CG built with lr_cols)
         self.smooth_pred, self.carry_delta = False, False                           # (the Newton's start, the region's start: neither changes the solution)
+        self.glue_memory, self.glue_scale = True, 1.                                # (False: the ground's tangential force without memory, a drag
+                                                                                    # -k_t s with k_t times glue_scale: c = k_t dt; 11-06, PAC-NeRF)
         self._vp = self._ap = self.delta_start = None
         self.pre_every, self._pre_age = 1, 0
         self.th = .5
         n = W.ndof; dev = 'cuda'                                                     # (ndof: set_chain's rotations after the sites; mass, Kbb, fg that long)
         z = lambda dt_, k=n: wp.zeros(k, dtype=dt_, device=dev)
         A = CG.a
-        mlin = mass.to(f64).clone(); mlin[W.n:] = 0.                                 # (the momentum sum: the sites' masses only)
+        mlin = torch.as_tensor(np.asarray(CG.M.sum(1)).ravel(), dtype=f64, device=dev); mlin[W.n:] = 0.   # (the momentum sum: M's row sums
+                                                                                    # on the sites, sum_i (M v)_i = sum_j rowsum_j v_j)
         self.a = dict(x=z(wp.vec3d), v=z(wp.vec3d), a=z(wp.vec3d), xt=z(wp.vec3d), gz=z(wp.vec3d), P=z(wp.mat33d), mv=z(wp.vec3d, 1),
+                      dq=z(wp.vec3d), yq=z(wp.vec3d),
                       m=wp.from_torch(mlin.contiguous(), dtype=wp.float64), cm=A['cm'], z=A['z'], g0=A['g0'], Pinv=A['Pinv'], dz=A['p'],
                       K=wp.from_torch(Kbb.to(f64).contiguous(), dtype=wp.mat33d), fg=wp.from_torch(fg.to(f64).contiguous(), dtype=wp.vec3d))
         self.ps = wp.zeros(8, dtype=wp.float64, device=dev)
@@ -2509,7 +2627,9 @@ class MidpointStep:
             A = self.a
             wp.launch(k_mid_query, n, inputs=[A['z'], A['dz'], self.ps], outputs=[W.xw])
             W._run()
-            wp.launch(k_mid_pi, n, inputs=[W.xw, A['xt'], A['x'], A['cm'], A['fg'], W.xw.grad, W.B['loss']], outputs=[A['gz'], A['g0'], self.ps])
+            wp.launch(k_mid_sub, n, inputs=[W.xw, A['xt']], outputs=[A['dq']])
+            wp.launch(k_cm_mv, n, inputs=[CG.ip, CG.ix, CG.mv, A['dq'], CG.c4], outputs=[A['yq']])
+            wp.launch(k_mid_pi_m, n, inputs=[W.xw, A['x'], A['dq'], A['yq'], A['fg'], W.xw.grad, W.B['loss']], outputs=[A['gz'], A['g0'], self.ps])
         tt(self.a['z']).copy_(W.X_ext); tt(self.a['x']).copy_(W.X_ext); tt(self.a['xt']).copy_(W.X_ext)
         it0 = W.iters
         W.iters = int(eval_iters)                                                   # (the evaluations' closure steps)
@@ -2530,13 +2650,16 @@ class MidpointStep:
         self.tK.copy_(self.K0*(W.mu/self.mu0))
         self.c1 = 1+W.smu/(self.th*self.dt)
         self.g8, self.cb, self.e4 = 8*W.Gs, self.muf*4/3*W.Es, 2*W.Es/self.th
+        if self.CG.dense:                                                           # (the sites' dense preconditioner: M_s / (th dt)^2 + the rest
+            ns = W.n                                                                # blocks' trace / 3 times the viscous factor)
+            self.CG.set_dense(self.tK[:ns].diagonal(dim1=1, dim2=2).sum(1)/3*self.c1)
 
     def set_theta(self, th, mass):
         """the theta method instead of the midpoint (10-31, off by default, the user keeps the midpoint): forces at x + th (x1 - x), th > 1/2 damps modes stiffer than the step by (1 - th) / th per step, the midpoint not at all;
         a slow mode's extra damping is that of a Kelvin-Voigt time (th - 1/2) dt. Pi's inertia m / (th dt)^2, the step-end centres of the contacts and the viscous rate follow"""
         W = self.W
         self.th = float(th)
-        self.CG.t['cm'].copy_(mass.to(f64)/(self.th*self.dt)**2)
+        self.CG.set_inertia(1/(self.th*self.dt)**2)                                  # (mass: unused, the CG's inertia rows)
         W.visc_weight = 1/self.th; W.total_mode()
         W.tball[0], W.tball[1] = 1/self.th, self.th
         self.update_material()
@@ -2574,7 +2697,7 @@ class MidpointStep:
         if self.smooth_pred and self._vp is not None:                               # (the start only: v, a averaged over two steps, without the mode reversing every step, which is not in z;
             h_ = self.th*self.dt                                                    # v_n = v_avg + a dt / 2, so exact for constant a, as the plain predictor)
             self.tz.copy_(self.tx+.5*h_*(self.tv+self._vp)+.5*(.5*h_*self.dt+h_*h_)*(self.ta+self._ap))
-        wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
+        wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8*self.glue_scale, self.cb], outputs=[bl['xn'], bl['kt'], bl['bound']])
         g2 = self._eval(0.)[PS_GQ2]
         self._accept()
         evals, its = 1, 0
@@ -2648,7 +2771,10 @@ class MidpointStep:
             wp.launch(k_mid_visc_bodies, n, inputs=[W.B['R'], W.B['F'], W.B['lj'], ca, ca-1], outputs=[W.ref['P'], W.ref['L']])
         if W.cap_eps > 0:
             wp.launch(k_capref, n, inputs=[W.B['G'], W.poff, W.t1, W.t2, W.capeps], outputs=[W.capnr])
-        wp.launch(k_mid_lamt, bl['k'], inputs=[W.B['bff'], W.B['bdelta']], outputs=[bl['lamt']])
+        if self.glue_memory:
+            wp.launch(k_mid_lamt, bl['k'], inputs=[W.B['bff'], W.B['bdelta']], outputs=[bl['lamt']])
+        else:                                                                       # (no memory: nothing held into the next step)
+            bl['lamt'].zero_()
         if self.smooth_pred:
             self._vp, self._ap = self.tv.clone(), self.ta.clone()
         self._pre_age -= 1
