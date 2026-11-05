@@ -72,6 +72,7 @@ python -u free_surface/lion_inverse.py run --theta 9.273184 0.3912951704721983 -
   - 第 8 帧打印 `com z -0.1224 m`；
   - 建场景约 7 s，正向 58 s。
 - 第一次运行要编译 Warp 核函数，需要几分钟。
+- 日志里会有几行 `Warp UserWarning: ... k_closP ... enable_backward=False`，这是正常的，旧 DEM 本来就会打印。
 
 ## 第一步：合成数据（检验能不能找回已知答案）
 
