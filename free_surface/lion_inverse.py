@@ -4,8 +4,9 @@ as dem_contact_lion.py's dem_old1 run on 10-31: the smoothed start and the carri
 Unknowns (ln E, nu, ln beta), solved for as (ln mu, ln K/mu, ln beta) (11-06, see phi_of); fixed from the dataset: the foam's rest state (inverse_data/lion/foam, the
 fourier_lion_8k_round_clean cells), start velocity (0, 0, -g dt / 2) with Vid2Sim's dt 0.05 (vid2sim_to_springgaus.py),
 gravity -z, the ground z = -0.2 in the foam's frame (-0.7 in the world: x_world = x_foam - offset), frictionless (mu 0).
-No self contact: Vid2Sim's ground truth has none (user, 11-06). beta is bounded below by --beta-min (default 0.05: the
-lion's one-way cap needs it, user 10-29).
+No self contact: Vid2Sim's ground truth has none (user, 11-06). beta is bounded below by the scene's beta_min
+(lion 0.05: its one-way cap needs it, user 10-29; pacnerf_e0 0.003: the consistent mass's ringing, SCENES), in every
+forward and in LM (--beta-min only raises it).
 
 Observation: per view and frame (20 fps, frame k at t = k / 20 s, 60 steps of 1/1200 s) the silhouette of the union of the
 cells' spheres (centre x, radius r0 det(F_B)^(1/3), r0 the foam's radii; at rest this union is exactly the material
@@ -40,17 +41,20 @@ DT = 1/1200
 SCENE_NAME = 'lion'
 SCENES = dict(                                                                      # (--scene; 11-06: PAC-NeRF for the inversion, Vid2Sim forward only)
     lion=dict(data='lion', cam='vid2sim', fps=20, nframes=24, up=2, c0=-.2, v0=(0., 0., -.245), mu=0.,
-              gt=dict(E=10648.614517785627, nu=.3912951704721983),
+              gt=dict(E=10648.614517785627, nu=.3912951704721983), beta_min=.05,            # (the lion's one-way cap needs it, user 10-29)
               photos='/home/fangsuo/py/dynamic-powerfoam/data/vid2sim/ext/lion/data'),
     pacnerf_e0=dict(data='pacnerf_e0', cam='nerf', fps=24, nframes=14, up=1, c0=-.05,            # (the ground at PAC-NeRF's y = 0,
                     v0=(-0.4078950600549248, -.5, -0.06629882732047176), mu=1e6,                 # the scene's -0.05; glued, user 11-06)
-                    gt=dict(E=23008.377696598774, nu=.30079413488868173),
+                    gt=dict(E=23008.377696598774, nu=.30079413488868173), beta_min=.003,  # (consistent mass: below it the sites far inside
                     photos='/home/fangsuo/py/dynamic-powerfoam/data/pacnerf/data/elastic/0/data'))
+# (pacnerf_e0's beta_min, 11-06, user: "设置个最低值": with the consistent mass the sites far inside their material carry
+# little inertia of their own, and their cell-scale modes ring after the impact undamped by the midpoint rule. Cells whose
+# det F jumps by > 0.3 between frames after frame 8: beta 1e-4 3024, 1e-3 1224, 3e-3 217, the lumped mass at 3e-3 219.)
 
 
 def set_scene(name):
-    global SCENE, DATA, FPS, SPF, NFRAMES, UP, C0, V0, MU, GT, FOAM
-    SCENE = SCENES[name]; DATA = ROOT/'inverse_data'/SCENE['data']
+    global SCENE, DATA, FPS, SPF, NFRAMES, UP, C0, V0, MU, GT, FOAM, BETA_MIN
+    SCENE = SCENES[name]; DATA = ROOT/'inverse_data'/SCENE['data']; BETA_MIN = SCENE['beta_min']
     FPS, NFRAMES, UP, C0, V0, MU, GT = SCENE['fps'], SCENE['nframes'], SCENE['up'], SCENE['c0'], SCENE['v0'], SCENE['mu'], SCENE['gt']
     SPF = int(round(1/(FPS*DT))); FOAM = DATA/'foam'
 
@@ -240,6 +244,8 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True):
     from free_surface.sphere_closure import ClosureTerms
     f64, dev = torch.float64, 'cuda'
     E, nu, beta = math.exp(theta[0]), float(theta[1]), math.exp(theta[2])
+    if beta < BETA_MIN*(1-1e-6):                                                    # (logs typed to 6 decimals)
+        raise ValueError('beta %.5g below this scene\'s minimum %.5g (SCENES beta_min)' % (beta, BETA_MIN))
     t0 = time.time()
     cells, g, site_np = load_foam()
     m = build(g, E, nu, dev, 'noslip', .25, .3, f64, kinematics='exact', nodalvol=True, nonlinear=False, ogden_alpha=2.)
@@ -369,7 +375,9 @@ def cmd_lm(a):
     out = a.out; out.mkdir(parents=True, exist_ok=True)
     K, held = a.frames, list(a.held)
     fit = [v for v in range(12) if v not in held]
-    lnb_min = math.log(a.beta_min)
+    if a.beta_min is not None and a.beta_min < BETA_MIN:
+        print('--beta-min %.4g below this scene\'s minimum: %.4g' % (a.beta_min, BETA_MIN), flush=True)
+    lnb_min = math.log(max(a.beta_min or BETA_MIN, BETA_MIN))
     if a.obs == 'real':
         obs = gt_features()
     else:
@@ -389,6 +397,7 @@ def cmd_lm(a):
     it0 = max([e['it'] for e in hist], default=0)
     lo_b, hi_b = np.array([-math.inf, LNK_RANGE[0], lnb_min]), np.array([math.inf, LNK_RANGE[1], math.inf])
     clamp = lambda t_: np.minimum(np.maximum(t_, lo_b), hi_b)
+    th = clamp(th)                                                                  # (a start below beta's minimum: at it)
     eps = np.array(a.eps, float)
 
     def log(it, t_, c_, f_, acc, info):
@@ -602,7 +611,7 @@ def main():
     q.add_argument('--ref-tol', type=float, default=2e-3)
     q.add_argument('--eps', type=float, nargs=3, default=[.01, .05, .01], help='central differences\' steps in (ln mu, ln k, ln beta)')
     q.add_argument('--max-step', type=float, default=.3, help='at most this change of any of ln mu, ln k, ln beta per step (the first one too)')
-    q.add_argument('--beta-min', type=float, default=.05)
+    q.add_argument('--beta-min', type=float, default=None, help='beta\'s lower bound (default and floor: the scene\'s beta_min)')
     q.add_argument('--iters', type=int, default=15)
     q.add_argument('--jobs', type=int, default=7, help='runs at once (an iteration has 6 difference runs)')
     q.add_argument('--resume', action='store_true')
