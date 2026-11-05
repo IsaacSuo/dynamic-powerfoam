@@ -233,7 +233,7 @@ def chain_colouring(W, i_, j_, colouring):
     return colouring(np.array(ei), np.array(ej), W.ndof)
 
 
-def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True):
+def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True, on_step=None):
     """one run at theta = (lnE, nu, lnbeta) to frame `frames`: dict(f (frames + 1, views, 5), x, r per frame if asked,
     stats); raises RuntimeError at a step that does not converge"""
     import torch
@@ -292,6 +292,8 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True):
             raise RuntimeError('step %d (t %.4f s): the solve did not converge (|grad| / weight %s after %d Newton iterations)' % (
                 s, s*DT, math.sqrt(g2)/ref if math.isfinite(g2) else g2, its))
         ST.end(); prods += p_
+        if on_step is not None:                                                     # (a probe after every step: on_step(s, W, ST, cbody, Rb))
+            on_step(s, W, ST, cbody, Rb)
         if s % SPF:
             continue
         xe = ST.tx.clone(); x = xe[:n]
