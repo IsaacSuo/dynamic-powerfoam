@@ -349,6 +349,32 @@ def cmd_lm(a):
         np.savez(out/'jac.npz', phi=t_, theta=theta_of(t_), J=J_)
         return J_
 
+    ipath = out/'identifiability.json'
+    ident_hist = json.loads(ipath.read_text()) if a.resume and ipath.exists() else []
+
+    def ident(t_, J_, r_, d_):
+        """how tightly the data hold each parameter at t_ (11-06, user: nu could still climb slowly): the Gauss-Newton
+        covariance s^2 (J^T J)^-1 in phi with s^2 the residual's variance per entry (and, as a floor, the forward's own
+        error's), carried to (log10 E, nu, ln beta) by the map's Jacobian; E-nu correlation; J's conditioning. A large
+        sigma(nu) or |corr(E, nu)| near 1 means the silhouettes do not fix nu (a valley), whatever value the LM reports"""
+        N = len(r_); s2, n2 = float(r_@r_)/max(N-3, 1), float(d_@d_)/N
+        A = np.linalg.inv(J_.T@J_)
+        M = np.stack([(theta_of(t_+h_)-theta_of(t_-h_))/2e-6 for h_ in np.eye(3)*1e-6], 1)
+        M[0] /= math.log(10)                                                          # (rows log10 E, nu, ln beta)
+        out_ = {}
+        for nm, sc in (('residual', s2), ('forward_error', n2)):
+            C = sc*M@A@M.T; sd = np.sqrt(np.diag(C))
+            out_[nm] = dict(sigma_log10E=sd[0], sigma_nu=sd[1], sigma_lnbeta=sd[2], corr_E_nu=C[0, 1]/max(sd[0]*sd[1], 1e-300))
+        Cp = A/np.sqrt(np.outer(np.diag(A), np.diag(A)))
+        sv = np.linalg.svd(J_/np.linalg.norm(J_, axis=0), compute_uv=False)
+        rec = dict(phi=t_.tolist(), corr_phi=Cp.tolist(), singular_normalised=sv.tolist(), condition=float(sv[0]/sv[-1]), **out_)
+        ident_hist.append(rec); ipath.write_text(json.dumps(ident_hist, indent=1))
+        r0 = out_['residual']
+        print('   identifiability at E %.1f, nu %.4f: sigma(log10 E) %.4f, sigma(nu) %.4f, sigma(ln beta) %.4f, corr(E, nu) %+.3f (from the residual; '
+              'from the forward\'s error alone: %.2e, %.2e); corr(ln mu, ln K/mu) %+.3f; normalised J singular values %s (condition %.1f)' % (
+                  math.exp(theta_of(t_)[0]), theta_of(t_)[1], r0['sigma_log10E'], r0['sigma_nu'], r0['sigma_lnbeta'], r0['corr_E_nu'],
+                  out_['forward_error']['sigma_log10E'], out_['forward_error']['sigma_nu'], Cp[0, 1], np.round(sv, 4).tolist(), sv[0]/sv[-1]), flush=True)
+
     # the start: the run at tol and at --ref-tol (the forward's own error), together
     f, f_ref = run_batch([theta_of(th)]*2, K, [a.tol, a.ref_tol], out/'runs', a.jobs, 'start')
     if f is None or f_ref is None:
@@ -358,7 +384,7 @@ def cmd_lm(a):
     r = flat(f); c, radius = float(r@r), math.inf
     if not hist:
         log(0, th, c, f, True, dict(radius=radius))
-    J = jac(th)
+    J = jac(th); ident(th, J, r, dvec)
     for it in range(it0+1, it0+a.iters+1):
         D = np.diag(J.T@J); dn = lambda s_: float(np.sqrt((D*s_*s_).sum()))
 
@@ -397,7 +423,7 @@ def cmd_lm(a):
             if c_t < c:
                 th, f, r, c = tt, f_t, flat(f_t), c_t
                 log(it, th, c, f, True, info)
-                J = jac(th)
+                J = jac(th); ident(th, J, r, dvec)
                 break
             log(it, tt, c_t, f_t, False, info)
     return finish(a, th)

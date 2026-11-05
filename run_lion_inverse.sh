@@ -82,7 +82,7 @@ run_lm() {   # name obs start [extra]
   say "$name: LM ($obs observations), $JOBS runs at once ${res:+(resuming)}"
   # (the LM's own log in $OUT/$name.log; its progress lines also here, as they come)
   $LI lm --obs $obs --start $start --frames 15 --jobs $JOBS --out "$OUT/$name" $res "$@" 2>&1 | tee -a "$OUT/$name.log" \
-    | grep --line-buffered -E "^it |runs \(|forward's error|stop|final|Traceback|Error"
+    | grep --line-buffered -E "^it |runs \(|forward's error|identifiability|stop|final|Traceback|Error"
   local rc=${PIPESTATUS[0]}
   [ $rc -eq 0 ] && [ -f "$OUT/$name/final_theta.json" ] || die "$name: LM stopped with code $rc, see $OUT/$name.log (rerun this script to resume)"
   say "$name: finished"
@@ -107,7 +107,7 @@ stage_lmsmoke() {   # (not part of `all`) one LM iteration on 7 frames of synthe
   rm -rf "$OUT/lmsmoke" "$OUT/lmsmoke.log"
   say "lmsmoke: one LM iteration, synthetic, frames 0-7 (about 20-30 min)"
   $LI lm --obs synth --truth $SYN_TRUTH --start $SYN_START --frames 7 --iters 1 --jobs $JOBS --out "$OUT/lmsmoke" 2>&1 | tee "$OUT/lmsmoke.log" \
-    | grep --line-buffered -E "^it |runs \(|forward's error|stop|final|Traceback|Error"
+    | grep --line-buffered -E "^it |runs \(|forward's error|identifiability|stop|final|Traceback|Error"
   $PY - "$OUT/lmsmoke/lm.json" <<'EOF' || die "lmsmoke: no LM history"
 import json, sys
 h = json.load(open(sys.argv[1]))
@@ -140,10 +140,13 @@ stage_summary() {
     cat "$OUT/synth_verdict.txt" 2>/dev/null
     for n in synth real; do [ -f "$OUT/$n/lm.json" ] && $PY -c "
 import json; h=[e for e in json.load(open('$OUT/$n/lm.json')) if e['accepted']]
-print('$n: %d accepted iterations; last: E %.1f, nu %.4f, beta %.4f, RMS %.3f px, log10 E error %.3f, nu error %.4f' % (len(h), h[-1]['E'], h[-1]['nu'], h[-1]['beta'], h[-1]['rms'], h[-1]['log10E_err'], h[-1]['nu_err']))"; done
+print('$n: %d accepted iterations; last: E %.1f, nu %.4f, beta %.4f, RMS %.3f px, log10 E error %.3f, nu error %.4f' % (len(h), h[-1]['E'], h[-1]['nu'], h[-1]['beta'], h[-1]['rms'], h[-1]['log10E_err'], h[-1]['nu_err']))
+import os
+if os.path.exists('$OUT/$n/identifiability.json'):
+    q=json.load(open('$OUT/$n/identifiability.json'))[-1]['residual']; print('   identifiability there: sigma(log10 E) %.4f, sigma(nu) %.4f, corr(E, nu) %+.3f' % (q['sigma_log10E'], q['sigma_nu'], q['corr_E_nu']))"; done
     grep -h "^eval" "$OUT/real_eval.log" "$OUT/gt_eval.log" 2>/dev/null | sed -e '1s/^/fitted:  /' -e '2s/^/GT E,nu: /'
   } | tee "$OUT/summary.txt"
-  tar czf lion_inverse_results.tgz "$OUT"/*.log "$OUT"/*.txt "$OUT"/*/lm.json "$OUT"/*/final_theta.json "$OUT"/*/eval.json "$OUT"/*/eval_frames.npz 2>/dev/null
+  tar czf lion_inverse_results.tgz "$OUT"/*.log "$OUT"/*.txt "$OUT"/*/lm.json "$OUT"/*/identifiability.json "$OUT"/*/final_theta.json "$OUT"/*/eval.json "$OUT"/*/eval_frames.npz 2>/dev/null
   say "summary: $OUT/summary.txt; copy back lion_inverse_results.tgz ($(du -h lion_inverse_results.tgz | cut -f1))"
 }
 
