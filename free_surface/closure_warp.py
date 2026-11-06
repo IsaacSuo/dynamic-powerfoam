@@ -496,16 +496,7 @@ def k_ball_adj(cbody: wp.array(dtype=int), ng: wp.vec3d, bpar: wp.array(dtype=wp
 # x_q = x_B + F_B r_q, its step-end position cs x_q - (cs - 1) x_q,n (x_q,n at the step's start: k_mid_capc); penetration
 # d = -(n . x_e - c0), energy wt k_q d^2 / 2 (k_q = k A_q, a stiff penalty per area), the force k_q d n acting at the point;
 # the glue as k_ball's at the point (held force lamt, stiffness kt_q, bound mu k_q d at the step's start). cpar = (cs, wt,
-# c0, mu, kt / k, the normal penalty's scale, delta, K / k). Rows 6 and 8 as k_ball.
-# The band (cpar[6] = delta > 0; 11-06, user: the criterion by the distance from the ground, no glue): MPM's sticky ground
-# holds nothing: at every substep it zeroes the wall nodes' velocity, so the material within its kernel of the wall loses
-# its motion, the force there being just what that took, and a location is let go as its material leaves, bit by bit. Our
-# cap points move with whole cells (one cap lifts or tilts at once), so the tangential hold of point q is a memoryless drag
-# whose strength goes with its height h over the ground at the step's start: the dissipation wt K g(h) |s_t|^2 / 2 of the
-# step's tangential motion s_t = (x_e - x_q,n)_t, K = (K / k) k_q, g = 1 at h <= 0, smoothstep 1 - 3 u^2 + 2 u^3 down to 0
-# at u = h / delta = 1 (k_mid_capc: ktq = K g). Nothing is carried to the next step (no lamt), one criterion (h), the hold
-# fading continuously as the point rises. The normal stays the push-only penalty (a finite normal drag would let a loaded
-# point creep in by F / K every step)
+# c0, mu, kt / k). Rows 6 and 8 as k_ball
 @wp.kernel(enable_backward=False)
 def k_capc(x: wp.array(dtype=wp.vec3d), FB: wp.array(dtype=wp.mat33d), cb: wp.array(dtype=int), rq: wp.array(dtype=wp.vec3d),
            kq: wp.array(dtype=wp.float64), xqn: wp.array(dtype=wp.vec3d), ng: wp.vec3d, cpar: wp.array(dtype=wp.float64),
@@ -523,13 +514,7 @@ def k_capc(x: wp.array(dtype=wp.vec3d), FB: wp.array(dtype=wp.mat33d), cb: wp.ar
         wp.atomic_add(terms, 6, q % NSLOT, wt*wp.float64(0.5)*cpar[5]*kq[q]*d*d)
     fnq[q] = F
     f = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
-    if cpar[6] > wp.float64(0.0):
-        if ktq[q] > wp.float64(0.0):
-            dx = xe-xqn[q]
-            sl = dx-wp.dot(dx, ng)*ng
-            f = -ktq[q]*sl
-            wp.atomic_add(terms, 8, q % NSLOT, wt*wp.float64(0.5)*ktq[q]*wp.dot(sl, sl))
-    elif mu > wp.float64(0.0) and bound[q] > wp.float64(0.0):
+    if mu > wp.float64(0.0) and bound[q] > wp.float64(0.0):
         dx = xe-xqn[q]
         sl = dx-wp.dot(dx, ng)*ng
         k = ktq[q]
@@ -560,6 +545,32 @@ def k_capc_adj(cb: wp.array(dtype=int), rq: wp.array(dtype=wp.vec3d), ng: wp.vec
     wp.atomic_add(F_adj, cb[q], wp.outer(g, rq[q]))
 
 
+# the ground's no-slip without a held force (11-06, user: PAC-NeRF's sticky ground, the contact on / off decaying with the
+# distance to the ground, no glue): at the step's start each cap point's height h over the plane; weight w(h) = 1 at h <= 0,
+# 1 - 3 t^2 + 2 t^3 (t = h / delta) up to delta, 0 above; the point's tangential motion over the step resisted by kstop w
+# (kstop: kappa x its cell's inertia share, the hard stop's stand-in: the point keeps 1 / (1 + kappa) of its free step
+# motion), nothing carried to the next step (lamt 0), no bound. The normal stays the cap contact's push-only penalty. Runs
+# k_capc's glue branch with these step constants
+@wp.kernel(enable_backward=False)
+def k_mid_capc_band(x: wp.array(dtype=wp.vec3d), cb: wp.array(dtype=int), rq: wp.array(dtype=wp.vec3d), ng: wp.vec3d, cpar: wp.array(dtype=wp.float64),
+                    Fst: wp.array(dtype=wp.mat33d), kstop: wp.array(dtype=wp.float64), delta: wp.float64,
+                    xqn: wp.array(dtype=wp.vec3d), ktq: wp.array(dtype=wp.float64), bound: wp.array(dtype=wp.float64), wq: wp.array(dtype=wp.float64)):
+    q = wp.tid()
+    B = cb[q]
+    xq = x[B]+Fst[B]@rq[q]
+    xqn[q] = xq
+    h = wp.dot(ng, xq)-cpar[2]
+    w = wp.float64(1.0)
+    if h > wp.float64(0.0):
+        t = wp.min(h/delta, wp.float64(1.0))
+        w = wp.float64(1.0)-t*t*(wp.float64(3.0)-wp.float64(2.0)*t)
+    wq[q] = w
+    ktq[q] = kstop[q]*w
+    bound[q] = wp.float64(0.0)
+    if w > wp.float64(0.0):
+        bound[q] = wp.float64(1e300)
+
+
 @wp.kernel(enable_backward=False)
 def k_mid_capc(x: wp.array(dtype=wp.vec3d), cb: wp.array(dtype=int), rq: wp.array(dtype=wp.vec3d), kq: wp.array(dtype=wp.float64), ng: wp.vec3d,
                cpar: wp.array(dtype=wp.float64), Fst: wp.array(dtype=wp.mat33d), cnq: wp.array(dtype=wp.float64), xqn: wp.array(dtype=wp.vec3d),
@@ -571,14 +582,8 @@ def k_mid_capc(x: wp.array(dtype=wp.vec3d), cb: wp.array(dtype=int), rq: wp.arra
     xq = x[B]+Fst[B]@rq[q]
     xqn[q] = xq
     dn = wp.max(-(wp.dot(ng, xq)-cpar[2]), wp.float64(0.0))
-    if cpar[6] > wp.float64(0.0):                                                    # (the band: K g(h), bound = g as a marker)
-        u = wp.min(wp.max((wp.dot(ng, xq)-cpar[2])/cpar[6], wp.float64(0.0)), wp.float64(1.0))
-        g = wp.float64(1.0)-u*u*(wp.float64(3.0)-wp.float64(2.0)*u)
-        ktq[q] = cpar[7]*kq[q]*g
-        bound[q] = g
-    else:
-        bound[q] = cpar[3]*(cpar[5]*kq[q]*dn+wp.max(cnq[q], wp.float64(0.0)))
-        ktq[q] = cpar[4]*kq[q]
+    bound[q] = cpar[3]*(cpar[5]*kq[q]*dn+wp.max(cnq[q], wp.float64(0.0)))
+    ktq[q] = cpar[4]*kq[q]
 
 
 @wp.kernel(enable_backward=False)
@@ -1382,6 +1387,7 @@ class ClosureWarp(SkinWarp):
         self.ct = self.cp = self.vis = self.ball = self.selfc = None
         self.capc = None                                                            # (set_cap_contact: the ground on the exposed caps)
         self.clip = False                                                           # (set_cap_clip: the touching caps' normal column from the ground)
+        self.band = None                                                            # (set_cap_band: the no-slip without a held force, on / off by height)
         self.cap_pos = False                                                        # (set_cap_positions: the one-way cap)
         self.cap_eps = 0.                                                           # (set_cap_floor: the floor on its normal)
         self.cap_wall = False                                                       # (set_cap_walls: the walls' cap)
@@ -1457,18 +1463,11 @@ class ClosureWarp(SkinWarp):
         z = lambda dt_: wp.zeros(Q, dtype=dt_, device=dev)
         self.capc = dict(Q=Q, cb=wp.from_torch(torch.as_tensor(np.asarray(cell), device=dev).to(torch.int32).contiguous(), dtype=wp.int32),
                          rq=T(off, wp.vec3d), kq=T(k*np.asarray(w)), ng=wp.vec3d(*[float(a_) for a_ in normal]),
-                         par=wp.array(np.array([2., .5, float(c0), float(mu), float(kt_ratio), 1., 0., 0.]), dtype=wp.float64, device=dev),
+                         par=wp.array(np.array([2., .5, float(c0), float(mu), float(kt_ratio), 1.]), dtype=wp.float64, device=dev),
                          xqn=z(wp.vec3d), ktq=z(wp.float64), bound=z(wp.float64), lamt=z(wp.vec3d), dq=z(wp.float64), fnq=z(wp.float64), ffq=z(wp.vec3d),
                          cnq=z(wp.float64))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tcq = {k_: tt(a_) for k_, a_ in self.capc.items() if k_ not in ('Q', 'ng')}
-
-    def set_cap_band(self, delta, k_ratio=10.):
-        """the cap contact's tangential hold as the band (k_capc; 11-06): a memoryless drag K g(h) on each cap point's
-        tangential step, K = k_ratio x its normal penalty k_q, g(h) from 1 on the ground to 0 at the height delta; in place
-        of the glue. After set_cap_contact"""
-        assert self.capc is not None and delta > 0
-        self.tcq['par'][6] = float(delta); self.tcq['par'][7] = float(k_ratio)
 
     def set_cap_clip(self, cell, off, normal=(0., 1., 0.), c0=0., w=.005, s_floor=.2, b0=.1, pen=0., reach=3.):
         """the touching caps' normal column from the ground (k_closP's clip; 11-06), before prepare(), after
@@ -1494,6 +1493,15 @@ class ClosureWarp(SkinWarp):
         self.Fs_st = wp.from_torch(torch.eye(3, dtype=f64, device=dev).repeat(n, 1, 1).contiguous(), dtype=wp.mat33d)
         self.tFs_st = wp.to_torch(self.Fs_st, requires_grad=False)
         self.clip = True
+
+    def set_cap_band(self, kstop, delta):
+        """the cap contact's tangential part as k_mid_capc_band (after set_cap_contact): kstop per cap point (the hard stop's
+        stand-in stiffness, per unit density), delta the height over which the hold fades (m)"""
+        assert self.capc is not None
+        Q = self.capc['Q']
+        self.band = dict(kstop=wp.from_torch(torch.as_tensor(np.asarray(kstop), dtype=f64, device='cuda').contiguous(), dtype=wp.float64),
+                         delta=float(delta), w=wp.zeros(Q, dtype=wp.float64, device='cuda'))
+        self.tband_w = wp.to_torch(self.band['w'], requires_grad=False)
 
     def set_glue_point(self, where):
         """where the ground's glue holds a touching cell (11-06): 'site' its centre (the ball's centre), 'material' the
@@ -3131,8 +3139,13 @@ class MidpointStep:
                   outputs=[bl['xn'], bl['kt'], bl['bound'], bl['roff'], bl['xa']])
         cc = W.capc
         if cc is not None:
-            wp.launch(k_mid_capc, cc['Q'], inputs=[A['x'], cc['cb'], cc['rq'], cc['kq'], cc['ng'], cc['par'], W.Fs_st if W.clip else bl['Fst'], cc['cnq']],
-                      outputs=[cc['xqn'], cc['ktq'], cc['bound']])
+            if W.band is not None:
+                bd = W.band
+                wp.launch(k_mid_capc_band, cc['Q'], inputs=[A['x'], cc['cb'], cc['rq'], cc['ng'], cc['par'], bl['Fst'], bd['kstop'], bd['delta']],
+                          outputs=[cc['xqn'], cc['ktq'], cc['bound'], bd['w']])
+            else:
+                wp.launch(k_mid_capc, cc['Q'], inputs=[A['x'], cc['cb'], cc['rq'], cc['kq'], cc['ng'], cc['par'], W.Fs_st if W.clip else bl['Fst'], cc['cnq']],
+                          outputs=[cc['xqn'], cc['ktq'], cc['bound']])
         g2 = self._eval(0.)[PS_GQ2]
         self._accept()
         evals, its = 1, 0
@@ -3215,7 +3228,9 @@ class MidpointStep:
             W.ttrac.index_add_(0, body, (W.tbfn[:, None]*ng+W.tbff)/W.cap_area[body][:, None])
         if W.capc is not None:
             cc = W.capc
-            if self.glue_memory and W.clip:                                          # (the clip: held while glued, its bound from the reaction)
+            if W.band is not None:                                                  # (the band: nothing held into the next step)
+                cc['lamt'].zero_()
+            elif self.glue_memory and W.clip:                                          # (the clip: held while glued, its bound from the reaction)
                 wp.copy(cc['lamt'], cc['ffq'])
             elif self.glue_memory:
                 wp.launch(k_mid_lamt, cc['Q'], inputs=[cc['ffq'], cc['dq']], outputs=[cc['lamt']])
