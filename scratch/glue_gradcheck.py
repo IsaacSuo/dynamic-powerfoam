@@ -12,6 +12,8 @@ import free_surface.lion_inverse as li
 li.set_scene('pacnerf_e0'); li.GLUE = sys.argv[1]
 if len(sys.argv) > 2:
     li.SHAPE = sys.argv[2]
+if len(sys.argv) > 3:
+    li.CAPT = int(sys.argv[3])
 S0 = 6*li.SPF+10
 
 
@@ -24,7 +26,7 @@ def probe(s, W, ST, cbody, Rb):
         return
     n = W.n; x0 = ST.tz.clone()
     on = W.tbfn > 0; B = cbody[on]
-    print('glue %s, ball %s, step %d: touching balls %d, |F_n| sum %.4g, |f_t| sum %.4g' % (W.glue_point, W.ball_shape, s, int(on.sum()), float(W.tbfn.sum()), float(W.tbff.norm(dim=1).sum())), flush=True)
+    print('glue %s, ball %s, cap traction %s (|t| max %.3g), step %d: touching balls %d, |F_n| sum %.4g, |f_t| sum %.4g' % (W.glue_point, W.ball_shape, W.cap_traction, float(W.ttrac.norm(dim=1).max()), s, int(on.sum()), float(W.tbfn.sum()), float(W.tbff.norm(dim=1).sum())), flush=True)
     E = lambda x: float(W.grad(x)[0])
     g = W.grad(x0)[1].clone()
     gen = torch.Generator(device='cuda').manual_seed(0)

@@ -218,6 +218,7 @@ CHAIN = 0                                                                       
 DRAG = 0.                                                                          # (--drag s > 0: the ground's tangential force without memory, k_t x s)
 GLUE = 'site'                                                                     # (--glue-point: where the ground's glue holds a cell, ClosureWarp.set_glue_point)
 SHAPE = 'rigid'                                                                    # (--ball-shape: the ground's normal contact ball, ClosureWarp.set_ball_shape)
+CAPT = 0                                                                           # (--cap-traction 1: the touching caps' traction into the closure, ClosureWarp.cap_traction)
 
 
 def chain_colouring(W, i_, j_, colouring):
@@ -260,7 +261,7 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True, on_step=No
     cbody = boc[site]; Rb = torch.as_tensor(cells['radii'], dtype=f64, device=dev)[site]
     upt = tuple(1. if k == UP else 0. for k in range(3))
     W.set_ball(cbody, Rb, upt, C0, MU)                                               # (the scene's friction; no self contact)
-    W.set_glue_point(GLUE); W.set_ball_shape(SHAPE)
+    W.set_glue_point(GLUE); W.set_ball_shape(SHAPE); W.cap_traction = bool(CAPT)
     W.set_cap_positions(); W.set_cap_floor(0.)
     nr = W.set_chain() if CHAIN else 0
     W.cm_cache = str(FOAM/'dem_exact_single'/'cell_moments.npz')                    # (the consistent mass's cell moments, by geometry)
@@ -360,7 +361,7 @@ def run_batch(thetas, frames, tol, out, jobs, tag):
                 paths[k].unlink()
             log = open(out/('%s_%d.log' % (tag, k)), 'w')
             cmd = [sys.executable, '-u', str(Path(__file__).resolve()), 'run', '--theta', *['%.17g' % v for v in th], '--frames', str(frames),
-                   '--tol', '%g' % tols[k], '--out', str(paths[k]), '--foam', str(FOAM), '--chain', str(CHAIN), '--scene', SCENE_NAME, '--drag', '%g' % DRAG, '--glue-point', GLUE, '--ball-shape', SHAPE]
+                   '--tol', '%g' % tols[k], '--out', str(paths[k]), '--foam', str(FOAM), '--chain', str(CHAIN), '--scene', SCENE_NAME, '--drag', '%g' % DRAG, '--glue-point', GLUE, '--ball-shape', SHAPE, '--cap-traction', str(CAPT)]
             live[k] = (subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(ROOT), env=env), log)
         time.sleep(2)
         for k in list(live):
@@ -583,7 +584,7 @@ def cmd_show(a):
 
 
 def main():
-    global FOAM, CHAIN, SCENE_NAME, DRAG, GLUE, SHAPE
+    global FOAM, CHAIN, SCENE_NAME, DRAG, GLUE, SHAPE, CAPT
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
     q = sub.add_parser('check')
@@ -592,6 +593,7 @@ def main():
     q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--glue-point', default='site', choices=('site', 'material'), help='where the ground\'s glue holds a touching cell (ClosureWarp.set_glue_point)')
     q.add_argument('--ball-shape', default='rigid', choices=('rigid', 'deformed'), help='the ground\'s normal contact ball (ClosureWarp.set_ball_shape)')
+    q.add_argument('--cap-traction', type=int, default=0, help='1: the touching caps\' traction (the ground\'s force over the cap area, one step late) into the closure')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q = sub.add_parser('run')
     q.add_argument('--foam', type=Path, default=None)
@@ -599,6 +601,7 @@ def main():
     q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--glue-point', default='site', choices=('site', 'material'), help='where the ground\'s glue holds a touching cell (ClosureWarp.set_glue_point)')
     q.add_argument('--ball-shape', default='rigid', choices=('rigid', 'deformed'), help='the ground\'s normal contact ball (ClosureWarp.set_ball_shape)')
+    q.add_argument('--cap-traction', type=int, default=0, help='1: the touching caps\' traction (the ground\'s force over the cap area, one step late) into the closure')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--theta', type=float, nargs=3, required=True)
     q.add_argument('--frames', type=int, default=15)
@@ -611,6 +614,7 @@ def main():
     q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--glue-point', default='site', choices=('site', 'material'), help='where the ground\'s glue holds a touching cell (ClosureWarp.set_glue_point)')
     q.add_argument('--ball-shape', default='rigid', choices=('rigid', 'deformed'), help='the ground\'s normal contact ball (ClosureWarp.set_ball_shape)')
+    q.add_argument('--cap-traction', type=int, default=0, help='1: the touching caps\' traction (the ground\'s force over the cap area, one step late) into the closure')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--out', type=Path, required=True)
     q.add_argument('--obs', choices=('real', 'synth'), default='real')
@@ -633,6 +637,7 @@ def main():
     q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--glue-point', default='site', choices=('site', 'material'), help='where the ground\'s glue holds a touching cell (ClosureWarp.set_glue_point)')
     q.add_argument('--ball-shape', default='rigid', choices=('rigid', 'deformed'), help='the ground\'s normal contact ball (ClosureWarp.set_ball_shape)')
+    q.add_argument('--cap-traction', type=int, default=0, help='1: the touching caps\' traction (the ground\'s force over the cap area, one step late) into the closure')
     q.add_argument('--chain', type=int, default=0)
     q.add_argument('--theta', type=float, nargs=3, required=True)
     q.add_argument('--frames', type=int, default=None)
@@ -645,6 +650,7 @@ def main():
     q.add_argument('--drag', type=float, default=0., help='> 0: the ground without memory, a drag k_t x this (0: the glue as before)')
     q.add_argument('--glue-point', default='site', choices=('site', 'material'), help='where the ground\'s glue holds a touching cell (ClosureWarp.set_glue_point)')
     q.add_argument('--ball-shape', default='rigid', choices=('rigid', 'deformed'), help='the ground\'s normal contact ball (ClosureWarp.set_ball_shape)')
+    q.add_argument('--cap-traction', type=int, default=0, help='1: the touching caps\' traction (the ground\'s force over the cap area, one step late) into the closure')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
     q.add_argument('--theta', type=float, nargs=3, required=True)
     q.add_argument('--out', type=Path, required=True)
@@ -655,7 +661,7 @@ def main():
     if a.foam is None:
         a.foam = FOAM
     FOAM = Path(a.foam).resolve()
-    CHAIN = int(getattr(a, 'chain', 0)); DRAG = float(getattr(a, 'drag', 0.)); GLUE = getattr(a, 'glue_point', 'site'); SHAPE = getattr(a, 'ball_shape', 'rigid')
+    CHAIN = int(getattr(a, 'chain', 0)); DRAG = float(getattr(a, 'drag', 0.)); GLUE = getattr(a, 'glue_point', 'site'); SHAPE = getattr(a, 'ball_shape', 'rigid'); CAPT = int(getattr(a, 'cap_traction', 0))
     print('foam: %s%s' % (FOAM, ', chain cells rigid with their own rotation' if CHAIN else ''), flush=True)
     dict(check=cmd_check, run=cmd_run, lm=cmd_lm, eval=cmd_eval, show=cmd_show)[a.cmd](a)
 
