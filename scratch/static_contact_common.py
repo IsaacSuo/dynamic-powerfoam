@@ -37,7 +37,10 @@ cap = torch.nonzero(off[1:] > off[:-1])[:, 0]
 pc = torch.repeat_interleave(cap, (off[cap+1]-off[cap]))
 kap = float(W.tkap[0]); t1, t2, mA, PA = st.t1, st.t2, st.mA, st.PA
 iscap = torch.zeros(n, dtype=torch.bool, device=dev); iscap[cap] = True
-cl, roff, wq = cap_quadrature(cells['points'], cells['radii'], st.c_body.cpu().numpy(), cache=str(li.FOAM/'dem_exact_single'/'cap_quadrature.npz'), verbose=False)
+import os
+CAP_N = int(os.environ.get('CAP_N', '2000'))                                        # (points per sphere; 2000 = the cached default)
+cl, roff, wq = cap_quadrature(cells['points'], cells['radii'], st.c_body.cpu().numpy(), N=CAP_N,
+                              cache=str(li.FOAM/'dem_exact_single'/('cap_quadrature.npz' if CAP_N == 2000 else 'cap_quadrature_N%d.npz' % CAP_N)), verbose=False)
 cl = torch.as_tensor(cl, device=dev).long(); roff = torch.as_tensor(roff, dtype=f64, device=dev); wq = torch.as_tensor(wq, dtype=f64, device=dev)
 Q = len(cl)
 wg = torch.as_tensor(W.cmass['rowsum'], dtype=f64, device=dev)
