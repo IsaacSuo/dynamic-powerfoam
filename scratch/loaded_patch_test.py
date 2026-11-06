@@ -44,6 +44,8 @@ if with_t:                                                                      
     print('caps loaded with sigma(F0) . m, sigma_yy %.4f (per unit density)' % float(sig[1, 1]))
 x = c+(X-c)@F0.T
 E, _ = W.grad(x); E = float(E)
+ts = W.tsum.cpu().numpy().ravel()
+print('energy rows: bonds %.6g, volume %.6g, outer layer o1 %.6g' % (ts[0], ts[1], ts[2]))
 FB = W.tF.clone()
 err = ((FB-F0).norm(dim=(1, 2))/F0.norm()).cpu().numpy()
 vert = FB[:, :, 1][:, 1].cpu().numpy()
