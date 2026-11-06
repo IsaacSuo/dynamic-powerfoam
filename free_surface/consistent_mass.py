@@ -113,3 +113,46 @@ def mass_matrix(W, d, J):
     Mh = (.5*(Mh+Mh.T)).tocsr()
     Mh.sum_duplicates(); Mh.sort_indices()
     return Mh
+
+
+def mass_matrix_cols(W, d, J):
+    """F1 (ClosureWarp.set_cap_columns): Mh over the n sites and the ncap cap columns (ndof x ndof, scipy CSR), per unit
+    density. The material map x_C + F_C (X - X_C), F_C = (S_C + (G_C P_C + c_C m_C^T) Mc_C) Mt_C^-1, is linear in (x, c):
+    L_C(u, cdot) = sum_k u_k a_Ck^T + cdot_C a_Cc^T with the fit's coefficients now through P (G P Mc) and the column's
+    a_Cc = Mt^-1 Mc m. Exact for every affine motion with c's reference value m (u = W X + b, cdot = W m: L_C = W)"""
+    st, n, P = W.st, W.n, W._pos
+    N = W.ndof
+    c = lambda t: t.detach().cpu().numpy()
+    m = c(st.V).astype(np.float64)
+    bi, bj, A, nrm = c(st.i).astype(np.int64), c(st.j).astype(np.int64), c(st.A), c(st.nrm)
+    w = .5*A[:, None]*nrm
+    rc, rk, vecs = [bi, bi, bj, bj], [bj, bi, bj, bi], [w, -w, w, -w]
+    off, pk, dX, M2i = c(P['off']), c(P['pk']).astype(np.int64), c(P['dX']), c(P['M2i'])
+    Mc, Mti, PA, mA = c(st.Mcap), c(st.Mt_inv), c(st.PA), c(st.mA)
+    pc = np.repeat(np.arange(n), np.diff(off))
+    cv = np.einsum('eij,ej->ei', Mc[pc], np.einsum('eij,ej->ei', PA[pc], np.einsum('eij,ej->ei', M2i[pc], dX)))   # (G P Mc: Mc P M2^-1 dX_e)
+    cells = c(W.cap_cells).astype(np.int64)
+    cidx = n+np.arange(len(cells))
+    rc += [pc, pc, cells]; rk += [pk, pc, cidx]; vecs += [cv, -cv, np.einsum('eij,ej->ei', Mc[cells], mA[cells])]
+    C, K, Vv = np.concatenate(rc), np.concatenate(rk), np.concatenate(vecs)
+    uk, inv = np.unique(C*N+K, return_inverse=True)
+    a = np.stack([np.bincount(inv, Vv[:, k], len(uk)) for k in range(3)], 1)
+    aC, aK = uk//N, uk % N
+    a = np.einsum('eij,ej->ei', Mti[aC], a)
+    Xd = np.concatenate([c(st.X), mA[cells]], 0); tr = np.concatenate([np.ones(n), np.zeros(len(cells))])
+    err = max(np.abs(np.stack([np.bincount(aC, tr[aK]*a[:, k], n) for k in range(3)], 1)).max(),
+              max(np.abs(np.bincount(aC, Xd[aK, k]*a[:, l], n)-(k == l)).max() for k in range(3) for l in range(3)))
+    assert err < 1e-8, 'consistent mass (F1): L_C not exact for affine motion (%.1e)' % err
+    starts = np.searchsorted(aC, np.arange(n+1))
+    ri, ci, vv = [], [], []
+    for Cc in range(n):
+        s0, s1 = starts[Cc], starts[Cc+1]
+        ks, Ac = aK[s0:s1], a[s0:s1]
+        e = (ks == Cc).astype(np.float64)
+        Ad = Ac@d[Cc]
+        blk = Ac@J[Cc]@Ac.T+m[Cc]*(np.outer(e, Ad)+np.outer(Ad, e)+np.outer(e, e))
+        ri.append(np.repeat(ks, len(ks))); ci.append(np.tile(ks, len(ks))); vv.append(blk.ravel())
+    Mh = sp.coo_matrix((np.concatenate(vv), (np.concatenate(ri), np.concatenate(ci))), shape=(N, N)).tocsr()
+    Mh = (.5*(Mh+Mh.T)).tocsr()
+    Mh.sum_duplicates(); Mh.sort_indices()
+    return Mh

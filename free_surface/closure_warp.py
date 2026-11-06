@@ -1092,6 +1092,53 @@ def k_closP(x: wp.array(dtype=wp.vec3d), S: wp.array(dtype=wp.mat33d), poff: wp.
     Fc[b] = (S[b]+C)@Mti[b]
 
 
+# F1 (11-06, the user and the reviewer: one material map for the inertia, the energy and the contact): each cap cell's
+# normal column c_B is an unknown (x[noff + cidx[B]], its rest value m_B), F_s = G_B P_B + c_B m_B^T, no free-surface
+# completion; F_B = (S_B + F_s Mc) Mt^-1 is linear in (x, c), so the material map x_B + F_B (X - X_B) is too, the
+# consistent mass constant (consistent_mass.mass_matrix_cols). The free surface: the model's own balance in c
+@wp.kernel(enable_backward=False)
+def k_closC(x: wp.array(dtype=wp.vec3d), S: wp.array(dtype=wp.mat33d), poff: wp.array(dtype=int), pk: wp.array(dtype=int),
+            pdX: wp.array(dtype=wp.vec3d), M2i: wp.array(dtype=wp.mat33d), Mti: wp.array(dtype=wp.mat33d), Mc: wp.array(dtype=wp.mat33d),
+            mA: wp.array(dtype=wp.vec3d), PA: wp.array(dtype=wp.mat33d), cidx: wp.array(dtype=int), noff: int,
+            G: wp.array(dtype=wp.mat33d), Fc: wp.array(dtype=wp.mat33d), Fso: wp.array(dtype=wp.mat33d)):
+    b = wp.tid()
+    C = wp.mat33d()
+    Fs = wp.mat33d()
+    if poff[b+1] > poff[b]:
+        Sx = wp.mat33d()
+        xb = x[b]
+        for e in range(poff[b], poff[b+1]):
+            Sx = Sx+wp.outer(x[pk[e]]-xb, pdX[e])
+        Gb = Sx@M2i[b]
+        G[b] = Gb
+        Fs = Gb@PA[b]+wp.outer(x[noff+cidx[b]], mA[b])
+        C = Fs@Mc[b]
+    Fso[b] = Fs
+    Fc[b] = (S[b]+C)@Mti[b]
+
+
+@wp.kernel(enable_backward=False)
+def k_closC_adj(poff: wp.array(dtype=int), pk: wp.array(dtype=int), pdX: wp.array(dtype=wp.vec3d), M2i: wp.array(dtype=wp.mat33d),
+                Mti: wp.array(dtype=wp.mat33d), Mc: wp.array(dtype=wp.mat33d), mA: wp.array(dtype=wp.vec3d), PA: wp.array(dtype=wp.mat33d),
+                cidx: wp.array(dtype=int), noff: int, Fc_bar: wp.array(dtype=wp.mat33d), Fs_bar: wp.array(dtype=wp.mat33d),
+                S_bar: wp.array(dtype=wp.mat33d), x_bar: wp.array(dtype=wp.vec3d)):
+    """S_bar += Fc_bar Mt^-T; F_s's bar cbar = Fc_bar Mt^-T Mc^T + Fs_bar: G_bar = cbar P^T, c_bar = cbar m; x_k += G_bar M2^-T dX_e, x_B -= the sum"""
+    b = wp.tid()
+    Cb = Fc_bar[b]@wp.transpose(Mti[b])
+    S_bar[b] = S_bar[b]+Cb
+    if poff[b+1] > poff[b]:
+        cbar = Cb@wp.transpose(Mc[b])+Fs_bar[b]
+        Gbar = cbar@wp.transpose(PA[b])
+        wp.atomic_add(x_bar, noff+cidx[b], cbar@mA[b])
+        Sxbar = Gbar@wp.transpose(M2i[b])
+        tot = wp.vec3d()
+        for e in range(poff[b], poff[b+1]):
+            v = Sxbar@pdX[e]
+            wp.atomic_add(x_bar, pk[e], v)
+            tot = tot+v
+        wp.atomic_add(x_bar, b, -tot)
+
+
 @wp.kernel(enable_backward=False)
 def k_capref(G: wp.array(dtype=wp.mat33d), poff: wp.array(dtype=int), t1: wp.array(dtype=wp.vec3d), t2: wp.array(dtype=wp.vec3d),
              eps: wp.array(dtype=wp.float64), nr: wp.array(dtype=wp.vec3d)):
@@ -1482,6 +1529,7 @@ class ClosureWarp(SkinWarp):
         self.cap_wall = False                                                       # (set_cap_walls: the walls' cap)
         self.cap_ul = False                                                         # (set_cap_ul: UL's F, no cap)
         self.nr, self.ndof, self.chain = 0, self.n, None                            # (set_chain: rigid chain cells with their own rotation)
+        self.cap_cols, self.ncap, self.ndense = False, 0, self.n                     # (set_cap_columns: F1, the caps' normal columns as unknowns)
         self.glue_point = 'site'                                                    # (set_glue_point: where the ground's glue holds a cell)
         self.ball_shape = 'rigid'                                                   # (set_ball_shape: the normal contact's ball, rigid or deformed with F_B)
         self.cap_traction = False                                                   # (MidpointStep: the touching caps' traction into the closure)
@@ -1715,13 +1763,33 @@ class ClosureWarp(SkinWarp):
         self.chain_bonds = int(bt.sum())
         return self.nr
 
+    def set_cap_columns(self):
+        """F1 (11-06): each cap cell's normal column c_B an unknown, after set_cap_positions, before prepare(); the solver's
+        unknowns are the n sites then the ncap columns (ndof = n + ncap; not with set_chain); c's rest value m_B (F_s = I).
+        The closure k_closC (F_s = G P + c m^T, no completion), the consistent mass with c's rows (mass_matrix_cols); the
+        dense preconditioner over sites and columns (ndense = ndof)"""
+        assert self.cap_pos and self.chain is None, 'set_cap_columns: after set_cap_positions, without set_chain'
+        st = self.st; n = self.n; dev = st.X.device
+        cap = torch.as_tensor(self._pos['off'][1:] > self._pos['off'][:-1], device=dev)
+        cells = torch.nonzero(cap)[:, 0]
+        cidx = torch.full((n,), -1, dtype=torch.int32, device=dev); cidx[cells] = torch.arange(len(cells), dtype=torch.int32, device=dev)
+        self.ncap = int(len(cells)); self.cap_cells = cells
+        self._cidx_t = cidx; self.cidx = wp.from_torch(cidx.contiguous(), dtype=wp.int32)
+        self.c_rest = st.mA[cells].clone().contiguous()
+        self.ndof = n+self.ncap; self.ndense = self.ndof
+        self.cap_cols = True
+        return self.ncap
+
     def rot_inertia(self, mass):
         """the chain cells' rotational inertia 2/5 m r^2 (r = (3 V / 4 pi)^1/3), m = mass[chain]"""
         r = (3*self.st.V[self.chain]/(4*math.pi))**(1/3)
         return .4*mass[self.chain]*r*r
 
-    def ext(self, x, rot=None):
-        """sites (n, 3) and the chain rotations (nr, 3; default 0) as one (ndof, 3) array"""
+    def ext(self, x, rot=None, cols=None):
+        """sites (n, 3) and the chain rotations (nr, 3; default 0) as one (ndof, 3) array; with set_cap_columns the
+        columns after the sites (cols, default 0: a velocity's; X_ext carries their rest values)"""
+        if self.cap_cols:
+            return torch.cat([x, torch.zeros(self.ncap, 3, dtype=x.dtype, device=x.device) if cols is None else cols.to(x.dtype)], 0)
         if self.nr == 0:
             return x
         r = torch.zeros(self.nr, 3, dtype=x.dtype, device=x.device) if rot is None else rot
@@ -2084,6 +2152,12 @@ class ClosureWarp(SkinWarp):
                     wp.launch(k_closW_adj, n, inputs=[self.off]+cw+[B['G'], B['Fc'].grad], outputs=[B['S'].grad, B['Gbar']])
                     wp.launch(k_Fw_adj, n, inputs=[B['Gbar'], self.offT, self.eTb, self.eTw, self.Mbi], outputs=[B['S'].grad])
                 tape.record_func(adj, arrays=[B['S'], B['Fc']])
+        elif self.cap_cols:
+            cc_ = [self.poff, self.pk, self.pdX, self.M2i, self.Mti, self.Mc, self.mA, self.PA, self.cidx, self.n]
+            wp.launch(k_closC, n, inputs=[x, B['S']]+cc_, outputs=[B['G'], B['Fc'], B['Fs']])
+            if tape is not None:
+                tape.record_func(lambda: wp.launch(k_closC_adj, n, inputs=cc_+[B['Fc'].grad, B['Fs'].grad], outputs=[B['S'].grad, x.grad]),
+                                 arrays=[x, B['S'], B['Fc'], B['Fs']])
         elif self.cap_pos:
             cp = [self.poff, self.pk, self.pdX, self.M2i, self.Mti, self.Mc, self.t1, self.t2, self.mA, self.PA, self.kapw, self.capnr, self.capeps, self.trac, self.tpar,
                   self.clpar, self.qoff, self.qr, self.qb0, self.qrad, self.qanc]
@@ -2176,7 +2250,7 @@ class ClosureWarp(SkinWarp):
             self.n_lin = self.sweep_mult*max(8, int(math.ceil(math.log(1e-13)/math.log(max(self.rho, 1e-3))))+4)
         self.xw = wp.zeros(self.ndof, dtype=wp.vec3d, device='cuda', requires_grad=True)   # (sites, then the chain rotations)
         self.yw = wp.zeros(self.npt, dtype=wp.vec3d, device='cuda', requires_grad=True)
-        self.X_ext = self.ext(self.st.X)
+        self.X_ext = self.ext(self.st.X, cols=self.c_rest if self.cap_cols else None)
         wp.to_torch(self.xw, requires_grad=False).copy_(self.X_ext)                 # (the warm-up runs at rest: at x = 0 the
         self.tape = wp.Tape()                                                       # closure is degenerate and its NaN would
                                                                                     # stay in the warm start)
@@ -2223,11 +2297,11 @@ class ClosureWarp(SkinWarp):
             print('  consistent mass: only with the one-way cap (set_cap_positions); the lumped mass instead', flush=True)
             self.mass_mode = 'lumped'
             return
-        from free_surface.consistent_mass import cell_moments, mass_matrix
+        from free_surface.consistent_mass import cell_moments, mass_matrix, mass_matrix_cols
         st = self.st
         d, J = cell_moments(st.X.cpu().numpy(), st.r.cpu().numpy(), st.V.cpu().numpy(), self.cm_spacing, self.cm_cache)
-        M = mass_matrix(self, d, J)
-        self.cmass = dict(M=M, rowsum=np.asarray(M.sum(1)).ravel(), d=d, J=J)
+        M = mass_matrix_cols(self, d, J) if self.cap_cols else mass_matrix(self, d, J)
+        self.cmass = dict(M=M, rowsum=np.asarray(M[:, :self.n].sum(1)).ravel(), d=d, J=J)   # (rowsum: M times a unit translation of the sites)
 
     def mass_rows(self, mass):
         """the solver's inertia over the ndof unknowns as CSR (indptr, indices, values): the consistent Mh plus the lumped
@@ -2237,6 +2311,9 @@ class ClosureWarp(SkinWarp):
         mass = mass.detach().cpu().numpy().astype(np.float64); n = self.n
         if self.cmass is None:
             M = sp.diags(mass).tocsr()
+        elif self.cap_cols:                                                         # (F1: the columns' inertia in cmass; mass[n:] added to it: a clamp's)
+            extra = mass.copy(); extra[:n] = mass[:n]-self.st.V.cpu().numpy()
+            M = (self.cmass['M']+sp.diags(extra)).tocsr()
         else:
             extra = mass[:n]-self.st.V.cpu().numpy()
             M = sp.block_diag([self.cmass['M']+sp.diags(extra), sp.diags(mass[n:])], format='csr') if self.nr else (self.cmass['M']+sp.diags(extra)).tocsr()
@@ -2768,7 +2845,7 @@ class TrustCG:
         if self.dense:                                                              # (the sites' preconditioner: the dense (M_s / (th dt)^2 + kbar)^-1, single
             assert not lr_cols, 'TrustCG: the consistent mass\'s dense preconditioner without the low-rank term'   # precision, set by MidpointStep.update_material)
             assert not torch.backends.cuda.matmul.allow_tf32, 'TrustCG: full float32 products (TF32 off)'
-            ns = W.n
+            ns = W.ndense
             self.Ainv = torch.zeros(ns, ns, dtype=torch.float32, device=dev)
             self.r32 = torch.zeros(ns, 3, dtype=torch.float32, device=dev); self.y32 = torch.zeros_like(self.r32)
             self._tstream = wp.stream_to_torch(wp.get_stream())
@@ -2816,7 +2893,7 @@ class TrustCG:
     def _dense_apply(self):
         """y = Ainv r on the sites (the chain rotations keep their blocks' y), as one cuBLAS product on Warp's stream:
         ordered with the kernels and captured with them"""
-        ns = self.W.n
+        ns = self.W.ndense
         with torch.cuda.stream(self._tstream):
             self.r32.copy_(self.t['r'][:ns])
             torch.mm(self.Ainv, self.r32, out=self.y32)
@@ -2829,7 +2906,7 @@ class TrustCG:
     def set_dense(self, kbar):
         """the sites' preconditioner (c M_s + diag(kbar))^-1, c the inertia's factor, kbar the stiffness's own share per site
         (MidpointStep.update_material: trace / 3 of the rest block, times the viscous factor)"""
-        ns = self.W.n; c = float(self.c4.numpy()[0])
+        ns = self.W.ndense; c = float(self.c4.numpy()[0])
         A = torch.as_tensor(self.M[:ns, :ns].toarray(), dtype=f64, device=self.Ainv.device)
         A.mul_(c); A.diagonal().add_(kbar.to(f64))
         L = torch.linalg.cholesky(A); del A
@@ -3137,8 +3214,8 @@ class MidpointStep:
         n = W.ndof; dev = 'cuda'                                                     # (ndof: set_chain's rotations after the sites; mass, Kbb, fg that long)
         z = lambda dt_, k=n: wp.zeros(k, dtype=dt_, device=dev)
         A = CG.a
-        mlin = torch.as_tensor(np.asarray(CG.M.sum(1)).ravel(), dtype=f64, device=dev); mlin[W.n:] = 0.   # (the momentum sum: M's row sums
-                                                                                    # on the sites, sum_i (M v)_i = sum_j rowsum_j v_j)
+        mlin = torch.as_tensor(np.asarray(CG.M[:, :W.n].sum(1)).ravel(), dtype=f64, device=dev)   # (the momentum: sum over the site rows of M v,
+                                                                                    # = sum_j (sum_{i < n} M_ij) v_j; F1's columns carry some)
         self.a = dict(x=z(wp.vec3d), v=z(wp.vec3d), a=z(wp.vec3d), xt=z(wp.vec3d), gz=z(wp.vec3d), P=z(wp.mat33d), mv=z(wp.vec3d, 1),
                       dq=z(wp.vec3d), yq=z(wp.vec3d),
                       m=wp.from_torch(mlin.contiguous(), dtype=wp.float64), cm=A['cm'], z=A['z'], g0=A['g0'], Pinv=A['Pinv'], dz=A['p'],
@@ -3180,7 +3257,7 @@ class MidpointStep:
         self.c1 = 1+W.smu/(self.th*self.dt)
         self.g8, self.cb, self.e4 = 8*W.Gs, self.muf*4/3*W.Es, 2*W.Es/self.th
         if self.CG.dense:                                                           # (the sites' dense preconditioner: M_s / (th dt)^2 + the rest
-            ns = W.n                                                                # blocks' trace / 3 times the viscous factor)
+            ns = W.ndense                                                           # blocks' trace / 3 times the viscous factor)
             self.CG.set_dense(self.tK[:ns].diagonal(dim1=1, dim2=2).sum(1)/3*self.c1)
 
     def set_theta(self, th, mass):
