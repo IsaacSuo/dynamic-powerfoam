@@ -47,6 +47,24 @@ SCENES = dict(                                                                  
                     v0=(-0.4078950600549248, -.5, -0.06629882732047176), mu=1e6,                 # the scene's -0.05; glued, user 11-06)
                     gt=dict(E=23008.377696598774, nu=.30079413488868173), beta_min=.003,  # (consistent mass: below it the sites far inside
                     photos='/home/fangsuo/py/dynamic-powerfoam/data/pacnerf/data/elastic/0/data'))
+PACNERF = Path('/home/fangsuo/py/dynamic-powerfoam/data/pacnerf')
+
+
+def _fourier_scenes():
+    """11-07, forward only: PAC-NeRF elastic 0..9 on the Fourier Power Foams (inverse_data/fourier_elastic<k>,
+    scratch/fourier_scenes_convert.py), each scene's truth from gt/elastic.json, 24 fps, the sticky ground
+    at PAC-NeRF's y = 0 (scene -0.05), frames 0..13 (the photos'; -1 is the empty scene). beta_min = 0.003 s x sqrt(E_0 / E): the damping ratio beta omega / 2 of every mode
+    (omega ~ sqrt(E)) the same as pacnerf_e0's at its 0.003 (E from 2.3e4 to 4.2e6 Pa: a fixed 0.003 s would
+    overdamp the stiff scenes' bounce)"""
+    gt = json.loads((PACNERF/'gt'/'elastic.json').read_text()); E0 = gt['0']['E']
+    for k in range(10):
+        s = gt[str(k)]
+        SCENES['fourier_elastic%d' % k] = dict(data='fourier_elastic%d' % k, cam='nerf', fps=24, nframes=14, up=1, c0=-.05, v0=tuple(s['v']), mu=1e6,
+                                               gt=dict(E=s['E'], nu=s['nu']), beta_min=.003*math.sqrt(E0/s['E']),
+                                               photos=str(PACNERF/'data'/'elastic'/str(k)/'data'), mpm=str(PACNERF/'simulation_data'/'elastic'/str(k)))
+
+
+_fourier_scenes()
 # (pacnerf_e0's beta_min, 11-06, user: "设置个最低值": with the consistent mass the sites far inside their material carry
 # little inertia of their own, and their cell-scale modes ring after the impact undamped by the midpoint rule. Cells whose
 # det F jumps by > 0.3 between frames after frame 8: beta 1e-4 3024, 1e-3 1224, 3e-3 217, the lumped mass at 3e-3 219.)
@@ -308,6 +326,7 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True, on_step=No
     sil = Silhouette()
     r0 = torch.as_tensor(cells['radii'], dtype=f64, device=dev)
     fs, xs, rs = [sil.features(X, r0).cpu().numpy()], [X.cpu().numpy().astype(np.float32)], [r0.cpu().numpy().astype(np.float32)]
+    Fs_ = [np.broadcast_to(np.eye(3, dtype=np.float32), (n, 3, 3)).copy()]          # (save_frames: each cell's F_B per frame, for the render)
     tb = time.time()-t0; t1 = time.time(); prods = 0
     for s in range(1, frames*SPF+1):
         p_, its, g2 = ST.step(tl, lambda g2_: .5*tl)
@@ -324,7 +343,7 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True, on_step=No
         r = r0*torch.linalg.det(Fb).abs().clamp(min=1e-6)**(1/3)
         fs.append(sil.features(x, r).cpu().numpy())
         if save_frames:
-            xs.append(x.cpu().numpy().astype(np.float32)); rs.append(r.cpu().numpy().astype(np.float32))
+            xs.append(x.cpu().numpy().astype(np.float32)); rs.append(r.cpu().numpy().astype(np.float32)); Fs_.append(Fb.cpu().numpy().astype(np.float32))
         if verbose:
             print('  frame %d (t %.2f s, %.0f s): com height %.4f m, balls touching %d, min J %.3f, products so far %d' % (
                 s//SPF, s*DT, time.time()-t1, float((M3*x).sum(0)[UP]/mass.sum()), int((W.tbdelta > 0).sum()), math.exp(float(W.tlj.min())), prods), flush=True)
@@ -344,7 +363,7 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True, on_step=No
                         len(il), 1e3*float(gap.norm(dim=1).median()), 1e3*float(gap.norm(dim=1).max())), flush=True)
     out = dict(f=np.stack(fs), stats=dict(build=tb, seconds=time.time()-t1, products=prods))
     if save_frames:
-        out.update(x=np.stack(xs), r=np.stack(rs))
+        out.update(x=np.stack(xs), r=np.stack(rs), F=np.stack(Fs_))
     return out
 
 
