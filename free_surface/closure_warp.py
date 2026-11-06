@@ -496,7 +496,16 @@ def k_ball_adj(cbody: wp.array(dtype=int), ng: wp.vec3d, bpar: wp.array(dtype=wp
 # x_q = x_B + F_B r_q, its step-end position cs x_q - (cs - 1) x_q,n (x_q,n at the step's start: k_mid_capc); penetration
 # d = -(n . x_e - c0), energy wt k_q d^2 / 2 (k_q = k A_q, a stiff penalty per area), the force k_q d n acting at the point;
 # the glue as k_ball's at the point (held force lamt, stiffness kt_q, bound mu k_q d at the step's start). cpar = (cs, wt,
-# c0, mu, kt / k). Rows 6 and 8 as k_ball
+# c0, mu, kt / k, the normal penalty's scale, delta, K / k). Rows 6 and 8 as k_ball.
+# The band (cpar[6] = delta > 0; 11-06, user: the criterion by the distance from the ground, no glue): MPM's sticky ground
+# holds nothing: at every substep it zeroes the wall nodes' velocity, so the material within its kernel of the wall loses
+# its motion, the force there being just what that took, and a location is let go as its material leaves, bit by bit. Our
+# cap points move with whole cells (one cap lifts or tilts at once), so the tangential hold of point q is a memoryless drag
+# whose strength goes with its height h over the ground at the step's start: the dissipation wt K g(h) |s_t|^2 / 2 of the
+# step's tangential motion s_t = (x_e - x_q,n)_t, K = (K / k) k_q, g = 1 at h <= 0, smoothstep 1 - 3 u^2 + 2 u^3 down to 0
+# at u = h / delta = 1 (k_mid_capc: ktq = K g). Nothing is carried to the next step (no lamt), one criterion (h), the hold
+# fading continuously as the point rises. The normal stays the push-only penalty (a finite normal drag would let a loaded
+# point creep in by F / K every step)
 @wp.kernel(enable_backward=False)
 def k_capc(x: wp.array(dtype=wp.vec3d), FB: wp.array(dtype=wp.mat33d), cb: wp.array(dtype=int), rq: wp.array(dtype=wp.vec3d),
            kq: wp.array(dtype=wp.float64), xqn: wp.array(dtype=wp.vec3d), ng: wp.vec3d, cpar: wp.array(dtype=wp.float64),
@@ -514,7 +523,13 @@ def k_capc(x: wp.array(dtype=wp.vec3d), FB: wp.array(dtype=wp.mat33d), cb: wp.ar
         wp.atomic_add(terms, 6, q % NSLOT, wt*wp.float64(0.5)*cpar[5]*kq[q]*d*d)
     fnq[q] = F
     f = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
-    if mu > wp.float64(0.0) and bound[q] > wp.float64(0.0):
+    if cpar[6] > wp.float64(0.0):
+        if ktq[q] > wp.float64(0.0):
+            dx = xe-xqn[q]
+            sl = dx-wp.dot(dx, ng)*ng
+            f = -ktq[q]*sl
+            wp.atomic_add(terms, 8, q % NSLOT, wt*wp.float64(0.5)*ktq[q]*wp.dot(sl, sl))
+    elif mu > wp.float64(0.0) and bound[q] > wp.float64(0.0):
         dx = xe-xqn[q]
         sl = dx-wp.dot(dx, ng)*ng
         k = ktq[q]
@@ -556,8 +571,14 @@ def k_mid_capc(x: wp.array(dtype=wp.vec3d), cb: wp.array(dtype=int), rq: wp.arra
     xq = x[B]+Fst[B]@rq[q]
     xqn[q] = xq
     dn = wp.max(-(wp.dot(ng, xq)-cpar[2]), wp.float64(0.0))
-    bound[q] = cpar[3]*(cpar[5]*kq[q]*dn+wp.max(cnq[q], wp.float64(0.0)))
-    ktq[q] = cpar[4]*kq[q]
+    if cpar[6] > wp.float64(0.0):                                                    # (the band: K g(h), bound = g as a marker)
+        u = wp.min(wp.max((wp.dot(ng, xq)-cpar[2])/cpar[6], wp.float64(0.0)), wp.float64(1.0))
+        g = wp.float64(1.0)-u*u*(wp.float64(3.0)-wp.float64(2.0)*u)
+        ktq[q] = cpar[7]*kq[q]*g
+        bound[q] = g
+    else:
+        bound[q] = cpar[3]*(cpar[5]*kq[q]*dn+wp.max(cnq[q], wp.float64(0.0)))
+        ktq[q] = cpar[4]*kq[q]
 
 
 @wp.kernel(enable_backward=False)
@@ -1436,11 +1457,18 @@ class ClosureWarp(SkinWarp):
         z = lambda dt_: wp.zeros(Q, dtype=dt_, device=dev)
         self.capc = dict(Q=Q, cb=wp.from_torch(torch.as_tensor(np.asarray(cell), device=dev).to(torch.int32).contiguous(), dtype=wp.int32),
                          rq=T(off, wp.vec3d), kq=T(k*np.asarray(w)), ng=wp.vec3d(*[float(a_) for a_ in normal]),
-                         par=wp.array(np.array([2., .5, float(c0), float(mu), float(kt_ratio), 1.]), dtype=wp.float64, device=dev),
+                         par=wp.array(np.array([2., .5, float(c0), float(mu), float(kt_ratio), 1., 0., 0.]), dtype=wp.float64, device=dev),
                          xqn=z(wp.vec3d), ktq=z(wp.float64), bound=z(wp.float64), lamt=z(wp.vec3d), dq=z(wp.float64), fnq=z(wp.float64), ffq=z(wp.vec3d),
                          cnq=z(wp.float64))
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tcq = {k_: tt(a_) for k_, a_ in self.capc.items() if k_ not in ('Q', 'ng')}
+
+    def set_cap_band(self, delta, k_ratio=10.):
+        """the cap contact's tangential hold as the band (k_capc; 11-06): a memoryless drag K g(h) on each cap point's
+        tangential step, K = k_ratio x its normal penalty k_q, g(h) from 1 on the ground to 0 at the height delta; in place
+        of the glue. After set_cap_contact"""
+        assert self.capc is not None and delta > 0
+        self.tcq['par'][6] = float(delta); self.tcq['par'][7] = float(k_ratio)
 
     def set_cap_clip(self, cell, off, normal=(0., 1., 0.), c0=0., w=.005, s_floor=.2, b0=.1, pen=0., reach=3.):
         """the touching caps' normal column from the ground (k_closP's clip; 11-06), before prepare(), after

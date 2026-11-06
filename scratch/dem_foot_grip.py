@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import free_surface.lion_inverse as li
 out = sys.argv[1]; frames = int(sys.argv[2]) if len(sys.argv) > 2 else 11
+li.CAPB = float(sys.argv[3]) if len(sys.argv) > 3 else 0.; li.CAPBK = float(sys.argv[4]) if len(sys.argv) > 4 else 10.   # (the band, ClosureWarp.set_cap_band)
 li.set_scene('pacnerf_e0'); li.CAPC = 30.
 H = .05; OFF = np.array([.5, -.05, .5])
 EF = np.array([-0.4078950600549248, 0., -0.06629882732047176]); EF /= np.linalg.norm(EF)
