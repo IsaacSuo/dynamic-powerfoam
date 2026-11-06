@@ -201,23 +201,24 @@ def final(prob, xf, A, lamA, lamT, tag):
     return react, clamp_force
 
 
-xf = x_touch[free].clone(); A = torch.zeros(0, dtype=torch.long, device=dev); lamA = torch.zeros(0, dtype=f64, device=dev)
-curve = []
-for delta in DELTAS:
-    xfix = x_touch.clone(); xfix[:, 1] -= delta; prob = KKT(xfix)
-    xf, A, lamA, _, ok = solve(prob, xf, A, lamA, None, 'delta %.1f mm' % (1e3*delta))
-    react, cf = final(prob, xf, A, lamA, None, 'delta %.1f mm, %s' % (1e3*delta, 'converged' if ok else 'NOT converged'))
-    curve.append((delta, float(react[1]), float(cf[1]), ok))
-    torch.save(dict(xf=xf, A=A, lamA=lamA, delta=delta), str(OUT/('kkt_d%.1f.pt' % (1e3*delta))))
-    if not ok:
-        print('STOP at delta %.1f mm' % (1e3*delta)); break
-print('reaction against delta: ' + ', '.join('%.1f mm: %.4g (clamp %.4g, %s)' % (1e3*d, r, c, 'ok' if o else 'no') for d, r, c, o in curve), flush=True)
-if STICK and curve[-1][3]:
-    yA = prob.cons(prob.full(xf))[2]; anchors = (A.clone(), yA[A][:, [0, 2]].clone())
-    xfix = x_touch.clone(); xfix[:, 1] -= DELTAS[-1]; xfix[:, 0] += DH; probS = KKT(xfix, anchors)
-    print('\n== stick: %d anchors at delta %.1f mm, the clamp pushed sideways by %.1f mm' % (len(A), 1e3*DELTAS[-1], 1e3*DH), flush=True)
-    xf2, A2, lam2, lamT, ok = solve(probS, xf, A, lamA, None, 'stick')
-    final(probS, xf2, A2, lam2, lamT, 'stick, %s' % ('converged' if ok else 'NOT converged'))
-    print('   anchored points still in the normal active set: %d of %d' % (int(torch.isin(anchors[0], A2).sum()), len(anchors[0])))
-    torch.save(dict(xf=xf2, A=A2, lamA=lam2, lamT=lamT, anchors=anchors), str(OUT/'kkt_stick.pt'))
-print('done', flush=True)
+if __name__ == '__main__':
+    xf = x_touch[free].clone(); A = torch.zeros(0, dtype=torch.long, device=dev); lamA = torch.zeros(0, dtype=f64, device=dev)
+    curve = []
+    for delta in DELTAS:
+        xfix = x_touch.clone(); xfix[:, 1] -= delta; prob = KKT(xfix)
+        xf, A, lamA, _, ok = solve(prob, xf, A, lamA, None, 'delta %.1f mm' % (1e3*delta))
+        react, cf = final(prob, xf, A, lamA, None, 'delta %.1f mm, %s' % (1e3*delta, 'converged' if ok else 'NOT converged'))
+        curve.append((delta, float(react[1]), float(cf[1]), ok))
+        torch.save(dict(xf=xf, A=A, lamA=lamA, delta=delta), str(OUT/('kkt_d%.1f.pt' % (1e3*delta))))
+        if not ok:
+            print('STOP at delta %.1f mm' % (1e3*delta)); break
+    print('reaction against delta: ' + ', '.join('%.1f mm: %.4g (clamp %.4g, %s)' % (1e3*d, r, c, 'ok' if o else 'no') for d, r, c, o in curve), flush=True)
+    if STICK and curve[-1][3]:
+        yA = prob.cons(prob.full(xf))[2]; anchors = (A.clone(), yA[A][:, [0, 2]].clone())
+        xfix = x_touch.clone(); xfix[:, 1] -= DELTAS[-1]; xfix[:, 0] += DH; probS = KKT(xfix, anchors)
+        print('\n== stick: %d anchors at delta %.1f mm, the clamp pushed sideways by %.1f mm' % (len(A), 1e3*DELTAS[-1], 1e3*DH), flush=True)
+        xf2, A2, lam2, lamT, ok = solve(probS, xf, A, lamA, None, 'stick')
+        final(probS, xf2, A2, lam2, lamT, 'stick, %s' % ('converged' if ok else 'NOT converged'))
+        print('   anchored points still in the normal active set: %d of %d' % (int(torch.isin(anchors[0], A2).sum()), len(anchors[0])))
+        torch.save(dict(xf=xf2, A=A2, lamA=lam2, lamT=lamT, anchors=anchors), str(OUT/'kkt_stick.pt'))
+    print('done', flush=True)
