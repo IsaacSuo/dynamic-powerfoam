@@ -4,6 +4,7 @@ Loads as mpm_clamp.py: gravity 1 (from rest) or kick 1 (gravity off, v0's horizo
 groups' volume-weighted mean positions (all, tips 0-3, core) at rate Hz for T s.
 args: sets npz, gravity, kick, beta, T, rate, out"""
 import math
+import os
 import sys
 import time
 from pathlib import Path
@@ -77,6 +78,12 @@ for s in range(1, ns*spr+1):
     if not (math.isfinite(g2) and math.sqrt(g2) <= tl):
         raise SystemExit('step %d: not converged (%s after %d Newton iterations)' % (s, g2, its))
     ST.end()
+    if cols and s >= 400 and os.environ.get('F1_MONITOR'):                         # (F1's columns and cells, every step from 400)
+        dF = torch.linalg.det(W.tF); kb = int(torch.argmin(dF)); cdev = (ST.tx[n:]-W.c_rest).norm(dim=1); kc = int(torch.argmax(cdev))
+        wv = torch.einsum('nij,nj->ni', st.Mt_inv[W.cap_cells], torch.einsum('nij,nj->ni', st.Mcap[W.cap_cells], st.mA[W.cap_cells])).norm(dim=1)
+        c3 = int(W._cidx_t[3432])
+        print('MON %d: min det F_B %.4f (cell %d); cell 3432 det F_B %.4f |c - m| %.3g; max |c - m| %.3g (cell %d, |w| %.3g, |w| |c - m| %.3g); F_B inverted %d' % (
+            s, float(dF[kb]), kb, float(dF[3432]), float(cdev[c3]) if c3 >= 0 else -1., float(cdev[kc]), int(W.cap_cells[kc]), float(wv[kc]), float(wv[kc]*cdev[kc]), int((dF < 0).sum())), flush=True)
     if s % spr == 0:
         rec[s//spr] = Wg@ST.tx[:n].cpu().numpy()
         if (s//spr) % round(rate/8) == 0:
