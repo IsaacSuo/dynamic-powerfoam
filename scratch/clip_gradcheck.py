@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import free_surface.lion_inverse as li
 li.set_scene('pacnerf_e0'); li.CLIP = float(sys.argv[1]); li.CLIPP = float(sys.argv[2]) if len(sys.argv) > 2 else 0.
+li.CLIPS = int(sys.argv[4]) if len(sys.argv) > 4 else 0                            # (argv[4] 1: the stick)
 S0 = int(sys.argv[3]) if len(sys.argv) > 3 else 6*li.SPF+10
 
 

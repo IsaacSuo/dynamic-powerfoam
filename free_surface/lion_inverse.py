@@ -222,6 +222,7 @@ CAPC = 0.                                                                       
 CAPT = 0                                                                           # (--cap-traction 1: the touching caps' traction into the closure, ClosureWarp.cap_traction)
 CLIP = 0.                                                                          # (--cap-clip w > 0: the touching caps' normal column from the ground, ClosureWarp.set_cap_clip; implies the cap contact)
 CLIPP = 0.                                                                         # (--cap-clip-pen: the cap contact's normal penalty with the clip, x this)
+CLIPS = 0                                                                          # (--cap-clip-stick 1: with --cap-clip, the column's tangential part from the no-slip too)
 BAND = 0.                                                                          # (--cap-band delta > 0 (m): the no-slip without a held force, fading over delta, ClosureWarp.set_cap_band; implies the cap contact)
 BANDK = 20.                                                                        # (--cap-band-kappa: its hard stop's stand-in, x the cell's inertia)
 
@@ -276,7 +277,7 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True, on_step=No
         h = float((st.V.sum()/st.n)**(1/3))
         W.set_cap_contact(cl, off, wq, upt, C0, capc*(W.lam+2*W.mu)/h, 1., MU)
         if CLIP:
-            W.set_cap_clip(cl, off, upt, C0, CLIP, pen=CLIPP)
+            W.set_cap_clip(cl, off, upt, C0, CLIP, pen=CLIPP, stick=bool(CLIPS))
         if BAND:                                                                    # (kstop: kappa x the cell's midpoint inertia 4 V / dt^2 over the
             A_ = np.bincount(cl, weights=wq, minlength=st.n)                          # contact's z-stiffness factor cs^2 wt = 2, split by area)
             Vn = st.V.cpu().numpy()
@@ -335,6 +336,12 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True, on_step=No
                 rat = (W.tsclip[on]/W.tsps[on]) if bool(on.any()) else torch.ones(1, dtype=f64, device=dev)
                 print('     clip: caps clipped %d, s / s_ps median %.3f min %.3f; cap points below the ground %d, deepest %.2f mm; glue bound > 0 on %d points' % (
                     int(on.sum()), float(rat.median()), float(rat.min()), int((dep > 0).sum()), 1e3*float(dep.max()), int((cq['bound'] > 0).sum())), flush=True)
+                if CLIPS and bool(on.any()):                                        # (the stick: each clipped cap's lowest point from its anchor, along the plane)
+                    low = torch.full((n,), -1e9, dtype=f64, device=dev).scatter_reduce(0, cb_, dep, 'amax')
+                    il = torch.nonzero(on[cb_] & (dep >= low[cb_]-1e-15))[:, 0]
+                    gap = xq[il]-cq['xqn'][il]; gap[:, UP] = 0
+                    print('     stick: lowest points of clipped caps %d, along-plane distance from the step-start anchor median %.3f mm, max %.3f mm' % (
+                        len(il), 1e3*float(gap.norm(dim=1).median()), 1e3*float(gap.norm(dim=1).max())), flush=True)
     out = dict(f=np.stack(fs), stats=dict(build=tb, seconds=time.time()-t1, products=prods))
     if save_frames:
         out.update(x=np.stack(xs), r=np.stack(rs))
@@ -389,7 +396,7 @@ def run_batch(thetas, frames, tol, out, jobs, tag):
             cmd = [sys.executable, '-u', str(Path(__file__).resolve()), 'run', '--theta', *['%.17g' % v for v in th], '--frames', str(frames),
                    '--tol', '%g' % tols[k], '--out', str(paths[k]), '--foam', str(FOAM), '--chain', str(CHAIN), '--scene', SCENE_NAME, '--drag', '%g' % DRAG, '--glue-point', GLUE, '--ball-shape', SHAPE, '--cap-traction', str(CAPT), '--cap-contact', '%g' % CAPC,
                    '--cap-clip', '%g' % CLIP, '--cap-clip-pen', '%g' % CLIPP,
-                   '--cap-band', '%g' % BAND, '--cap-band-kappa', '%g' % BANDK]
+                   '--cap-band', '%g' % BAND, '--cap-band-kappa', '%g' % BANDK, '--cap-clip-stick', str(CLIPS)]
             live[k] = (subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, cwd=str(ROOT), env=env), log)
         time.sleep(2)
         for k in list(live):
@@ -612,7 +619,7 @@ def cmd_show(a):
 
 
 def main():
-    global FOAM, CHAIN, SCENE_NAME, DRAG, GLUE, SHAPE, CAPT, CAPC, CLIP, CLIPP, BAND, BANDK
+    global FOAM, CHAIN, SCENE_NAME, DRAG, GLUE, SHAPE, CAPT, CAPC, CLIP, CLIPP, BAND, BANDK, CLIPS
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest='cmd', required=True)
     q = sub.add_parser('check')
@@ -625,6 +632,7 @@ def main():
     q.add_argument('--cap-contact', type=float, default=0., help='alpha > 0: the ground on the exposed caps (penalty alpha (lam + 2 mu) / h per area), not the Hertz balls')
     q.add_argument('--cap-clip', type=float, default=0., help='w > 0: the touching caps\' normal column from the ground (softmin width w; ClosureWarp.set_cap_clip)')
     q.add_argument('--cap-clip-pen', type=float, default=0., help='with --cap-clip: the cap contact\'s normal penalty x this (0: the clip alone)')
+    q.add_argument('--cap-clip-stick', type=int, default=0, help='1: with --cap-clip, the column\'s tangential part from the contact\'s no-slip too')
     q.add_argument('--cap-band', type=float, default=0., help='delta > 0 (m): the tangential no-slip without a held force, fading over delta (ClosureWarp.set_cap_band)')
     q.add_argument('--cap-band-kappa', type=float, default=20., help='with --cap-band: the hard stop\'s stand-in, x the cell\'s inertia')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
@@ -638,6 +646,7 @@ def main():
     q.add_argument('--cap-contact', type=float, default=0., help='alpha > 0: the ground on the exposed caps (penalty alpha (lam + 2 mu) / h per area), not the Hertz balls')
     q.add_argument('--cap-clip', type=float, default=0., help='w > 0: the touching caps\' normal column from the ground (softmin width w; ClosureWarp.set_cap_clip)')
     q.add_argument('--cap-clip-pen', type=float, default=0., help='with --cap-clip: the cap contact\'s normal penalty x this (0: the clip alone)')
+    q.add_argument('--cap-clip-stick', type=int, default=0, help='1: with --cap-clip, the column\'s tangential part from the contact\'s no-slip too')
     q.add_argument('--cap-band', type=float, default=0., help='delta > 0 (m): the tangential no-slip without a held force, fading over delta (ClosureWarp.set_cap_band)')
     q.add_argument('--cap-band-kappa', type=float, default=20., help='with --cap-band: the hard stop\'s stand-in, x the cell\'s inertia')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
@@ -656,6 +665,7 @@ def main():
     q.add_argument('--cap-contact', type=float, default=0., help='alpha > 0: the ground on the exposed caps (penalty alpha (lam + 2 mu) / h per area), not the Hertz balls')
     q.add_argument('--cap-clip', type=float, default=0., help='w > 0: the touching caps\' normal column from the ground (softmin width w; ClosureWarp.set_cap_clip)')
     q.add_argument('--cap-clip-pen', type=float, default=0., help='with --cap-clip: the cap contact\'s normal penalty x this (0: the clip alone)')
+    q.add_argument('--cap-clip-stick', type=int, default=0, help='1: with --cap-clip, the column\'s tangential part from the contact\'s no-slip too')
     q.add_argument('--cap-band', type=float, default=0., help='delta > 0 (m): the tangential no-slip without a held force, fading over delta (ClosureWarp.set_cap_band)')
     q.add_argument('--cap-band-kappa', type=float, default=20., help='with --cap-band: the hard stop\'s stand-in, x the cell\'s inertia')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
@@ -684,6 +694,7 @@ def main():
     q.add_argument('--cap-contact', type=float, default=0., help='alpha > 0: the ground on the exposed caps (penalty alpha (lam + 2 mu) / h per area), not the Hertz balls')
     q.add_argument('--cap-clip', type=float, default=0., help='w > 0: the touching caps\' normal column from the ground (softmin width w; ClosureWarp.set_cap_clip)')
     q.add_argument('--cap-clip-pen', type=float, default=0., help='with --cap-clip: the cap contact\'s normal penalty x this (0: the clip alone)')
+    q.add_argument('--cap-clip-stick', type=int, default=0, help='1: with --cap-clip, the column\'s tangential part from the contact\'s no-slip too')
     q.add_argument('--cap-band', type=float, default=0., help='delta > 0 (m): the tangential no-slip without a held force, fading over delta (ClosureWarp.set_cap_band)')
     q.add_argument('--cap-band-kappa', type=float, default=20., help='with --cap-band: the hard stop\'s stand-in, x the cell\'s inertia')
     q.add_argument('--chain', type=int, default=0)
@@ -702,6 +713,7 @@ def main():
     q.add_argument('--cap-contact', type=float, default=0., help='alpha > 0: the ground on the exposed caps (penalty alpha (lam + 2 mu) / h per area), not the Hertz balls')
     q.add_argument('--cap-clip', type=float, default=0., help='w > 0: the touching caps\' normal column from the ground (softmin width w; ClosureWarp.set_cap_clip)')
     q.add_argument('--cap-clip-pen', type=float, default=0., help='with --cap-clip: the cap contact\'s normal penalty x this (0: the clip alone)')
+    q.add_argument('--cap-clip-stick', type=int, default=0, help='1: with --cap-clip, the column\'s tangential part from the contact\'s no-slip too')
     q.add_argument('--cap-band', type=float, default=0., help='delta > 0 (m): the tangential no-slip without a held force, fading over delta (ClosureWarp.set_cap_band)')
     q.add_argument('--cap-band-kappa', type=float, default=20., help='with --cap-band: the hard stop\'s stand-in, x the cell\'s inertia')
     q.add_argument('--chain', type=int, default=0, help='1: rigid chain cells with their own rotation (ClosureWarp.set_chain)')
@@ -717,6 +729,7 @@ def main():
     CHAIN = int(getattr(a, 'chain', 0)); DRAG = float(getattr(a, 'drag', 0.)); GLUE = getattr(a, 'glue_point', 'site'); SHAPE = getattr(a, 'ball_shape', 'rigid'); CAPT = int(getattr(a, 'cap_traction', 0)); CAPC = float(getattr(a, 'cap_contact', 0.))
     CLIP = float(getattr(a, 'cap_clip', 0.)); CLIPP = float(getattr(a, 'cap_clip_pen', 0.))
     BAND = float(getattr(a, 'cap_band', 0.)); BANDK = float(getattr(a, 'cap_band_kappa', 20.))
+    CLIPS = int(getattr(a, 'cap_clip_stick', 0))
     print('foam: %s%s' % (FOAM, ', chain cells rigid with their own rotation' if CHAIN else ''), flush=True)
     dict(check=cmd_check, run=cmd_run, lm=cmd_lm, eval=cmd_eval, show=cmd_show)[a.cmd](a)
 

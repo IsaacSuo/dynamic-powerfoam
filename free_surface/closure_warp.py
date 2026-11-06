@@ -1013,7 +1013,8 @@ def k_closP(x: wp.array(dtype=wp.vec3d), S: wp.array(dtype=wp.mat33d), poff: wp.
             t1: wp.array(dtype=wp.vec3d), t2: wp.array(dtype=wp.vec3d), mA: wp.array(dtype=wp.vec3d), PA: wp.array(dtype=wp.mat33d),
             kap: wp.array(dtype=wp.float64), nr: wp.array(dtype=wp.vec3d), eps: wp.array(dtype=wp.float64), trac: wp.array(dtype=wp.vec3d),
             tpar: wp.array(dtype=wp.float64), cl: wp.array(dtype=wp.float64), qoff: wp.array(dtype=int), qr: wp.array(dtype=wp.vec3d),
-            qb0: wp.array(dtype=wp.float64), qrad: wp.array(dtype=wp.float64), G: wp.array(dtype=wp.mat33d), Fc: wp.array(dtype=wp.mat33d), Fso: wp.array(dtype=wp.mat33d),
+            qb0: wp.array(dtype=wp.float64), qrad: wp.array(dtype=wp.float64), anc: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), Fc: wp.array(dtype=wp.mat33d),
+            Fso: wp.array(dtype=wp.mat33d),
             sclip: wp.array(dtype=wp.float64), spso: wp.array(dtype=wp.float64)):
     b = wp.tid()
     C = wp.mat33d()
@@ -1065,7 +1066,25 @@ def k_closP(x: wp.array(dtype=wp.vec3d), S: wp.array(dtype=wp.mat33d), poff: wp.
             sf = sm
             if zf < wp.float64(40.0):
                 sf = sfl+w*wp.log(wp.float64(1.0)+wp.exp(zf))
-            Fs = Gb@Pm+wp.outer(nh*sf, m)
+            ct = wp.vec3d()
+            if cl[0] > wp.float64(1.5):                                              # (the stick, 11-06: the contact material's no-slip in the column)
+                p0 = wp.exp(-(sps-m0)/w)/Z
+                u = wp.vec3d()
+                D = wp.float64(0.0)
+                for j in range(qoff[b], qoff[b+1]):
+                    r = qr[j]
+                    mr = wp.dot(m, r)
+                    bq = gn*mr
+                    L = wp.sqrt(bq*bq+qb0[j]*qb0[j])
+                    Pr = Pm@r
+                    sj = clip_sj(hb+wp.dot(ng, Gb@Pr), bq, L, sps)
+                    if sj-m0 < wp.float64(40.0)*w:
+                        pj = wp.exp(-(sj-m0)/w)/Z
+                        u = u-(xb+Gb@Pr+nh*(sf*mr)-anc[j])*pj
+                        D = D+pj*mr
+                if D > wp.float64(1e-300):
+                    ct = (u-ng*wp.dot(ng, u))*((wp.float64(1.0)-p0)/D)
+            Fs = Gb@Pm+wp.outer(nh*sf+ct, m)
             sclip[b] = sf
             spso[b] = sps
         C = Fs@Mc[b]
@@ -1148,7 +1167,7 @@ def k_closP_adj(poff: wp.array(dtype=int), pk: wp.array(dtype=int), pdX: wp.arra
                 mA: wp.array(dtype=wp.vec3d), PA: wp.array(dtype=wp.mat33d), kap: wp.array(dtype=wp.float64), nr: wp.array(dtype=wp.vec3d),
                 eps: wp.array(dtype=wp.float64), trac: wp.array(dtype=wp.vec3d), tpar: wp.array(dtype=wp.float64), cl: wp.array(dtype=wp.float64),
                 qoff: wp.array(dtype=int), qr: wp.array(dtype=wp.vec3d), qb0: wp.array(dtype=wp.float64), qrad: wp.array(dtype=wp.float64),
-                G: wp.array(dtype=wp.mat33d), x: wp.array(dtype=wp.vec3d), Fc_bar: wp.array(dtype=wp.mat33d), Fs_bar: wp.array(dtype=wp.mat33d), S_bar: wp.array(dtype=wp.mat33d),
+                anc: wp.array(dtype=wp.vec3d), G: wp.array(dtype=wp.mat33d), x: wp.array(dtype=wp.vec3d), Fc_bar: wp.array(dtype=wp.mat33d), Fs_bar: wp.array(dtype=wp.mat33d), S_bar: wp.array(dtype=wp.mat33d),
                 x_bar: wp.array(dtype=wp.vec3d), cnq: wp.array(dtype=wp.float64)):
     """S_bar += Fc_bar M_t^-T; G_bar = d comp_f^T [Fc_bar M_t^-T M_c^T + Fs_bar] (by its 9 directions); x_k += G_bar M2^-T dX_e, x_B -= the sum.
     The ground's clip (cl[0] > 0): its own derivative in G, and in x_B directly; cnq the cap points' normal force (the
@@ -1204,30 +1223,48 @@ def k_closP_adj(poff: wp.array(dtype=int), pk: wp.array(dtype=int), pdX: wp.arra
                 ez = wp.exp(zf)
                 sf = sfl+w*wp.log(wp.float64(1.0)+ez)
                 sig = ez/(wp.float64(1.0)+ez)
-            gs = wp.dot(nh, cbar@m)                                                  # dE / ds
-            xd = wp.vec3d()
-            for j in range(qoff[b], qoff[b+1]):
-                r = qr[j]
-                bq = gn*wp.dot(m, r)
-                L = wp.sqrt(bq*bq+qb0[j]*qb0[j])
-                sj = clip_sj(hb+wp.dot(ng, Gb@(Pm@r)), bq, L, sps)
-                f = wp.float64(0.0)
-                if sj-m0 < wp.float64(40.0)*w:
-                    pj = wp.exp(-(sj-m0)/w)/Z
-                    xd = xd+ng*(pj/L)
-                    f = -gs*sig*pj/L
-                cnq[j] = f
-            wp.atomic_add(x_bar, b, xd*(gs*sig))
             p0 = wp.exp(-(sps-m0)/w)/Z
-            for k in range(9):
+            stick = cl[0] > wp.float64(1.5)
+            xb = x[b]
+            u = wp.vec3d()
+            D = wp.float64(0.0)
+            if stick:
+                for j in range(qoff[b], qoff[b+1]):
+                    r = qr[j]
+                    mr = wp.dot(m, r)
+                    bq = gn*mr
+                    L = wp.sqrt(bq*bq+qb0[j]*qb0[j])
+                    Pr = Pm@r
+                    sj = clip_sj(hb+wp.dot(ng, Gb@Pr), bq, L, sps)
+                    cnq[j] = wp.float64(0.0)
+                    if sj-m0 < wp.float64(40.0)*w:
+                        pj = wp.exp(-(sj-m0)/w)/Z
+                        u = u-(xb+Gb@Pr+nh*(sf*mr)-anc[j])*pj
+                        D = D+pj*mr
+            vt = wp.vec3d()
+            if D > wp.float64(1e-300):
+                vt = (u-ng*wp.dot(ng, u))/D
+            xs = wp.vec3d()
+            for k in range(12):
+                if not stick and k >= 9:
+                    continue
                 E = wp.mat33d()
-                E[k//3, k % 3] = wp.float64(1.0)
+                ex = wp.vec3d()
+                if k < 9:
+                    E[k//3, k % 3] = wp.float64(1.0)
+                elif k == 9:
+                    ex = wp.vec3d(wp.float64(1.0), wp.float64(0.0), wp.float64(0.0))
+                elif k == 10:
+                    ex = wp.vec3d(wp.float64(0.0), wp.float64(1.0), wp.float64(0.0))
+                else:
+                    ex = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(1.0))
                 d1 = E@t1[b]
                 d2 = E@t2[b]
                 dnt = wp.cross(d1, c2)+wp.cross(c1, d2)
                 dsps = -kap[0]*(wp.dot(c1, d1)+wp.dot(c2, d2)+wp.dot(nn, dnt))/q
                 dnh = cap_normal_jvp(Gb, E, t1[b], t2[b], nr[b], eps[0])
                 dgn = wp.dot(ng, dnh)
+                dhb = wp.dot(ng, ex)
                 dsm = p0*dsps
                 for j in range(qoff[b], qoff[b+1]):
                     r = qr[j]
@@ -1241,14 +1278,66 @@ def k_closP_adj(poff: wp.array(dtype=int), pk: wp.array(dtype=int), pdX: wp.arra
                         pj = wp.exp(-(sj-m0)/w)/Z
                         db = dgn*mr
                         dL = bq*db/L
-                        dnum = wp.dot(ng, E@Pr)+dsps*bq+sps*db
+                        dnum = dhb+wp.dot(ng, E@Pr)+dsps*bq+sps*db
                         dsm = dsm+pj*(dsps+dnum/L-num*dL/(L*L))
-                dF = E@Pm+wp.outer(nh*(sig*dsm)+dnh*sf, m)
+                dsf = sig*dsm
+                dct = wp.vec3d()
+                if stick:
+                    dp0 = -p0*(dsps-dsm)/w
+                    du = wp.vec3d()
+                    dD = wp.float64(0.0)
+                    for j in range(qoff[b], qoff[b+1]):
+                        r = qr[j]
+                        mr = wp.dot(m, r)
+                        bq = gn*mr
+                        L = wp.sqrt(bq*bq+qb0[j]*qb0[j])
+                        Pr = Pm@r
+                        num = hb+wp.dot(ng, Gb@Pr)+sps*bq
+                        sj = sps+num/L
+                        if sj-m0 < wp.float64(40.0)*w:
+                            pj = wp.exp(-(sj-m0)/w)/Z
+                            db = dgn*mr
+                            dL = bq*db/L
+                            dnum = dhb+wp.dot(ng, E@Pr)+dsps*bq+sps*db
+                            dsj = dsps+dnum/L-num*dL/(L*L)
+                            dpj = -pj*(dsj-dsm)/w
+                            rel = xb+Gb@Pr+nh*(sf*mr)-anc[j]
+                            drel = ex+E@Pr+(nh*dsf+dnh*sf)*mr
+                            du = du-(rel*dpj+drel*pj)
+                            dD = dD+dpj*mr
+                    if D > wp.float64(1e-300):
+                        dv = (du-ng*wp.dot(ng, du))/D-vt*(dD/D)
+                        dct = vt*(-dp0)+dv*(wp.float64(1.0)-p0)
+                dF = E@Pm+wp.outer(nh*dsf+dnh*sf+dct, m)
                 s = wp.float64(0.0)
                 for i in range(3):
                     for jj in range(3):
                         s = s+cbar[i, jj]*dF[i, jj]
-                Gbar[k//3, k % 3] = s
+                if k < 9:
+                    Gbar[k//3, k % 3] = s
+                elif k == 9:
+                    xs = xs+wp.vec3d(s, wp.float64(0.0), wp.float64(0.0))
+                elif k == 10:
+                    xs = xs+wp.vec3d(wp.float64(0.0), s, wp.float64(0.0))
+                else:
+                    xs = xs+wp.vec3d(wp.float64(0.0), wp.float64(0.0), s)
+            if stick:
+                wp.atomic_add(x_bar, b, xs)
+            else:
+                gs = wp.dot(nh, cbar@m)                                              # dE / ds (the clip alone: x_B's direct term)
+                xd = wp.vec3d()
+                for j in range(qoff[b], qoff[b+1]):
+                    r = qr[j]
+                    bq = gn*wp.dot(m, r)
+                    L = wp.sqrt(bq*bq+qb0[j]*qb0[j])
+                    sj = clip_sj(hb+wp.dot(ng, Gb@(Pm@r)), bq, L, sps)
+                    f = wp.float64(0.0)
+                    if sj-m0 < wp.float64(40.0)*w:
+                        pj = wp.exp(-(sj-m0)/w)/Z
+                        xd = xd+ng*(pj/L)
+                        f = -gs*sig*pj/L
+                    cnq[j] = f
+                wp.atomic_add(x_bar, b, xd*(gs*sig))
         else:
             tr = trac[b]
             loaded = wp.dot(tr, tr) > wp.float64(0.0)
@@ -1469,13 +1558,16 @@ class ClosureWarp(SkinWarp):
         tt = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.tcq = {k_: tt(a_) for k_, a_ in self.capc.items() if k_ not in ('Q', 'ng')}
 
-    def set_cap_clip(self, cell, off, normal=(0., 1., 0.), c0=0., w=.005, s_floor=.2, b0=.1, pen=0., reach=3.):
+    def set_cap_clip(self, cell, off, normal=(0., 1., 0.), c0=0., w=.005, s_floor=.2, b0=.1, pen=0., reach=3., stick=False):
         """the touching caps' normal column from the ground (k_closP's clip; 11-06), before prepare(), after
         set_cap_positions and set_cap_contact with the same points sorted by cell (cell, off: cap_quadrature's): the
         softmin's width w (in stretch), the soft floor s_floor, b0 = b0 |r| the sideways caps' bound on 1 / L. The cap
         contact keeps the glue at the points (now moved by F_s; its bound from the clip's normal force); its normal
         penalty scaled by pen (0: the clip alone). A cap whose site is over the plane by reach x its points' farthest rest
-        offset or more is skipped (its softmin terms e^-40 and below there unless stretched reach x)"""
+        offset or more is skipped (its softmin terms e^-40 and below there unless stretched reach x). stick (11-06): the
+        column's tangential part too, from the contact material's no-slip: the softmin-weighted contact points keep their
+        step-start positions along the plane (the anchors: the cap contact's xqn), weighted by the contact's share 1 - p0;
+        the cap contact's glue then off (its points' forces would count twice)"""
         assert self.cap_pos and self.capc is not None
         cell = np.asarray(cell); n = self.n; dev = 'cuda'
         assert np.all(np.diff(cell) >= 0) and len(cell) == self.capc['Q'], 'set_cap_clip: the cap contact\'s points, sorted by cell'
@@ -1490,6 +1582,10 @@ class ClosureWarp(SkinWarp):
         self.qrad = wp.array(rad, dtype=wp.float64, device=dev)
         self.cnq = self.capc['cnq']
         self.tcq['par'][5] = float(pen)
+        if stick:
+            self.tclpar = wp.to_torch(self.clpar, requires_grad=False); self.tclpar[0] = 2.
+            self.qanc = self.capc['xqn']
+            self.tcq['par'][3] = 0.
         self.Fs_st = wp.from_torch(torch.eye(3, dtype=f64, device=dev).repeat(n, 1, 1).contiguous(), dtype=wp.mat33d)
         self.tFs_st = wp.to_torch(self.Fs_st, requires_grad=False)
         self.clip = True
@@ -1571,6 +1667,7 @@ class ClosureWarp(SkinWarp):
         self.qoff = wp.zeros(n+1, dtype=wp.int32, device='cuda'); self.qr = wp.zeros(1, dtype=wp.vec3d, device='cuda')   # (set_cap_clip; off:
         self.qb0 = wp.zeros(1, dtype=wp.float64, device='cuda'); self.clpar = wp.zeros(8, dtype=wp.float64, device='cuda')  # no points, cl[0] = 0)
         self.qrad = wp.zeros(n, dtype=wp.float64, device='cuda')
+        self.qanc = wp.zeros(1, dtype=wp.vec3d, device='cuda')                       # (set_cap_clip's stick: the cap points' step-start positions)
         self.cnq = wp.zeros(1, dtype=wp.float64, device='cuda')
 
     def set_chain(self, cells=None):
@@ -1989,7 +2086,7 @@ class ClosureWarp(SkinWarp):
                 tape.record_func(adj, arrays=[B['S'], B['Fc']])
         elif self.cap_pos:
             cp = [self.poff, self.pk, self.pdX, self.M2i, self.Mti, self.Mc, self.t1, self.t2, self.mA, self.PA, self.kapw, self.capnr, self.capeps, self.trac, self.tpar,
-                  self.clpar, self.qoff, self.qr, self.qb0, self.qrad]
+                  self.clpar, self.qoff, self.qr, self.qb0, self.qrad, self.qanc]
             wp.launch(k_closP, n, inputs=[x, B['S']]+cp, outputs=[B['G'], B['Fc'], B['Fs'], B['sclip'], B['sps']])
             if tape is not None:
                 tape.record_func(lambda: wp.launch(k_closP_adj, n, inputs=cp+[B['G'], x, B['Fc'].grad, B['Fs'].grad], outputs=[B['S'].grad, x.grad, self.cnq]),
