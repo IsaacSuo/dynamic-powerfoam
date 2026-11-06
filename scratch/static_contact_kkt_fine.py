@@ -13,11 +13,12 @@ STEP = 1e-3*float(sys.argv_[0]) if len(sys.argv_) > 0 else .25e-3
 DMAX = 1e-3*float(sys.argv_[1]) if len(sys.argv_) > 1 else 8e-3
 SOLVER = sys.argv_[2] if len(sys.argv_) > 2 else 'kkt'
 MAXN_ = int(sys.argv_[3]) if len(sys.argv_) > 3 else 40
-z = torch.load(str(kk.OUT/'multi_step2.pt')); xf, A, lamA, delta = z['xf'], z['A'], z['lamA'], float(z['delta'])
-print('start: delta %.2f mm, |A| %d; steps of %.2f mm, solver %s' % (1e3*delta, len(A), 1e3*STEP, SOLVER), flush=True)
+START = sys.argv_[4] if len(sys.argv_) > 4 else 'multi_step2.pt'                    # (a negative step unloads from it)
+z = torch.load(str(kk.OUT/START)); xf, A, lamA, delta = z['xf'], z['A'], z['lamA'], float(z['delta'])
+print('start: %s, delta %.2f mm, |A| %d; steps of %.2f mm, solver %s' % (START, 1e3*delta, len(A), 1e3*STEP, SOLVER), flush=True)
 solve = kk.solve if SOLVER == 'kkt' else kk.solve_tr
 curve = []
-while delta < DMAX-1e-12:
+while (delta < DMAX-1e-12) if STEP > 0 else (delta > DMAX+1e-12):
     delta += STEP
     xfix = x_touch.clone(); xfix[:, 1] -= delta; prob = kk.KKT(xfix)
     before = sorted(torch.unique(cl[kk.candF][A]).tolist()) if len(A) else []
