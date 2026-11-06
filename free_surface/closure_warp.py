@@ -492,6 +492,73 @@ def k_ball_adj(cbody: wp.array(dtype=int), ng: wp.vec3d, bpar: wp.array(dtype=wp
         wp.atomic_add(F_adj, B, (cs*wt*a6*fn[c]*R[c]/wp.length(u))*wp.outer(ng, u))
 
 
+# the ground on the exposed caps (11-06, user: no Hertz; free_surface/cap_contact.py): point q of cell B's cap at
+# x_q = x_B + F_B r_q, its step-end position cs x_q - (cs - 1) x_q,n (x_q,n at the step's start: k_mid_capc); penetration
+# d = -(n . x_e - c0), energy wt k_q d^2 / 2 (k_q = k A_q, a stiff penalty per area), the force k_q d n acting at the point;
+# the glue as k_ball's at the point (held force lamt, stiffness kt_q, bound mu k_q d at the step's start). cpar = (cs, wt,
+# c0, mu, kt / k). Rows 6 and 8 as k_ball
+@wp.kernel(enable_backward=False)
+def k_capc(x: wp.array(dtype=wp.vec3d), FB: wp.array(dtype=wp.mat33d), cb: wp.array(dtype=int), rq: wp.array(dtype=wp.vec3d),
+           kq: wp.array(dtype=wp.float64), xqn: wp.array(dtype=wp.vec3d), ng: wp.vec3d, cpar: wp.array(dtype=wp.float64),
+           ktq: wp.array(dtype=wp.float64), bound: wp.array(dtype=wp.float64), lamt: wp.array(dtype=wp.vec3d),
+           dq: wp.array(dtype=wp.float64), fnq: wp.array(dtype=wp.float64), ffq: wp.array(dtype=wp.vec3d), terms: wp.array2d(dtype=wp.float64)):
+    q = wp.tid()
+    B = cb[q]
+    cs, wt, c0, mu = cpar[0], cpar[1], cpar[2], cpar[3]
+    xe = cs*(x[B]+FB[B]@rq[q])-(cs-wp.float64(1.0))*xqn[q]
+    d = -(wp.dot(ng, xe)-c0)
+    dq[q] = d
+    F = wp.float64(0.0)
+    if d > wp.float64(0.0):
+        F = kq[q]*d
+        wp.atomic_add(terms, 6, q % NSLOT, wt*wp.float64(0.5)*kq[q]*d*d)
+    fnq[q] = F
+    f = wp.vec3d(wp.float64(0.0), wp.float64(0.0), wp.float64(0.0))
+    if mu > wp.float64(0.0) and bound[q] > wp.float64(0.0):
+        dx = xe-xqn[q]
+        sl = dx-wp.dot(dx, ng)*ng
+        k = ktq[q]
+        lt = lamt[q]
+        qv = lt-k*sl
+        qn = wp.length(qv)
+        Rb = bound[q]
+        phi = wp.float64(0.0)
+        if qn <= Rb:
+            f = qv
+            phi = (wp.dot(qv, qv)-wp.dot(lt, lt))/(wp.float64(2.0)*k)
+        else:
+            f = (Rb/qn)*qv
+            phi = (Rb*qn-wp.float64(0.5)*Rb*Rb-wp.float64(0.5)*wp.dot(lt, lt))/k
+        wp.atomic_add(terms, 8, q % NSLOT, wt*phi)
+    ffq[q] = f
+
+
+@wp.kernel(enable_backward=False)
+def k_capc_adj(cb: wp.array(dtype=int), rq: wp.array(dtype=wp.vec3d), ng: wp.vec3d, cpar: wp.array(dtype=wp.float64), fnq: wp.array(dtype=wp.float64),
+               ffq: wp.array(dtype=wp.vec3d), terms_adj: wp.array2d(dtype=wp.float64), x_adj: wp.array(dtype=wp.vec3d), F_adj: wp.array(dtype=wp.mat33d)):
+    """dE/dx_B = -cs wt (F_n n + f), dE/dF_B = that (x) r_q (the force at the cap point)"""
+    q = wp.tid()
+    cs, wt = cpar[0], cpar[1]
+    a6, a8 = terms_adj[6, q % NSLOT], terms_adj[8, q % NSLOT]
+    g = -(cs*wt)*(a6*fnq[q]*ng+a8*ffq[q])
+    wp.atomic_add(x_adj, cb[q], g)
+    wp.atomic_add(F_adj, cb[q], wp.outer(g, rq[q]))
+
+
+@wp.kernel(enable_backward=False)
+def k_mid_capc(x: wp.array(dtype=wp.vec3d), cb: wp.array(dtype=int), rq: wp.array(dtype=wp.vec3d), kq: wp.array(dtype=wp.float64), ng: wp.vec3d,
+               cpar: wp.array(dtype=wp.float64), Fst: wp.array(dtype=wp.mat33d), xqn: wp.array(dtype=wp.vec3d), ktq: wp.array(dtype=wp.float64),
+               bound: wp.array(dtype=wp.float64)):
+    """the cap points' step-start data: position (F at the step's start), the glue's stiffness and bound"""
+    q = wp.tid()
+    B = cb[q]
+    xq = x[B]+Fst[B]@rq[q]
+    xqn[q] = xq
+    dn = wp.max(-(wp.dot(ng, xq)-cpar[2]), wp.float64(0.0))
+    bound[q] = cpar[3]*kq[q]*dn
+    ktq[q] = cpar[4]*kq[q]
+
+
 @wp.kernel(enable_backward=False)
 def k_self(x: wp.array(dtype=wp.vec3d), xn: wp.array(dtype=wp.vec3d), si: wp.array(dtype=int), sk: wp.array(dtype=int),
            Rs: wp.array(dtype=wp.float64), d0: wp.array(dtype=wp.float64), Reff: wp.array(dtype=wp.float64), bpar: wp.array(dtype=wp.float64),
@@ -1141,6 +1208,7 @@ class ClosureWarp(SkinWarp):
         self.tmatp = wp.to_torch(self.matp, requires_grad=False)
         self.nc = len(st.c_body)
         self.ct = self.cp = self.vis = self.ball = self.selfc = None
+        self.capc = None                                                            # (set_cap_contact: the ground on the exposed caps)
         self.cap_pos = False                                                        # (set_cap_positions: the one-way cap)
         self.cap_eps = 0.                                                           # (set_cap_floor: the floor on its normal)
         self.cap_wall = False                                                       # (set_cap_walls: the walls' cap)
@@ -1206,6 +1274,20 @@ class ClosureWarp(SkinWarp):
         self.ball_shape = shape
         if self.ball is not None:
             self.tball[6] = 1. if shape == 'deformed' else 0.
+
+    def set_cap_contact(self, cell, off, w, normal=(0., 1., 0.), c0=0., k=1., kt_ratio=1., mu=1e6):
+        """the ground on the exposed caps (k_capc; free_surface/cap_contact.cap_quadrature's points: cell, offset from the
+        site at rest, area weight), before prepare(); k the penalty per area (per unit density, as the moduli), the glue's
+        stiffness kt_ratio k per area, friction mu. Needs set_ball too (its F at the step's start; put its plane far away)"""
+        Q = len(cell); dev = 'cuda'
+        T = lambda t, dt=wp.float64: wp.from_torch(torch.as_tensor(np.asarray(t), dtype=f64, device=dev).contiguous(), dtype=dt)
+        z = lambda dt_: wp.zeros(Q, dtype=dt_, device=dev)
+        self.capc = dict(Q=Q, cb=wp.from_torch(torch.as_tensor(np.asarray(cell), device=dev).to(torch.int32).contiguous(), dtype=wp.int32),
+                         rq=T(off, wp.vec3d), kq=T(k*np.asarray(w)), ng=wp.vec3d(*[float(a_) for a_ in normal]),
+                         par=wp.array(np.array([2., .5, float(c0), float(mu), float(kt_ratio)]), dtype=wp.float64, device=dev),
+                         xqn=z(wp.vec3d), ktq=z(wp.float64), bound=z(wp.float64), lamt=z(wp.vec3d), dq=z(wp.float64), fnq=z(wp.float64), ffq=z(wp.vec3d))
+        tt = lambda a_: wp.to_torch(a_, requires_grad=False)
+        self.tcq = {k_: tt(a_) for k_, a_ in self.capc.items() if k_ not in ('Q', 'ng')}
 
     def set_glue_point(self, where):
         """where the ground's glue holds a touching cell (11-06): 'site' its centre (the ball's centre), 'material' the
@@ -1740,6 +1822,13 @@ class ClosureWarp(SkinWarp):
             if tape is not None:
                 tape.record_func(lambda: wp.launch(k_ball_adj, bl['k'], inputs=[bl['body'], bl['ng'], bl['par'], B['bfn'], B['bff'], bl['roff'], bl['R'], B['F'], bl['Fst'],
                                                                          B['terms'].grad], outputs=[x.grad, B['F'].grad]), arrays=[x, B['F'], B['terms']])
+        cc = self.capc
+        if cc is not None:
+            wp.launch(k_capc, cc['Q'], inputs=[x, B['F'], cc['cb'], cc['rq'], cc['kq'], cc['xqn'], cc['ng'], cc['par'], cc['ktq'], cc['bound'], cc['lamt']],
+                      outputs=[cc['dq'], cc['fnq'], cc['ffq'], B['terms']], record_tape=False)
+            if tape is not None:
+                tape.record_func(lambda: wp.launch(k_capc_adj, cc['Q'], inputs=[cc['cb'], cc['rq'], cc['ng'], cc['par'], cc['fnq'], cc['ffq'], B['terms'].grad],
+                                                   outputs=[x.grad, B['F'].grad]), arrays=[x, B['F'], B['terms']])
         sc = self.selfc
         if sc is not None:
             wp.launch(k_self, sc['K'], inputs=[x, sc['xn'], sc['i'], sc['k'], sc['Rs'], sc['d0'], sc['Reff'], bl['par'], sc['Esp']],
@@ -2822,6 +2911,9 @@ class MidpointStep:
             self.tz.copy_(self.tx+.5*h_*(self.tv+self._vp)+.5*(.5*h_*self.dt+h_*h_)*(self.ta+self._ap))
         wp.launch(k_mid_ball, bl['k'], inputs=[A['x'], bl['body'], bl['R'], bl['ng'], self.c0, self.g8*self.glue_scale, self.cb, bl['Fst'], bl['par']],
                   outputs=[bl['xn'], bl['kt'], bl['bound'], bl['roff'], bl['xa']])
+        cc = W.capc
+        if cc is not None:
+            wp.launch(k_mid_capc, cc['Q'], inputs=[A['x'], cc['cb'], cc['rq'], cc['kq'], cc['ng'], cc['par'], bl['Fst']], outputs=[cc['xqn'], cc['ktq'], cc['bound']])
         g2 = self._eval(0.)[PS_GQ2]
         self._accept()
         evals, its = 1, 0
@@ -2900,6 +2992,12 @@ class MidpointStep:
             W.ttrac.zero_()                                                         # the ground's force on the cell over its cap's area)
             body = wp.to_torch(bl['body']).long(); ng = torch.tensor([bl['ng'][0], bl['ng'][1], bl['ng'][2]], dtype=f64, device=W.ttrac.device)
             W.ttrac.index_add_(0, body, (W.tbfn[:, None]*ng+W.tbff)/W.cap_area[body][:, None])
+        if W.capc is not None:
+            cc = W.capc
+            if self.glue_memory:
+                wp.launch(k_mid_lamt, cc['Q'], inputs=[cc['ffq'], cc['dq']], outputs=[cc['lamt']])
+            else:
+                cc['lamt'].zero_()
         if self.glue_memory:
             wp.launch(k_mid_lamt, bl['k'], inputs=[W.B['bff'], W.B['bdelta']], outputs=[bl['lamt']])
         else:                                                                       # (no memory: nothing held into the next step)

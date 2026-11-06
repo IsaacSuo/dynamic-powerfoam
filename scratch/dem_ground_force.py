@@ -20,6 +20,8 @@ if len(sys.argv) > 3:
     li.GLUE = sys.argv[3]
 if len(sys.argv) > 4:
     li.SHAPE = sys.argv[4]
+if len(sys.argv) > 5:
+    li.CAPC = float(sys.argv[5])
 rec = dict(t=[], com=[], F=[], tau_model=[], cop_model=[], tau_site=[], tau_ball=[], tau_mat=[], cop_site=[], cop_ball=[], cop_mat=[], Fn=[], n=[])
 maps = {k: [] for k in range(5, 10)}
 
@@ -32,6 +34,27 @@ def probe(s, W, ST, cbody, Rb):
     m = W.st.V
     c = (m[:, None]*(z+torch.einsum('nij,nj->ni', F, d))).sum(0)/m.sum()
     fn, ff = W.tbfn, W.tbff
+    if W.capc is not None:                                                          # (the cap contact: its points are the contacts)
+        cq = W.tcq; on = cq['fnq'] > 0; t = s*li.DT
+        rec['t'].append(t); rec['com'].append(c.cpu().numpy())
+        if not bool(on.any()):
+            for k in ('F', 'tau_model', 'cop_model', 'tau_site', 'tau_ball', 'tau_mat', 'cop_site', 'cop_ball', 'cop_mat'):
+                rec[k].append(np.zeros(3))
+            rec['Fn'].append(0.); rec['n'].append(0)
+            return
+        B = cq['cb'][on].long(); xq = z[B]+torch.einsum('nij,nj->ni', F[B], cq['rq'][on])
+        f = cq['fnq'][on][:, None]*up+cq['ffq'][on]; w = cq['fnq'][on]/cq['fnq'][on].sum()
+        tq = torch.linalg.cross(xq-c, f).sum(0).cpu().numpy(); cp = (w[:, None]*xq).sum(0).cpu().numpy()
+        rec['F'].append(f.sum(0).cpu().numpy())
+        for k in ('tau_model', 'tau_site', 'tau_ball', 'tau_mat'):
+            rec[k].append(tq)
+        for k in ('cop_model', 'cop_site', 'cop_ball', 'cop_mat'):
+            rec[k].append(cp)
+        rec['Fn'].append(float(cq['fnq'].sum())); rec['n'].append(int(on.sum()))
+        fr = int(t*li.FPS)
+        if fr in maps:
+            maps[fr].append(np.c_[xq.cpu().numpy(), (f*li.DT).cpu().numpy(), B.cpu().numpy()])
+        return
     on = fn > 0
     t = s*li.DT
     rec['t'].append(t); rec['com'].append(c.cpu().numpy())
