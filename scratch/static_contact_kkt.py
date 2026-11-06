@@ -175,6 +175,123 @@ def solve(prob, xf, A, lamA, lamT, tag, maxn=MAXN):
     return xf, A, lamA, lamT, converged
 
 
+def solve_tr(prob, xf, A, lamA, lamT, tag, maxn=MAXN, delta0=1e-3):
+    """the reviewer's items 2-3 (11-07): a trust-region SQP on the working set. Per iteration: multipliers by least squares
+    on the stationarity (grad E = sum -sgn_i J_i^T lambda_i); H_L with them; the normal step dx_n = -J_p^+ r_p; the
+    tangential step Z dz from the trust-region subproblem on the reduced model (exact, in the eigenbasis of Z^T H_L Z;
+    an indefinite model is handled, nothing deleted for it); a second-order correction dx_c = -J_p^+ r(x + dx) tried
+    first; acceptance by the l1 merit's actual / predicted decrease; logged: the merit's directional derivative, the
+    actual decrease with and without the correction, the penetration of every candidate after the step. Set update:
+    drop working rows with lambda < 0 (NNLS redundancy check), add violated candidates, the deepest per cell first"""
+    lamT = torch.zeros(prob.K, 2, dtype=f64, device=dev) if (lamT is None and prob.anchors is not None) else lamT
+    Delta = delta0; mu = 1e-3*WEIGHT; converged = False
+    for it in range(maxn):
+        t0 = time.time()
+        e, gE, g, c = prob.gradL(xf, A[:0], lamA[:0], torch.zeros_like(lamT) if lamT is not None else None)   # grad E alone
+        m = len(A)+2*prob.K
+        J = prob.jac(xf, A) if m else torch.zeros(0, N3, dtype=f64, device=dev)
+        rA = torch.cat([g[A], c.reshape(-1)]) if c is not None else g[A]
+        sgn_all = torch.cat([-torch.ones(len(A), dtype=f64, device=dev), torch.ones(2*prob.K, dtype=f64, device=dev)])
+        rank = rank_num = 0; smin = float('nan')
+        if m:
+            U, S, Vh = torch.linalg.svd(J.cpu(), full_matrices=True); S = S.to(dev); Vh = Vh.to(dev)
+            rank_num = int((S > 1e-10*S[0]).sum()); rank = int((S > RANK_TOL*S[0]).sum()); smin = float(S[rank-1]) if rank else 0.
+            Z = Vh[rank:].T
+            _, _, piv = sqr(J.cpu().numpy().T, pivoting=True, mode='economic'); piv = torch.as_tensor(piv[:rank].copy(), device=dev)
+        else:
+            Z = torch.eye(N3, dtype=f64, device=dev); piv = torch.zeros(0, dtype=torch.long, device=dev)
+        Jp, rp, sgn = J[piv], rA[piv], sgn_all[piv]; mp = len(piv)
+        # the multipliers by least squares: J_p^T y = grad E, lambda = -sgn y
+        lam_all = torch.zeros(m, dtype=f64, device=dev)
+        if mp:
+            y_ls = torch.linalg.lstsq(Jp.T.cpu(), gE.reshape(-1, 1).cpu()).solution[:, 0].to(dev)
+            lam_all[piv] = -sgn*y_ls
+        lamA_ls = lam_all[:len(A)]; lamT_ls = lam_all[len(A):].reshape(prob.K, 2) if prob.anchors is not None else None
+        gL = gE.reshape(-1)+((sgn_all[:, None]*J)*lam_all[:, None]).sum(0) if m else gE.reshape(-1)
+        Hm = prob.hessL(xf, A, lamA_ls, lamT_ls)
+        # normal step, reduced model
+        dx_n = -(Jp.T@torch.linalg.solve((Jp@Jp.T).cpu(), rp.cpu()).to(dev)) if mp else torch.zeros(N3, dtype=f64, device=dev)
+        gr = Z.T@(gL+Hm@dx_n); Hr = Z.T@Hm@Z
+        evr, vr = torch.linalg.eigh(Hr.cpu()); evr = evr.to(dev); vr = vr.to(dev)
+        cvec = vr.T@gr
+        def dz_of(sig):
+            return -vr@(cvec/(evr+sig))
+        sig_min = max(0., -float(evr[0]))*(1+1e-6)+1e-12
+        dz = dz_of(sig_min); sig = sig_min; hard = False
+        if float(dz.norm()) > Delta:
+            lo, hi = sig_min, sig_min+1.
+            while float(dz_of(hi).norm()) > Delta:
+                hi *= 2
+            for _ in range(80):
+                mid = .5*(lo+hi)
+                if float(dz_of(mid).norm()) > Delta:
+                    lo = mid
+                else:
+                    hi = mid
+            sig = hi; dz = dz_of(sig)
+        elif float(evr[0]) <= 0:                                                      # (the hard case: fill the radius along the negative eigenvector)
+            hard = True; tau = math.sqrt(max(Delta*Delta-float(dz.norm())**2, 0.)); dz = dz+tau*vr[:, 0]
+        dx = (dx_n+Z@dz)
+        # merit, directional derivative, predicted decrease
+        mu = max(mu, 1.5*float(lam_all.abs().max()) if m else mu)
+        f0, _, _, _ = prob.merit(xf, A, mu)
+        dd = float(gE.reshape(-1)@dx)-mu*float(rp.abs().sum())
+        pred = -(float(gL@dx)+.5*float(dx@(Hm@dx)))+mu*(float(rp.abs().sum())-float((rp+Jp@dx).abs().sum()))
+        dxm = dx.reshape(nF, 3)
+        f1, _, g1, _ = prob.merit(xf+dxm, A, mu); pen1 = float((-g1).clamp(min=0).max())
+        # second-order correction on the working rows
+        g2_, c2_, _ = prob.cons(prob.full(xf+dxm)); r2 = (torch.cat([g2_[A], c2_.reshape(-1)]) if c2_ is not None else g2_[A])[piv]
+        dxc = -(Jp.T@torch.linalg.solve((Jp@Jp.T).cpu(), r2.cpu()).to(dev)).reshape(nF, 3) if mp else torch.zeros_like(dxm)
+        f2, _, g2m, _ = prob.merit(xf+dxm+dxc, A, mu); pen2 = float((-g2m).clamp(min=0).max())
+        use_soc = f2 < f1
+        fnew = f2 if use_soc else f1; step = dxm+dxc if use_soc else dxm
+        ared = f0-fnew; ratio = ared/pred if pred > 0 else (-1. if ared <= 0 else 1.)
+        accepted = ared > 0 and (ratio > .1 or pred <= 0)
+        if accepted:
+            xf = xf+step
+        dzn = float(dz.norm())
+        if ratio < .25 or not accepted:
+            Delta = max(.25*min(Delta, float(step.norm())), 1e-7)
+        elif ratio > .75 and dzn > .9*Delta:
+            Delta = 2*Delta
+        # the set update (after an accepted step, on the LS multipliers; else only add the violated)
+        g, c, y_ = prob.cons(prob.full(xf))
+        drop = torch.zeros(0, dtype=torch.long, device=dev); redundant = 0
+        if accepted and len(A):
+            drop = torch.nonzero(lamA_ls < -1e-12*max(float(lamA_ls.abs().max()), 1e-300))[:, 0]
+            if len(drop) and rank < m:
+                JA = J[:len(A)].cpu().numpy(); target = JA.T@lamA_ls.cpu().numpy()
+                sol_, res_ = nnls(JA.T, target, maxiter=10*len(A))
+                if res_ < 1e-10*max(np.linalg.norm(target), 1e-300):
+                    lamA_ls = torch.as_tensor(sol_, dtype=f64, device=dev); redundant = len(drop); drop = torch.nonzero(lamA_ls < -1e-12)[:, 0]
+        keep = torch.ones(len(A), dtype=torch.bool, device=dev); keep[drop] = False
+        A_new = A[keep]; lam_new = lamA_ls[keep]
+        viol = torch.nonzero(g < -1e-9)[:, 0]; viol = viol[~torch.isin(viol, A_new)]
+        add = torch.zeros(0, dtype=torch.long, device=dev)
+        if len(viol):                                                                # (the deepest per cell first)
+            cells_v = cl[candF][viol]; order = torch.argsort(g[viol])
+            seen = set(); picks = []
+            for q in viol[order].tolist():
+                cc_ = int(cl[candF][q])
+                if cc_ not in seen:
+                    seen.add(cc_); picks.append(q)
+            add = torch.as_tensor(picks, device=dev)
+        A2 = torch.cat([A_new, add]); lam2 = torch.cat([lam_new, torch.zeros(len(add), dtype=f64, device=dev)])
+        stat = float(gL.norm())/WEIGHT
+        print('   %s it %d: |A| %d (rank %d/%d, s_min %.2e), red. curv. min %.3e%s, Delta %.2e, |dz| %.2e, |dx_n| %.2e; merit dd %+.3e, pred %+.3e, ared %+.3e (no SOC) / %+.3e (SOC), ratio %.2f, %s%s; pen. after %.3e mm (no SOC %.3e); stationarity(LS lambda) %.2e; dropped %d (redundant %d), added %d; %.0f s' % (
+            tag, it, len(A), rank, rank_num, smin, float(evr[0]), ' HARD' if hard else '', Delta, dzn, float(dx_n.norm()), dd, pred, f0-f1, f0-f2, ratio,
+            'accepted' if accepted else 'REJECTED', ' (SOC)' if (accepted and use_soc) else '', 1e3*(pen2 if use_soc else pen1) if accepted else 1e3*float((-g).clamp(min=0).max()), 1e3*pen1, stat, len(drop), redundant, len(add), time.time()-t0), flush=True)
+        if accepted:
+            A, lamA = A2, lam2
+        converged = accepted and stat < 1e-6 and float((-g).clamp(min=0).max()) < 1e-9 and len(add) == 0 and len(drop) == 0 and (c is None or float(c.abs().max()) < 1e-9) and float(rp.abs().max()) < 1e-9
+        if converged:
+            lamA = lamA_ls[keep] if len(A) else lamA
+            if prob.anchors is not None:
+                lamT = lamT_ls
+            break
+    return xf, A, lamA, lamT, converged
+
+
 def final(prob, xf, A, lamA, lamT, tag):
     x = prob.full(xf); e, ge = W.grad(x); g, c, y_ = prob.cons(x)
     xg = x.clone().requires_grad_(True); g2, c2, _ = prob.cons(xg)
