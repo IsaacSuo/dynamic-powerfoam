@@ -1,0 +1,1533 @@
+{
+  "date": "2026-11-07",
+  "branch": "solid-fv-ale",
+  "base_commit": "6a97eaa",
+  "status": "FIRST_POST_CONTACT_FRAME_COMPLETED_NOT_FULL_LANDING",
+  "scope": "Scene 0, full fourier8k_clean foam, target 5/24 s; full landing 0.625 s NOT validated.",
+  "user_constraints": [
+    "Keep power-diagram intersected with balls as mechanical geometry.",
+    "Shorter physical timesteps allowed for this new-model trial; report actual dt and cost.",
+    "Surface cells may share a mechanical control volume while retaining their geometric boundary."
+  ],
+  "method": {
+    "contact": "Integrate penalty/dashpot traction only over exposed spherical surface below ground; no whole-ball force on covered ball bottoms.",
+    "boundary_unknown": "For each spherical cap, u_b(n)=site_velocity+radius_rate*n. This same velocity supplies geometry, gradient and work.",
+    "boundary_equation": "Integral B^T [sigma*n + Z*(B*a-v) - t(B*a)] dA = 0; B=[I,n]. Four local unknowns, translation-only on nearly flat caps.",
+    "friction": "Viscously regularized Coulomb, not exact static sticking; tangential work returned as heat. Compliant normal contact exchanges energy with obstacle.",
+    "quadrature": "Exact exposed-arc topology followed by finite-order Gauss integration. GPU batching preserves reference points and weights.",
+    "agglomeration": "Adjacent geometric cells share one piecewise-constant conservative FV state. Sum group volume, flux and gradient integrals; internal face contributions cancel. Redistribute extensive channels by current geometric volume.",
+    "merge_selection": "Small group volume <0.001 initial median, or wave-based physical stable step <1e-6 s; merge with neighbor sharing largest total wall area; at most 32 members.",
+    "merge_geometry": "No sites, radii or surface patches removed at merging. Grouped interior subcells may become hidden with zero volume while group volume/state remains valid.",
+    "coarsening": "Local relative deformation is lost; preserving the boundary at merge time does NOT establish unchanged future motion or accuracy."
+  },
+  "why_not_previous_merge": {
+    "previous": "Conservative generator deletion already worked for fully buried cells. It deliberately rejects exposed cells to preserve the material domain.",
+    "audit": "Old continuation did delete cell 454 at t=0.204044724. Exposed original cell 4012 was below threshold but excluded. New grouping also repeats some interior treatment; it is a replacement mode, not evidence that old deletion was broken.",
+    "unresolved": "The exact limiting cell at the end of the interrupted old continuation was not saved; do not attribute that final stall to 4012 as a proven fact."
+  },
+  "controls": {
+    "old_projection": "Surface traction plus post-projected sphere motion gave nonzero boundary work mismatch; retained only as radial/least-squares diagnostic modes.",
+    "coupled_zero_work_defect": "Velocity/work equality is structural; independent weak-force/radial balance and quadrature checks provide separate tests.",
+    "interrupted_run": "output/ale/coupled_frame5.log: old deletion mode interrupted near t=0.204618492 with dt about 1.29e-7 s. No endpoint snapshot; not a solver-failure classification."
+  },
+  "limitations": [
+    "This is an experimental sphere-cap adaptation of FV ideas, not a reproduction of a published complete solid ALE solver.",
+    "Hypoelastic/Jaumann plastic model and stiffened-gas EOS differ from k1; matching initial moduli does not establish material equivalence.",
+    "Global total-energy source balance is not a constitutive free-energy or entropy proof.",
+    "Groups persist; splitting, connectivity changes and long-run resolution have not been validated.",
+    "Normal penalty contact allows penetration. Boundary acoustic relation is enforced weakly, not pointwise.",
+    "No exact finite-step geometric conservation proof, mesh/time convergence, final MPM comparison or production-speed claim.",
+    "This successful-run chain, if completed, introduces grouping at t=0.2039607747661155; it is not a fresh t=0 run with grouping enabled throughout."
+  ],
+  "runs": {
+    "coupled_from_start": {
+      "status": "budget_stopped_not_complete",
+      "start_time": 0.0,
+      "time_reached": 0.2039607747661155,
+      "target_time": 0.20833333333333334,
+      "resume_from": null,
+      "physical_steps": 6077,
+      "rejected_attempts": 0,
+      "wall_seconds": 600.333822605,
+      "dt_min": 1.0816028470631459e-06,
+      "dt_max": 2.3393377574078415e-06,
+      "mass_relative_error": -3.8336690217258784e-16,
+      "energy_source_balance_error": -6.65024218054489e-15,
+      "source_work": 110.24984740434714,
+      "boundary_motion_abs_work_defect_joule": 0.0,
+      "active_cell_count": 7685,
+      "derefinements": [
+        {
+          "local_index": 3854,
+          "volume": 3.2239876603643367e-09,
+          "mass": 3.263726999268704e-06,
+          "volume_partition_defect": 2.5437055758076598e-11,
+          "negative_gain_relative": 2.8310826647750437e-10,
+          "conservation_relative_max": 1.7390831036969957e-16,
+          "uniform_density_error_max": 9.248157795127554e-14,
+          "receiving_cells": 6,
+          "cells_after": 7689,
+          "original_id": 3854,
+          "time": 0.200841513057516,
+          "seconds": 0.05860656399818254
+        },
+        {
+          "local_index": 5696,
+          "volume": 3.2212325595130713e-09,
+          "mass": 3.2360521677914685e-06,
+          "volume_partition_defect": 2.346676276288014e-12,
+          "negative_gain_relative": 2.6892702126284303e-10,
+          "conservation_relative_max": 1.5605197191557305e-16,
+          "uniform_density_error_max": 3.020916850005051e-13,
+          "receiving_cells": 5,
+          "cells_after": 7688,
+          "original_id": 5697,
+          "time": 0.20161657413050194,
+          "seconds": 0.05605897699933848
+        },
+        {
+          "local_index": 5928,
+          "volume": 3.2128738657518654e-09,
+          "mass": 3.297885124871465e-06,
+          "volume_partition_defect": 3.746531229309487e-12,
+          "negative_gain_relative": 2.6351770123161866e-10,
+          "conservation_relative_max": 1.9168345108629402e-16,
+          "uniform_density_error_max": 5.6621374255882984e-14,
+          "receiving_cells": 6,
+          "cells_after": 7687,
+          "original_id": 5930,
+          "time": 0.20190963167234854,
+          "seconds": 0.052744538999832
+        },
+        {
+          "local_index": 6711,
+          "volume": 3.210997384946691e-09,
+          "mass": 3.245329790019338e-06,
+          "volume_partition_defect": 3.5959974000138574e-11,
+          "negative_gain_relative": 2.8646954669353147e-10,
+          "conservation_relative_max": 1.697714979235884e-16,
+          "uniform_density_error_max": 2.3314683517128287e-14,
+          "receiving_cells": 4,
+          "cells_after": 7686,
+          "original_id": 6714,
+          "time": 0.20242911710301273,
+          "seconds": 0.043967418001557235
+        },
+        {
+          "local_index": 5286,
+          "volume": 3.2177258092085883e-09,
+          "mass": 3.3200657487586663e-06,
+          "volume_partition_defect": 4.193286462214666e-11,
+          "negative_gain_relative": 3.073075877847396e-10,
+          "conservation_relative_max": 2.0049933429237385e-16,
+          "uniform_density_error_max": 1.6553425297161084e-13,
+          "receiving_cells": 6,
+          "cells_after": 7685,
+          "original_id": 5287,
+          "time": 0.202818482348892,
+          "seconds": 0.04073089400117169
+        }
+      ],
+      "contact_model": "surface",
+      "surface_motion": "coupled",
+      "min_volume_ratio": 0.001,
+      "friction_heat": 0.08978593027054074,
+      "cfl": 0.2,
+      "interior_radii": "fixed",
+      "material": {
+        "v": [
+          -0.4078950600549248,
+          -0.5,
+          -0.06629882732047176
+        ],
+        "E": 174283.9249924011,
+        "nu": 0.30079413488868173,
+        "ys": 1553.907036259584,
+        "R": [
+          [
+            0.9999999999999998,
+            -3.435398406404569e-16,
+            1.2031663011518868e-17
+          ],
+          [
+            -1.0645166012352884e-16,
+            1.0000000000000002,
+            -2.7599246403937388e-17
+          ],
+          [
+            1.125662942972779e-16,
+            1.4826050956249441e-16,
+            1.0000000000000002
+          ]
+        ],
+        "c0": [
+          0.5000261047295307,
+          0.45005654752343116,
+          0.5000168941770476
+        ],
+        "ck": [
+          0.5000261047295307,
+          0.45005654752343116,
+          0.5000168941770476
+        ]
+      },
+      "contact_order": 8,
+      "contact_scale": 1.0,
+      "contact_damping": 1.0,
+      "report": "output/ale/fv_solid_coupled_from_start.json",
+      "last_step": {
+        "dt_scale": 5.759342051676973e-06,
+        "wave_cell": 454,
+        "rho_min": 998.9469754463336,
+        "rho_max": 1089.3376627297241,
+        "pressure_max_abs": 22616.6397878,
+        "stress_vm_max": 1553.9070362595844,
+        "cap_integrated_flux_defect": 6.987253725955483e-17,
+        "mass_rate_sum": -3.1086244689504383e-15,
+        "force_sum": [
+          23.51038886449105,
+          -22.68146511110779,
+          2.692671711489785
+        ],
+        "source_power": 710.9104802182319,
+        "energy_rate_sum": 710.9104802182321,
+        "normal_contact_power": -183.7644056545225,
+        "friction_heat_rate": 23.205628858071925,
+        "contact_area": 0.010568828161814543,
+        "contact_boundary_motion_power_defect": 0.0,
+        "contact_boundary_motion_abs_power_defect": 0.0,
+        "contact_normal_speed_mismatch_rms": 0.0,
+        "contact_normal_speed_mismatch_max": 0.0,
+        "contact_cells": 66,
+        "penetration_max": 0.005534841207433302,
+        "ignored_cap_area": 0.0,
+        "nearly_flat_cap_fits": 152,
+        "boundary_local_iterations": 6,
+        "boundary_local_relative_residual": 1.2909613496426045e-09,
+        "mesh_material_speed_difference_max": 1.4965624345321376,
+        "dt": 1.1531614083920719e-06,
+        "friction_heat": 2.675759353621704e-05,
+        "source_work": 0.000819788907685933,
+        "boundary_work_defect": 0.0,
+        "boundary_abs_work_defect": 0.0,
+        "normal_contact_work": -0.00021191549555544468,
+        "step": 6077,
+        "time": 0.2039607747661155,
+        "mass_error": -3.8336690217258784e-16,
+        "energy_source_balance_error": -6.65024218054489e-15,
+        "wall_seconds": 600.0179510739981
+      },
+      "maximum_penetration_m": 0.007041781599341695,
+      "max_boundary_local_residual": 1.9997113578007755e-09
+    },
+    "coupled_groups": {
+      "status": "operator_stopped",
+      "start_time": 0.2039607747661155,
+      "time_reached": 0.20420562724143682,
+      "target_time": 0.20833333333333334,
+      "resume_from": "output/ale/fv_state_coupled_from_start.pt",
+      "physical_steps": 163,
+      "rejected_attempts": 0,
+      "wall_seconds": 36.651236951998726,
+      "dt_min": 1.0585272562772784e-06,
+      "dt_max": 1.9497556103106015e-06,
+      "mass_relative_error": 0.0,
+      "energy_source_balance_error": 7.452488767122574e-16,
+      "source_work": 0.17426244147996037,
+      "boundary_motion_abs_work_defect_joule": 0.0,
+      "geometric_site_count": 7685,
+      "active_cell_count": 7685,
+      "control_volume_count": 7683,
+      "agglomerations": [
+        {
+          "cell": 4011,
+          "members": [
+            4011,
+            5904
+          ],
+          "member_count": 2,
+          "volume_before": 2.2882238497972954e-09,
+          "volume_after": 1.9581833500123112e-05,
+          "shared_area": 4.646405491872627e-06,
+          "conservation_relative_max": 1.6466744969098476e-16,
+          "group_diameter_bound": 0.005517734692926203,
+          "geometry_changed": false,
+          "time": 0.2039607747661155,
+          "seconds": 0.0294948349983315,
+          "original_ids": [
+            4012,
+            5907
+          ]
+        },
+        {
+          "cell": 454,
+          "members": [
+            454,
+            1662
+          ],
+          "member_count": 2,
+          "volume_before": 3.2203508270803276e-09,
+          "volume_after": 1.1510612686316036e-05,
+          "shared_area": 1.7674727715771175e-05,
+          "conservation_relative_max": 0.0,
+          "group_diameter_bound": 0.0053404989137429614,
+          "geometry_changed": false,
+          "time": 0.20404472423679318,
+          "seconds": 0.00537776499913889,
+          "original_ids": [
+            454,
+            1662
+          ]
+        }
+      ],
+      "derefinements": [],
+      "contact_model": "surface",
+      "surface_motion": "coupled",
+      "agglomerate": true,
+      "agglomerate_dt": 1e-06,
+      "min_volume_ratio": 0.001,
+      "friction_heat": 0.0057949479538369165,
+      "cfl": 0.2,
+      "interior_radii": "fixed",
+      "material": {
+        "v": [
+          -0.4078950600549248,
+          -0.5,
+          -0.06629882732047176
+        ],
+        "E": 174283.9249924011,
+        "nu": 0.30079413488868173,
+        "ys": 1553.907036259584,
+        "R": [
+          [
+            0.9999999999999998,
+            -3.435398406404569e-16,
+            1.2031663011518868e-17
+          ],
+          [
+            -1.0645166012352884e-16,
+            1.0000000000000002,
+            -2.7599246403937388e-17
+          ],
+          [
+            1.125662942972779e-16,
+            1.4826050956249441e-16,
+            1.0000000000000002
+          ]
+        ],
+        "c0": [
+          0.5000261047295307,
+          0.45005654752343116,
+          0.5000168941770476
+        ],
+        "ck": [
+          0.5000261047295307,
+          0.45005654752343116,
+          0.5000168941770476
+        ]
+      },
+      "contact_order": 8,
+      "contact_scale": 1.0,
+      "contact_damping": 1.0,
+      "report": "output/ale/fv_solid_coupled_groups.json",
+      "last_step": {
+        "dt_scale": 8.749277018586459e-06,
+        "wave_cell": 6293,
+        "wave_dt_scale": 8.749277018586459e-06,
+        "minimum_geometric_volume": 5.785514956684264e-10,
+        "hidden_subcells": 0,
+        "rho_min": 998.9047678097088,
+        "rho_max": 1090.2334946850253,
+        "pressure_max_abs": 21816.374831653753,
+        "stress_vm_max": 1553.9070362595844,
+        "cap_integrated_flux_defect": 6.56991576458036e-17,
+        "mass_rate_sum": -3.1086244689504383e-15,
+        "force_sum": [
+          24.18870795211862,
+          -9.087293607409178,
+          2.355298558980447
+        ],
+        "source_power": 712.4401522778738,
+        "energy_rate_sum": 712.4401522778735,
+        "normal_contact_power": -182.27282423505144,
+        "friction_heat_rate": 24.160634806429663,
+        "contact_area": 0.011010637834708743,
+        "contact_boundary_motion_power_defect": 0.0,
+        "contact_boundary_motion_abs_power_defect": 0.0,
+        "contact_normal_speed_mismatch_rms": 0.0,
+        "contact_normal_speed_mismatch_max": 0.0,
+        "contact_cells": 69,
+        "penetration_max": 0.00552636274399208,
+        "ignored_cap_area": 0.0,
+        "nearly_flat_cap_fits": 153,
+        "boundary_local_iterations": 5,
+        "boundary_local_relative_residual": 1.5360883047222716e-09,
+        "mesh_material_speed_difference_max": 1.500966691142795,
+        "dt": 1.7520493652336493e-06,
+        "friction_heat": 4.232408980999697e-05,
+        "source_work": 0.0012482211614341058,
+        "boundary_work_defect": 0.0,
+        "boundary_abs_work_defect": 0.0,
+        "normal_contact_work": -0.0003193600030054849,
+        "step": 163,
+        "time": 0.20420562724143682,
+        "mass_error": 0.0,
+        "energy_source_balance_error": 7.452488767122574e-16,
+        "wall_seconds": 36.1582787039988
+      },
+      "maximum_penetration_m": 0.005534826686218016,
+      "max_boundary_local_residual": 1.993838153740978e-09
+    },
+    "coupled_groups_frame5": {
+      "status": "budget_stopped_not_complete",
+      "start_time": 0.20420562724143682,
+      "time_reached": 0.20794472112870357,
+      "target_time": 0.20833333333333334,
+      "resume_from": "output/ale/fv_state_coupled_groups.pt",
+      "physical_steps": 1849,
+      "rejected_attempts": 0,
+      "wall_seconds": 600.5416423829993,
+      "dt_min": 1.0009991432230557e-06,
+      "dt_max": 2.3393190749236256e-06,
+      "mass_relative_error": 0.0,
+      "energy_source_balance_error": 2.1539938827426657e-15,
+      "source_work": 2.652843310600083,
+      "boundary_motion_abs_work_defect_joule": 0.0,
+      "geometric_site_count": 7685,
+      "active_cell_count": 7681,
+      "control_volume_count": 7673,
+      "agglomerations": [
+        {
+          "cell": 3541,
+          "members": [
+            3541,
+            3726
+          ],
+          "member_count": 2,
+          "volume_before": 5.508197710579204e-09,
+          "volume_after": 3.5722596290237623e-06,
+          "shared_area": 2.5385100756184603e-05,
+          "conservation_relative_max": 1.677439114382589e-16,
+          "group_diameter_bound": 0.0038838971018264013,
+          "geometry_changed": false,
+          "time": 0.20439055728177105,
+          "seconds": 0.03175670199925662,
+          "original_ids": [
+            3541,
+            3726
+          ]
+        },
+        {
+          "cell": 6293,
+          "members": [
+            2585,
+            6293
+          ],
+          "member_count": 2,
+          "volume_before": 3.217879454811522e-09,
+          "volume_after": 3.6700301996885666e-06,
+          "shared_area": 1.3674785552663633e-05,
+          "conservation_relative_max": 0.0,
+          "group_diameter_bound": 0.0033770918977016114,
+          "geometry_changed": false,
+          "time": 0.20452770665335648,
+          "seconds": 0.0031952579993230756,
+          "original_ids": [
+            2585,
+            6297
+          ]
+        },
+        {
+          "cell": 4957,
+          "members": [
+            4957,
+            5158
+          ],
+          "member_count": 2,
+          "volume_before": 1.2212806466348717e-08,
+          "volume_after": 4.0725206197989595e-06,
+          "shared_area": 6.055843114064542e-05,
+          "conservation_relative_max": 1.0958634734350283e-16,
+          "group_diameter_bound": 0.001851966584064254,
+          "geometry_changed": false,
+          "time": 0.2045704601515075,
+          "seconds": 0.00297027000124217,
+          "original_ids": [
+            4958,
+            5159
+          ]
+        },
+        {
+          "cell": 2330,
+          "members": [
+            2330,
+            3253
+          ],
+          "member_count": 2,
+          "volume_before": 3.192887167093546e-09,
+          "volume_after": 5.0938075653468546e-06,
+          "shared_area": 1.13764766017201e-05,
+          "conservation_relative_max": 1.646491655119477e-16,
+          "group_diameter_bound": 0.005835918528258664,
+          "geometry_changed": false,
+          "time": 0.20481917260798885,
+          "seconds": 0.004688881002948619,
+          "original_ids": [
+            2330,
+            3253
+          ]
+        },
+        {
+          "cell": 1409,
+          "members": [
+            1394,
+            1409
+          ],
+          "member_count": 2,
+          "volume_before": 6.725255992283327e-09,
+          "volume_after": 3.459883093014255e-06,
+          "shared_area": 3.352394471171827e-05,
+          "conservation_relative_max": 1.704809681395165e-16,
+          "group_diameter_bound": 0.0051031792075038164,
+          "geometry_changed": false,
+          "time": 0.20544093608755618,
+          "seconds": 0.002617616999486927,
+          "original_ids": [
+            1394,
+            1409
+          ]
+        },
+        {
+          "cell": 6315,
+          "members": [
+            6315,
+            7113
+          ],
+          "member_count": 2,
+          "volume_before": 3.218145689123623e-09,
+          "volume_after": 4.840545354953743e-06,
+          "shared_area": 6.2653935610396115e-06,
+          "conservation_relative_max": 1.5565421410437462e-16,
+          "group_diameter_bound": 0.006923048857979547,
+          "geometry_changed": false,
+          "time": 0.20558698146346985,
+          "seconds": 0.003585497997846687,
+          "original_ids": [
+            6319,
+            7118
+          ]
+        },
+        {
+          "cell": 455,
+          "members": [
+            455,
+            6329
+          ],
+          "member_count": 2,
+          "volume_before": 3.2103297692188586e-09,
+          "volume_after": 5.493848657702603e-06,
+          "shared_area": 5.454270617053165e-06,
+          "conservation_relative_max": 2.042537935249838e-16,
+          "group_diameter_bound": 0.006213121265143518,
+          "geometry_changed": false,
+          "time": 0.20628725207390367,
+          "seconds": 0.0027839869981107768,
+          "original_ids": [
+            455,
+            6333
+          ]
+        },
+        {
+          "cell": 4428,
+          "members": [
+            1812,
+            4428
+          ],
+          "member_count": 2,
+          "volume_before": 3.2004977361080434e-09,
+          "volume_after": 3.8321924886107025e-06,
+          "shared_area": 8.749430082364298e-06,
+          "conservation_relative_max": 0.0,
+          "group_diameter_bound": 0.011441685185392216,
+          "geometry_changed": false,
+          "time": 0.2071855909096791,
+          "seconds": 0.002847882999049034,
+          "original_ids": [
+            1812,
+            4429
+          ]
+        },
+        {
+          "cell": 46,
+          "members": [
+            46,
+            3947
+          ],
+          "member_count": 2,
+          "volume_before": 3.2202374275565345e-09,
+          "volume_after": 2.3876886612018445e-05,
+          "shared_area": 1.123227611812375e-05,
+          "conservation_relative_max": 1.600158898744274e-16,
+          "group_diameter_bound": 0.014272578895144347,
+          "geometry_changed": false,
+          "time": 0.2075075647070345,
+          "seconds": 0.0030249689989432227,
+          "original_ids": [
+            46,
+            3948
+          ]
+        },
+        {
+          "cell": 3502,
+          "members": [
+            3502,
+            4011,
+            5904
+          ],
+          "member_count": 3,
+          "volume_before": 3.209199584140719e-09,
+          "volume_after": 1.2546683666545625e-05,
+          "shared_area": 1.382139714331633e-05,
+          "conservation_relative_max": 2.0382390816491137e-16,
+          "group_diameter_bound": 0.008333808685128676,
+          "geometry_changed": false,
+          "time": 0.20768609603545485,
+          "seconds": 0.005841581998538459,
+          "original_ids": [
+            3502,
+            4012,
+            5907
+          ]
+        }
+      ],
+      "derefinements": [],
+      "contact_model": "surface",
+      "surface_motion": "coupled",
+      "agglomerate": true,
+      "agglomerate_dt": 1e-06,
+      "min_volume_ratio": 0.001,
+      "friction_heat": 0.13548996740094266,
+      "cfl": 0.2,
+      "interior_radii": "fixed",
+      "material": {
+        "v": [
+          -0.4078950600549248,
+          -0.5,
+          -0.06629882732047176
+        ],
+        "E": 174283.9249924011,
+        "nu": 0.30079413488868173,
+        "ys": 1553.907036259584,
+        "R": [
+          [
+            0.9999999999999998,
+            -3.435398406404569e-16,
+            1.2031663011518868e-17
+          ],
+          [
+            -1.0645166012352884e-16,
+            1.0000000000000002,
+            -2.7599246403937388e-17
+          ],
+          [
+            1.125662942972779e-16,
+            1.4826050956249441e-16,
+            1.0000000000000002
+          ]
+        ],
+        "c0": [
+          0.5000261047295307,
+          0.45005654752343116,
+          0.5000168941770476
+        ],
+        "ck": [
+          0.5000261047295307,
+          0.45005654752343116,
+          0.5000168941770476
+        ]
+      },
+      "contact_order": 8,
+      "contact_scale": 1.0,
+      "contact_damping": 1.0,
+      "report": "output/ale/fv_solid_coupled_groups_frame5.json",
+      "last_step": {
+        "dt_scale": 1.017063388705743e-05,
+        "wave_cell": 4083,
+        "wave_dt_scale": 1.017063388705743e-05,
+        "minimum_geometric_volume": 0.0,
+        "hidden_subcells": 4,
+        "rho_min": 974.6772141187876,
+        "rho_max": 1100.9270244641143,
+        "pressure_max_abs": 22838.195999074727,
+        "stress_vm_max": 1553.9070362595844,
+        "cap_integrated_flux_defect": 6.882275128158234e-17,
+        "mass_rate_sum": 1.7763568394002505e-15,
+        "force_sum": [
+          43.88735402979792,
+          232.57962065896479,
+          9.1184010971552
+        ],
+        "source_power": 688.1713869088264,
+        "energy_rate_sum": 688.1713869088258,
+        "normal_contact_power": -202.77662304132326,
+        "friction_heat_rate": 51.22368983451775,
+        "contact_area": 0.019308230943671387,
+        "contact_boundary_motion_power_defect": 0.0,
+        "contact_boundary_motion_abs_power_defect": 0.0,
+        "contact_normal_speed_mismatch_rms": 0.0,
+        "contact_normal_speed_mismatch_max": 0.0,
+        "contact_cells": 127,
+        "penetration_max": 0.0053473958467026295,
+        "ignored_cap_area": 0.0,
+        "nearly_flat_cap_fits": 149,
+        "boundary_local_iterations": 11,
+        "boundary_local_relative_residual": 1.2696749215139562e-09,
+        "mesh_material_speed_difference_max": 1.4757549494517148,
+        "dt": 2.0344228644702624e-06,
+        "friction_heat": 0.00010418909470565528,
+        "source_work": 0.0014000345974478265,
+        "boundary_work_defect": 0.0,
+        "boundary_abs_work_defect": 0.0,
+        "normal_contact_work": -0.0004125351189260189,
+        "step": 1849,
+        "time": 0.20794472112870357,
+        "mass_error": 0.0,
+        "energy_source_balance_error": 2.1539938827426657e-15,
+        "wall_seconds": 600.0040780329982
+      },
+      "maximum_penetration_m": 0.005526265013702281,
+      "max_boundary_local_residual": 1.9998163055684975e-09
+    },
+    "coupled_groups_frame5b": {
+      "status": "completed",
+      "start_time": 0.20794472112870357,
+      "time_reached": 0.20833333333333334,
+      "target_time": 0.20833333333333334,
+      "resume_from": "output/ale/fv_state_coupled_groups_frame5.pt",
+      "physical_steps": 194,
+      "rejected_attempts": 0,
+      "wall_seconds": 82.32702449899807,
+      "dt_min": 1.662475655889173e-06,
+      "dt_max": 2.0341262528494754e-06,
+      "mass_relative_error": 0.0,
+      "energy_source_balance_error": -4.157623833829629e-15,
+      "source_work": 0.26603633824545825,
+      "boundary_motion_abs_work_defect_joule": 0.0,
+      "geometric_site_count": 7685,
+      "active_cell_count": 7680,
+      "control_volume_count": 7673,
+      "agglomerations": [],
+      "derefinements": [],
+      "contact_model": "surface",
+      "surface_motion": "coupled",
+      "agglomerate": true,
+      "agglomerate_dt": 1e-06,
+      "min_volume_ratio": 0.001,
+      "friction_heat": 0.02062822787993785,
+      "cfl": 0.2,
+      "interior_radii": "fixed",
+      "material": {
+        "v": [
+          -0.4078950600549248,
+          -0.5,
+          -0.06629882732047176
+        ],
+        "E": 174283.9249924011,
+        "nu": 0.30079413488868173,
+        "ys": 1553.907036259584,
+        "R": [
+          [
+            0.9999999999999998,
+            -3.435398406404569e-16,
+            1.2031663011518868e-17
+          ],
+          [
+            -1.0645166012352884e-16,
+            1.0000000000000002,
+            -2.7599246403937388e-17
+          ],
+          [
+            1.125662942972779e-16,
+            1.4826050956249441e-16,
+            1.0000000000000002
+          ]
+        ],
+        "c0": [
+          0.5000261047295307,
+          0.45005654752343116,
+          0.5000168941770476
+        ],
+        "ck": [
+          0.5000261047295307,
+          0.45005654752343116,
+          0.5000168941770476
+        ]
+      },
+      "contact_order": 8,
+      "contact_scale": 1.0,
+      "contact_damping": 1.0,
+      "report": "output/ale/fv_solid_coupled_groups_frame5b.json",
+      "last_step": {
+        "dt_scale": 9.872586454789075e-06,
+        "wave_cell": 4083,
+        "wave_dt_scale": 9.872586454789075e-06,
+        "minimum_geometric_volume": 0.0,
+        "hidden_subcells": 5,
+        "rho_min": 972.7694559455375,
+        "rho_max": 1099.9153677687839,
+        "pressure_max_abs": 23041.988682088762,
+        "stress_vm_max": 1553.9070362595844,
+        "cap_integrated_flux_defect": 7.278851818705527e-17,
+        "mass_rate_sum": -8.881784197001252e-16,
+        "force_sum": [
+          46.176632868764976,
+          263.8058543249556,
+          8.66183777247372
+        ],
+        "source_power": 680.0076270766931,
+        "energy_rate_sum": 680.0076270766934,
+        "normal_contact_power": -209.9962190390966,
+        "friction_heat_rate": 54.68446324157453,
+        "contact_area": 0.020377227537419634,
+        "contact_boundary_motion_power_defect": 0.0,
+        "contact_boundary_motion_abs_power_defect": 0.0,
+        "contact_normal_speed_mismatch_rms": 0.0,
+        "contact_normal_speed_mismatch_max": 0.0,
+        "contact_cells": 134,
+        "penetration_max": 0.005328675149796323,
+        "ignored_cap_area": 0.0,
+        "nearly_flat_cap_fits": 148,
+        "boundary_local_iterations": 7,
+        "boundary_local_relative_residual": 1.9688399959783864e-09,
+        "mesh_material_speed_difference_max": 1.5303222038436755,
+        "dt": 1.662475655889173e-06,
+        "friction_heat": 9.090255834519909e-05,
+        "source_work": 0.0011305212786442127,
+        "boundary_work_defect": 0.0,
+        "boundary_abs_work_defect": 0.0,
+        "normal_contact_work": -0.00034909202001546906,
+        "step": 194,
+        "time": 0.20833333333333334,
+        "mass_error": 0.0,
+        "energy_source_balance_error": -4.157623833829629e-15,
+        "wall_seconds": 81.91256060199885
+      },
+      "maximum_penetration_m": 0.0053473448843908075,
+      "max_boundary_local_residual": 1.9959057868379173e-09
+    }
+  },
+  "tests": {
+    "contact_failure_check": {
+      "snapshot": "output/ale/fv_state_solid_derefine.pt",
+      "time": 0.19954448125612365,
+      "checks": {
+        "analytic_integrals": true,
+        "actual_exposed_surface": true,
+        "quadrature_convergence": true,
+        "unilateral_and_friction": true,
+        "assembled_balances": true
+      },
+      "analytic_cap_area_error": 2.220446049250313e-16,
+      "analytic_gap_integral_error": 4.440892098500626e-16,
+      "quadrature": [
+        {
+          "order": 6,
+          "points": 4296,
+          "area": 0.003383660728055496,
+          "force": [
+            1.2910932801710686,
+            73.43906521376769,
+            0.3581017785407846
+          ],
+          "seconds": 0.21833391100153676
+        },
+        {
+          "order": 8,
+          "points": 7624,
+          "area": 0.003383703011420477,
+          "force": [
+            1.337558763584046,
+            73.441972067527,
+            0.357775657280748
+          ],
+          "seconds": 0.0775785360019654
+        },
+        {
+          "order": 12,
+          "points": 17172,
+          "area": 0.0033837001468857496,
+          "force": [
+            1.2890085221765841,
+            73.43761913258642,
+            0.35902498452263554
+          ],
+          "seconds": 0.07459574899985455
+        },
+        {
+          "order": 16,
+          "points": 30528,
+          "area": 0.00338369995979704,
+          "force": [
+            1.3068645803948387,
+            73.44001936469691,
+            0.3604316829317043
+          ],
+          "seconds": 0.0772201830004633
+        }
+      ],
+      "force_error_to_order16": [
+        0.0004455765589363945,
+        0.0008625968295045766,
+        0.0005050662597313999
+      ],
+      "area_error_to_order16": [
+        1.6003112281210014e-05,
+        1.2985194121277792e-06,
+        1.3243868444423369e-07
+      ],
+      "contact_area_over_full_cap_max": 1.0000000008849688,
+      "minimum_power_to_other_balls": 6.863021435876693e-14,
+      "normal_traction_min": 0.0,
+      "coulomb_violation": 9.094947017729282e-13,
+      "friction_power_max": 6.605384273917162e-13,
+      "original_cell_3502": {
+        "legacy_force": [
+          0.0,
+          2.9013506710560333,
+          0.0
+        ],
+        "surface_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "exposed_below_ground_area": 0.0,
+        "entire_exposed_area": 1.3877075993619216e-11,
+        "mass": 2.2259464767417107e-14
+      },
+      "force_balance_error": 1.4255886177560593e-14,
+      "power_balance_error": 3.069544618483633e-12,
+      "boundary_integrated_volume_flux_defect": 0.0,
+      "boundary_motion_power_defect": 44.95108933913046,
+      "passed": true
+    },
+    "contact_healthy_check": {
+      "snapshot": "output/ale/fv_state_solid_clean.pt",
+      "time": 0.19273395898539772,
+      "checks": {
+        "analytic_integrals": true,
+        "actual_exposed_surface": true,
+        "quadrature_convergence": true,
+        "unilateral_and_friction": true,
+        "assembled_balances": true
+      },
+      "analytic_cap_area_error": 2.220446049250313e-16,
+      "analytic_gap_integral_error": 4.440892098500626e-16,
+      "quadrature": [
+        {
+          "order": 6,
+          "points": 36,
+          "area": 0.0007669352910247602,
+          "force": [
+            0.5538621169379384,
+            22.579560239977226,
+            0.07320096267029876
+          ],
+          "seconds": 0.14385132400275324
+        },
+        {
+          "order": 8,
+          "points": 64,
+          "area": 0.0007669352912252072,
+          "force": [
+            0.5538623851354572,
+            22.579560328676553,
+            0.07320097185052786
+          ],
+          "seconds": 0.005660613998770714
+        },
+        {
+          "order": 12,
+          "points": 144,
+          "area": 0.0007669352912252092,
+          "force": [
+            0.5538623851746682,
+            22.579560328688718,
+            0.0732009718518681
+          ],
+          "seconds": 0.005693519000487868
+        },
+        {
+          "order": 16,
+          "points": 256,
+          "area": 0.0007669352912252098,
+          "force": [
+            0.5538623851746695,
+            22.579560328688743,
+            0.07320097185186822
+          ],
+          "seconds": 0.006111409998993622
+        }
+      ],
+      "force_error_to_order16": [
+        1.2515221514800231e-08,
+        1.8190116050641864e-12,
+        1.1023978483871353e-15
+      ],
+      "area_error_to_order16": [
+        2.613642485185928e-10,
+        3.251467268813424e-15,
+        4.2410442636696837e-16
+      ],
+      "contact_area_over_full_cap_max": 0.28461600106610807,
+      "minimum_power_to_other_balls": 0.00011351512773530824,
+      "normal_traction_min": 15856.142400931654,
+      "coulomb_violation": 0.0,
+      "friction_power_max": 2.01451321190526e-14,
+      "original_cell_3502": {
+        "legacy_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "surface_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "exposed_below_ground_area": 0.0,
+        "entire_exposed_area": 0.00014629071373477873,
+        "mass": 0.001263521291359161
+      },
+      "force_balance_error": 4.619908891207458e-14,
+      "power_balance_error": 0.0,
+      "boundary_integrated_volume_flux_defect": 0.0,
+      "boundary_motion_power_defect": 35.815396748507034,
+      "passed": true
+    },
+    "coupled_batched_check": {
+      "snapshot": "output/ale/fv_state_surface_fit.pt",
+      "time": 0.19996018630333856,
+      "orders": [
+        {
+          "order": 8,
+          "iterations": 11,
+          "solver_residual": 1.8821778535579445e-09,
+          "independent_force_residual": 9.500654595832923e-10,
+          "independent_radial_residual": 7.425625032839238e-10,
+          "traction_work_plus_heat_error": 3.552713678800501e-14,
+          "point_velocity_difference": 0.0,
+          "force": [
+            7.565212399473301,
+            134.42354522083002,
+            2.374135205934641
+          ],
+          "normal_work_rate": -50.52040391878063,
+          "friction_heat_rate": 8.023830919894053
+        },
+        {
+          "order": 12,
+          "iterations": 10,
+          "solver_residual": 1.8157342036320173e-09,
+          "independent_force_residual": 9.167423186837854e-10,
+          "independent_radial_residual": 7.160665454951725e-10,
+          "traction_work_plus_heat_error": 2.4868995751603507e-14,
+          "point_velocity_difference": 0.0,
+          "force": [
+            7.567585456243645,
+            134.42348119587166,
+            2.374294071007878
+          ],
+          "normal_work_rate": -50.51984101444458,
+          "friction_heat_rate": 8.024794592308677
+        },
+        {
+          "order": 16,
+          "iterations": 10,
+          "solver_residual": 1.7602311048065188e-09,
+          "independent_force_residual": 8.887125832921418e-10,
+          "independent_radial_residual": 6.94183343354162e-10,
+          "traction_work_plus_heat_error": 2.4868995751603507e-14,
+          "point_velocity_difference": 0.0,
+          "force": [
+            7.568620871597497,
+            134.42343618161846,
+            2.3743799069344638
+          ],
+          "normal_work_rate": -50.519553233602835,
+          "friction_heat_rate": 8.025207661147359
+        }
+      ],
+      "force_error_to_order16": [
+        7.31523503232466e-05,
+        2.2266232181166247e-05
+      ],
+      "quadrature_seconds": {
+        "reference": 0.0755309919998884,
+        "batched": 0.003974731000198517
+      },
+      "batched_same_point_owners": true,
+      "batched_max_difference_normal_weight_gap": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "step_dt": 1.169668864903468e-06,
+      "step_mass_error": 0.0,
+      "step_energy_source_error_joule": 2.8228287762832593e-15,
+      "boundary_motion_work_defect": 0.0,
+      "regularization": "Coulomb friction regularized with viscous impedance; not exact static sticking",
+      "checks": {
+        "batched_quadrature_equivalence": true,
+        "local_equations": true,
+        "same_boundary_velocity": true,
+        "work_heat_balance": true,
+        "quadrature": true,
+        "accepted_step_balance": true
+      },
+      "passed": true
+    },
+    "coupled_late_check": {
+      "snapshot": "output/ale/fv_state_coupled_from_start.pt",
+      "time": 0.2039607747661155,
+      "orders": [
+        {
+          "order": 8,
+          "iterations": 6,
+          "solver_residual": 1.290962546117157e-09,
+          "independent_force_residual": 7.765418634745465e-10,
+          "independent_radial_residual": 3.8002825205512826e-10,
+          "traction_work_plus_heat_error": 2.842170943040401e-14,
+          "point_velocity_difference": 0.0,
+          "force": [
+            23.510393265303332,
+            340.5902871578353,
+            2.692678778510955
+          ],
+          "normal_work_rate": -183.7643875551715,
+          "friction_heat_rate": 23.205622344721576
+        },
+        {
+          "order": 12,
+          "iterations": 3,
+          "solver_residual": 6.907170118660686e-12,
+          "independent_force_residual": 4.429175595900326e-12,
+          "independent_radial_residual": 1.9742428661019648e-12,
+          "traction_work_plus_heat_error": 4.263256414560601e-14,
+          "point_velocity_difference": 0.0,
+          "force": [
+            23.5119820627879,
+            340.59025730974327,
+            2.691017899072092
+          ],
+          "normal_work_rate": -183.7639617540658,
+          "friction_heat_rate": 23.205877059475895
+        },
+        {
+          "order": 16,
+          "iterations": 4,
+          "solver_residual": 1.4503737339143046e-09,
+          "independent_force_residual": 9.052582233423451e-10,
+          "independent_radial_residual": 3.156688678316642e-10,
+          "traction_work_plus_heat_error": 3.907985046680551e-14,
+          "point_velocity_difference": 0.0,
+          "force": [
+            23.514809481828667,
+            340.5901645186484,
+            2.689778099379364
+          ],
+          "normal_work_rate": -183.76333953923006,
+          "friction_heat_rate": 23.206606009874672
+        }
+      ],
+      "force_error_to_order16": [
+        6.876184491704495e-05,
+        4.7104313465030376e-05
+      ],
+      "quadrature_seconds": {
+        "reference": 0.22797821133281104,
+        "batched": 0.006856183333487327
+      },
+      "batched_same_point_owners": true,
+      "batched_max_difference_normal_weight_gap": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "step_dt": 5.759335459897718e-07,
+      "step_mass_error": 0.0,
+      "step_energy_source_error_joule": 1.2974538977916783e-14,
+      "boundary_motion_work_defect": 0.0,
+      "regularization": "Coulomb friction regularized with viscous impedance; not exact static sticking",
+      "checks": {
+        "batched_quadrature_equivalence": true,
+        "local_equations": true,
+        "same_boundary_velocity": true,
+        "work_heat_balance": true,
+        "quadrature": true,
+        "accepted_step_balance": true
+      },
+      "passed": true
+    },
+    "agglomerate_check": {
+      "snapshot": "output/ale/fv_state_coupled_from_start.pt",
+      "merge": {
+        "cell": 454,
+        "members": [
+          454,
+          1662
+        ],
+        "member_count": 2,
+        "volume_before": 4.0759475634558606e-09,
+        "volume_after": 1.1478548951321902e-05,
+        "shared_area": 2.0525534341964133e-05,
+        "conservation_relative_max": 0.0,
+        "group_diameter_bound": 0.005342480453670146,
+        "geometry_changed": false
+      },
+      "step_before": 1.1518670919795435e-06,
+      "step_after": 2.0213102967763956e-06,
+      "ten_step_mass_error": 0.0,
+      "ten_step_energy_error_joule": 1.2297714929720982e-13,
+      "hidden_subcell": {
+        "cell": 454,
+        "star_members": 6,
+        "volume": 0.0,
+        "control_volume_relative_change_max": 3.253451585882545e-15,
+        "density_relative_change_max": 3.219646771412954e-15,
+        "aggregate_rhs_relative_change": 1.9351400455617248e-14,
+        "finite_rhs": true,
+        "cfl_before": 1.0106551483881978e-05,
+        "cfl_after": 1.0106551483881998e-05
+      },
+      "checks": {
+        "conservation": true,
+        "ten_steps": true,
+        "hidden_subcell_geometry": true,
+        "same_control_volume_same_operator": true
+      },
+      "passed": true
+    },
+    "solid_checks_coupled_final": {
+      "foam": "foams/fourier8k_clean",
+      "cells": 7690,
+      "checks": {
+        "uniform_translation": true,
+        "pairwise_conservation": true,
+        "rotation_covariance": true,
+        "plastic_return": true,
+        "twenty_step_pulse": true,
+        "conservative_derefinement": true
+      },
+      "translation_rhs_max": 1.5863149012479808e-10,
+      "translation_radius_rate_max": 1.8979698065390163e-15,
+      "translation_velocity_error": 1.4432899320127035e-15,
+      "translation_density_error": 1.8252066524837574e-13,
+      "closed_domain_mass_rate": -2.220446049250313e-16,
+      "internal_force_sum": [
+        7.771561172376096e-16,
+        -4.440892098500626e-16,
+        4.440892098500626e-16
+      ],
+      "internal_energy_rate": 1.4210854715202004e-14,
+      "cap_integrated_flux_defect": 1.4784787250734293e-18,
+      "rotation_force_relative_error": 2.580439624272488e-10,
+      "rotation_stress_rate_relative_error": 2.208732111514683e-10,
+      "rotation_radius_rate_relative_error": 1.521974318257857e-09,
+      "returned_von_mises_max": 1553.9070362595846,
+      "yield_stress": 1553.907036259584,
+      "plastic_work_min": 1.9803449698361265e-05,
+      "plastic_energy_channel_change": 0.0,
+      "pulse_mass_error": 0.0,
+      "pulse_total_energy_error": 0.0,
+      "pulse_dt_range": [
+        1.1695790272256395e-06,
+        1.169592908585497e-06
+      ],
+      "pulse_density_range": [
+        999.8366325123352,
+        1000.1086577156306
+      ],
+      "pulse_cap_mismatch": {
+        "boundary_velocity": "sphere velocity is the material boundary unknown; equality is structural, not an accuracy test",
+        "rms_normal_speed_mismatch": 0.0,
+        "max_normal_speed_mismatch": 0.0,
+        "rms_difference_to_unprojected_pointwise_acoustics": 0.0028453197414792255,
+        "sample_count": 512,
+        "sampled_area": 0.752921337582541
+      },
+      "derefine_check": {
+        "local_index": 7524,
+        "volume": 5.622283897763035e-09,
+        "mass": 5.622137466081018e-06,
+        "volume_partition_defect": 7.070698275215676e-12,
+        "negative_gain_relative": 1.51256652922111e-10,
+        "conservation_relative_max": 1.6826299955189525e-16,
+        "uniform_density_error_max": 9.564571357145724e-13,
+        "receiving_cells": 6,
+        "cells_after": 7689,
+        "continued_mass_error": 0.0,
+        "continued_energy_error": 0.0
+      },
+      "passed": true
+    },
+    "solid_checks_split_coupled_final": {
+      "foam": "foams/plasticine0_split_keep_clean",
+      "cells": 7898,
+      "checks": {
+        "uniform_translation": true,
+        "pairwise_conservation": true,
+        "rotation_covariance": true,
+        "plastic_return": true,
+        "twenty_step_pulse": true,
+        "conservative_derefinement": true
+      },
+      "translation_rhs_max": 8.91082524310757e-11,
+      "translation_radius_rate_max": 1.8979698005895785e-15,
+      "translation_velocity_error": 5.551115123125783e-17,
+      "translation_density_error": 6.661338147750939e-16,
+      "closed_domain_mass_rate": 0.0,
+      "internal_force_sum": [
+        5.551115123125783e-17,
+        1.3322676295501878e-15,
+        -6.661338147750939e-16
+      ],
+      "internal_energy_rate": -7.105427357601002e-15,
+      "cap_integrated_flux_defect": 1.3063438467775379e-18,
+      "rotation_force_relative_error": 2.6524196342518705e-10,
+      "rotation_stress_rate_relative_error": 2.2206449943886458e-10,
+      "rotation_radius_rate_relative_error": 1.1171027856177506e-09,
+      "returned_von_mises_max": 1553.9070362595844,
+      "yield_stress": 1553.907036259584,
+      "plastic_work_min": 4.600950233234822e-05,
+      "plastic_energy_channel_change": 0.0,
+      "pulse_mass_error": 0.0,
+      "pulse_total_energy_error": 0.0,
+      "pulse_dt_range": [
+        1.821572659419565e-06,
+        1.8237718084704656e-06
+      ],
+      "pulse_density_range": [
+        999.8353084218502,
+        1000.2217482215324
+      ],
+      "pulse_cap_mismatch": {
+        "boundary_velocity": "sphere velocity is the material boundary unknown; equality is structural, not an accuracy test",
+        "rms_normal_speed_mismatch": 0.0,
+        "max_normal_speed_mismatch": 0.0,
+        "rms_difference_to_unprojected_pointwise_acoustics": 0.003415255831482836,
+        "sample_count": 512,
+        "sampled_area": 0.7478690227641587
+      },
+      "derefine_check": {
+        "local_index": 7587,
+        "volume": 2.4380762581527623e-08,
+        "mass": 2.4378725169977357e-05,
+        "volume_partition_defect": 4.152601786572041e-12,
+        "negative_gain_relative": 3.306501878125293e-11,
+        "conservation_relative_max": 1.8356770246558687e-16,
+        "uniform_density_error_max": 2.3947510641164627e-13,
+        "receiving_cells": 5,
+        "cells_after": 7897,
+        "continued_mass_error": 0.0,
+        "continued_energy_error": 0.0
+      },
+      "passed": true
+    },
+    "coupled_groups_final_check": {
+      "snapshot": "output/ale/fv_state_coupled_groups_frame5b.pt",
+      "time": 0.20833333333333334,
+      "orders": [
+        {
+          "order": 8,
+          "iterations": 7,
+          "solver_residual": 1.9688163476756766e-09,
+          "independent_force_residual": 1.2049222805520819e-09,
+          "independent_radial_residual": 4.5200814506672807e-10,
+          "traction_work_plus_heat_error": 7.105427357601002e-15,
+          "point_velocity_difference": 0.0,
+          "force": [
+            46.17662335332163,
+            627.07751788583,
+            8.661840608963288
+          ],
+          "normal_work_rate": -209.99610352622517,
+          "friction_heat_rate": 54.68444111828625
+        },
+        {
+          "order": 12,
+          "iterations": 6,
+          "solver_residual": 1.927036877053419e-09,
+          "independent_force_residual": 1.2137453695135559e-09,
+          "independent_radial_residual": 6.863810991130412e-10,
+          "traction_work_plus_heat_error": 4.263256414560601e-14,
+          "point_velocity_difference": 0.0,
+          "force": [
+            46.18237574648955,
+            627.0781424951456,
+            8.657176898957468
+          ],
+          "normal_work_rate": -209.99699069719878,
+          "friction_heat_rate": 54.68296943219811
+        },
+        {
+          "order": 16,
+          "iterations": 9,
+          "solver_residual": 1.2601700052269835e-09,
+          "independent_force_residual": 7.486886430382491e-10,
+          "independent_radial_residual": 3.478445440085027e-10,
+          "traction_work_plus_heat_error": 1.1368683772161603e-13,
+          "point_velocity_difference": 0.0,
+          "force": [
+            46.18186201655486,
+            627.0783441347978,
+            8.652705345174525
+          ],
+          "normal_work_rate": -209.9985909214377,
+          "friction_heat_rate": 54.680984544135754
+        }
+      ],
+      "force_error_to_order16": [
+        0.0001549343365616786,
+        8.259709488350068e-05
+      ],
+      "quadrature_seconds": {
+        "reference": 0.44246735833439743,
+        "batched": 0.006709070666450619
+      },
+      "batched_same_point_owners": true,
+      "batched_max_difference_normal_weight_gap": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "step_dt": 9.872584820484778e-07,
+      "step_mass_error": 0.0,
+      "step_energy_source_error_joule": 1.105777795717966e-15,
+      "boundary_motion_work_defect": 0.0,
+      "regularization": "Coulomb friction regularized with viscous impedance; not exact static sticking",
+      "checks": {
+        "batched_quadrature_equivalence": true,
+        "local_equations": true,
+        "same_boundary_velocity": true,
+        "work_heat_balance": true,
+        "quadrature": true,
+        "accepted_step_balance": true
+      },
+      "passed": true
+    }
+  },
+  "grouping_run_summary": {
+    "time_start": 0.2039607747661155,
+    "time_end": 0.20833333333333334,
+    "simulated_seconds": 0.004372558567217855,
+    "wall_seconds": 719.5199038339961,
+    "physical_steps": 2206,
+    "scope": "sum of three sequential saved-state continuations; excludes earlier contact trials and regression checks"
+  },
+  "k1_smoke_check": {
+    "exit_code": 0,
+    "steps": 2,
+    "log": "output/ale/baseline_after_contact.log",
+    "scope": "Two free-flight steps only, not a repeated full k1 landing."
+  },
+  "endpoint_audit": {
+    "snapshot": "output/ale/fv_state_coupled_groups_frame5b.pt",
+    "time": 0.20833333333333334,
+    "geometry_sites": 7685,
+    "active_geometric_cells": 7680,
+    "control_volumes": 7673,
+    "merged_groups": 11,
+    "members_of_merged_groups": 23,
+    "largest_group": 3,
+    "grouped_surface_cells": 18,
+    "grouped_mass_fraction": 0.002445485619181897,
+    "grouped_volume_fraction": 0.0023854599144314727,
+    "grouped_surface_original_ids": [
+      1394,
+      1409,
+      1662,
+      1812,
+      2330,
+      2585,
+      3253,
+      3502,
+      3541,
+      3726,
+      3948,
+      4012,
+      4958,
+      5159,
+      5907,
+      6319,
+      6333,
+      7118
+    ],
+    "density_range_kg_m3": [
+      972.7694572628417,
+      1099.9151303720475
+    ],
+    "max_material_speed_m_s": 2.575036002068124,
+    "all_state_finite": true,
+    "all_control_volumes_positive": true,
+    "diagnostics": {
+      "dt_scale": 9.872584820484782e-06,
+      "wave_cell": 4083,
+      "wave_dt_scale": 9.872584820484782e-06,
+      "minimum_geometric_volume": 0.0,
+      "hidden_subcells": 5,
+      "rho_min": 972.7694572628417,
+      "rho_max": 1099.9151303720475,
+      "pressure_max_abs": 23041.976992392738,
+      "stress_vm_max": 1553.9070362595844,
+      "cap_integrated_flux_defect": 7.163240920229863e-17,
+      "mass_rate_sum": -7.105427357601002e-15,
+      "force_sum": [
+        46.176623353321595,
+        263.8057398065546,
+        8.661840608963317
+      ],
+      "source_power": 680.0077415004037,
+      "energy_rate_sum": 680.0077415004043,
+      "normal_contact_power": -209.9961035262252,
+      "friction_heat_rate": 54.68444111828627,
+      "contact_area": 0.0203772256659903,
+      "contact_boundary_motion_power_defect": 0.0,
+      "contact_boundary_motion_abs_power_defect": 0.0,
+      "contact_normal_speed_mismatch_rms": 0.0,
+      "contact_normal_speed_mismatch_max": 0.0,
+      "contact_cells": 134,
+      "penetration_max": 0.0053286750026932325,
+      "ignored_cap_area": 0.0,
+      "nearly_flat_cap_fits": 148,
+      "boundary_local_iterations": 7,
+      "boundary_local_relative_residual": 1.968815656311509e-09,
+      "mesh_material_speed_difference_max": 1.5303218889934103
+    },
+    "ball_envelope_extents_m": [
+      0.4904138368071391,
+      0.4258509256418575,
+      0.4975218012324915
+    ],
+    "note": "Ball envelope is only a bounding extent, not a surface accuracy metric. Grouped mass/volume fraction measures how much of the field is spatially coarsened."
+  },
+  "replay_command": "PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python free_surface/merged_drop.py --foam foams/fourier8k_clean --save output/ale --tag coupled_groups_replay --fv-ale --fv-surface-motion coupled --fv-agglomerate --fv-agglomerate-dt 1e-6 --fv-min-volume-ratio 0.001 --frames 5 --fv-steps 20000 --fv-budget 900 --fv-resume output/ale/fv_state_coupled_groups.pt",
+  "original_source_check": {
+    "source_working_file_hash_changes": [],
+    "checked": 49
+  },
+  "references": [
+    {
+      "url": "https://researchrepository.ucd.ie/rest/bitstreams/12206/retrieve",
+      "use": "Surface penalty contact principle, not exact reproduction."
+    },
+    {
+      "url": "https://www.sciencedirect.com/science/article/pii/S0168927415000896",
+      "use": "Small-cut-cell stability and cell merging; not validation of this solid boundary adaptation."
+    },
+    {
+      "url": "https://wwwmpa.mpa-garching.mpg.de/~volker/arepo/arepo_paper.pdf",
+      "use": "Previous buried-generator conservative deletion."
+    }
+  ]
+}

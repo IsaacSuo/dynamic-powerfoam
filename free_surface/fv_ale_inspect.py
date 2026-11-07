@@ -8,8 +8,15 @@ from free_surface.fv_ale_solid import SolidALE,State
 def main():
     ap=argparse.ArgumentParser();ap.add_argument('snapshot',type=Path);ap.add_argument('--out',type=Path);a=ap.parse_args()
     wp.init();d=torch.load(a.snapshot,map_location='cpu',weights_only=False);g=d['material']
-    solver=SolidALE(d['p'],d['r'],g['E'],g['nu'],g['ys'],friction=d.get('friction',10.),interior_radii=d.get('interior_radii','dilate'))
+    solver=SolidALE(d['p'],d['r'],g['E'],g['nu'],g['ys'],friction=d.get('friction',10.),interior_radii=d.get('interior_radii','dilate'),
+                    contact_model=d.get('contact_model','legacy-ball'),surface_motion=d.get('surface_motion','radial'),
+                    contact_order=d.get('contact_order',8),contact_scale=d.get('contact_scale',1.),contact_damping=d.get('contact_damping',1.),groups=d.get('groups'))
+    if 'reference_volume' in d:
+        solver.contact_length=d['reference_volume']**(1/3)
+        solver.contact_k=solver.contact_scale*solver.bulk/solver.contact_length
     s=solver.initial;s.q=d['q'].to(s.q.device)
+    if 'groups' in d:
+        solver.groups=d['groups'].to(s.p.device);solver.has_groups=bool(torch.unique(solver.groups).numel()<len(s.r))
     v,dr,dq,diag=solver.rhs(s);m,_,rho,pressure,stress,sigma,c=solver.primitive(s)
     ids=d.get('ids',torch.arange(len(s.r)))
     contact_force,contact_stiffness,penetration=solver.contact(s)

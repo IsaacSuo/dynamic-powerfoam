@@ -14,6 +14,7 @@ from free_surface.fv_ale_solid import State
 
 @torch.no_grad()
 def dissolve(solver,s,k):
+    if solver.has_groups:raise RuntimeError('do not mix generator deletion and FV agglomeration')
     if bool(s.mesh.surface[k]):
         raise RuntimeError('refuse exposed-cell removal: would change free boundary')
     keep=torch.arange(len(s.r),device=s.p.device)!=k
@@ -48,6 +49,7 @@ def dissolve(solver,s,k):
               'cells_after':len(q)}
         if info['uniform_density_error_max']>1e-6:
             raise RuntimeError('removal failed uniform-density preservation')
+        solver.groups=torch.arange(len(q),device=q.device)
         return result,keep,info
     except Exception:
         solver.recut=old

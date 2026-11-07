@@ -10,10 +10,11 @@ from free_surface.fv_ale_derefine import dissolve
 
 @torch.no_grad()
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--foam',type=Path,required=True);p.add_argument('--out',type=Path,required=True);a=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument('--foam',type=Path,required=True);p.add_argument('--out',type=Path,required=True)
+    p.add_argument('--surface-motion',choices=['radial','least-squares','coupled'],default='least-squares');a=p.parse_args()
     wp.init();g=np.load(a.foam/'dem_exact_single/geometry.npz');cells=np.load(a.foam/'dem_exact_single/cells.npz')
     material=json.loads((a.foam/'plasticine_scenes.json').read_text())['scenes']['0']
-    solver=SolidALE(g['points'],cells['radii'],material['E'],material['nu'],material['ys'],gravity=(0,0,0),ground=None,friction=0)
+    solver=SolidALE(g['points'],cells['radii'],material['E'],material['nu'],material['ys'],gravity=(0,0,0),ground=None,friction=0,surface_motion=a.surface_motion)
     state=solver.set_velocity(solver.initial,[.2,-.3,.1]); report={'foam':str(a.foam),'cells':len(state.p),'checks':{}}
     # Uniform translation is an exact material motion independent of mesh shape.
     vp,vr,dq,diag=solver.rhs(state)

@@ -880,5 +880,7 @@
     "passed": true,
     "log": "output/ale/baseline_after_solid.log",
     "scope": "No-contact short regression; not a landing rerun"
-  }
+  },
+  "historical_scope": "Initial contact trial, retained unchanged below; see ALE_CONTACT.json for subsequent boundary and grouping work.",
+  "latest_followup": "ALE_CONTACT.json"
 }

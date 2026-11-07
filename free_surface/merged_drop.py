@@ -123,8 +123,15 @@ a_.add_argument('--fv-ale-remap-check', action='store_true', help='isolated FV-A
 a_.add_argument('--fv-ale', action='store_true', help='experimental solid FV-ALE on the same sphere-clipped power cells')
 a_.add_argument('--fv-interior-radii', choices=['fixed','dilate'], default='fixed', help='ALE weight choice for fully buried balls; surface radii follow integrated boundary motion')
 a_.add_argument('--fv-legacy-ball-contact', action='store_true', help='diagnostic reproduction ONLY: legacy whole-ball contact is inconsistent with vanishing FV cells')
+a_.add_argument('--fv-surface-motion', choices=['radial','least-squares','coupled'], default=None, help='coupled: solve contact in sphere-motion unknowns; radial/least-squares retain diagnostic controls')
+a_.add_argument('--fv-contact-order', type=int, default=8, help='exposed-cap contact quadrature order')
+a_.add_argument('--fv-contact-scale', type=float, default=1., help='surface penalty pressure stiffness = scale * bulk / initial median cell length')
+a_.add_argument('--fv-contact-damping', type=float, default=1., help='surface dashpot coefficient / acoustic impedance')
+a_.add_argument('--fv-agglomerate', action='store_true', help='merge small FV control volumes while retaining all geometric power-ball cells')
+a_.add_argument('--fv-agglomerate-dt', type=float, default=0., help='optional physical wave-step target for local control-volume merging; 0 uses volume criterion only')
+a_.add_argument('--fv-stop-dt', type=float, default=0., help='save a diagnostic stop if physical dt falls below this, without accepting a step')
 a_.add_argument('--fv-derefine', action='store_true', help='conservatively dissolve tiny buried cells; verify unchanged material domain')
-a_.add_argument('--fv-min-volume-ratio', type=float, default=1e-3, help='derefine volume threshold relative to initial median')
+a_.add_argument('--fv-min-volume-ratio', type=float, default=1e-3, help='deletion/grouping volume threshold relative to initial median')
 a_.add_argument('--fv-cfl', type=float, default=.2)
 a_.add_argument('--fv-steps', type=int, default=1000, help='explicit physical step limit; stopping here is NOT completed landing')
 a_.add_argument('--fv-budget', type=float, default=180., help='wall-time limit for initial FV trial in seconds')
@@ -144,8 +151,14 @@ if args.fv_ale_remap_check:
     check = fv_ale_check(X0, r0, args)
     raise SystemExit(0 if check['passed'] else 2)
 if args.fv_ale:
-    if not args.fv_legacy_ball_contact:
-        a_.error('FV solid trial contact is unfinished: whole-ball forces can act on buried contact points as cell mass vanishes. Use --fv-legacy-ball-contact only to reproduce the documented failed experiment; no validated contact model is implemented yet.')
+    if args.fv_surface_motion is None:
+        args.fv_surface_motion='radial' if args.fv_legacy_ball_contact else 'coupled'
+    if args.fv_contact_order<2 or args.fv_contact_scale<=0 or args.fv_contact_damping<0:
+        a_.error('invalid FV surface contact parameters')
+    if args.fv_agglomerate and (args.fv_derefine or args.fv_surface_motion!='coupled'):
+        a_.error('FV agglomeration requires coupled boundary mode and cannot be combined with generator deletion')
+    if args.fv_legacy_ball_contact and args.fv_surface_motion=='coupled':
+        a_.error('coupled sphere boundary requires the surface contact law')
     from free_surface.fv_ale_run import run as fv_ale_run
     result = fv_ale_run(args, X0, r0, gt)
     raise SystemExit(0 if result['status'] == 'completed' else 2)
