@@ -44,7 +44,7 @@ print('\n== the failed step %d: %d Newton iterations, rejected %d, trust-region 
     s0+1, len(tr), ST.stats['rejected'], ST.stats['edge'], ST.stats['negative']))
 print('   iteration: CG products, edge, negative, |g| / weight, ratio, accepted')
 rows = list(enumerate(tr))
-for i, (k_, e_, ng_, stop, g_, rho, ok) in (rows[:12]+[(None, None)]+rows[-12:] if len(rows) > 24 else rows):
+for i, (k_, e_, ng_, stop, g_, rho, ok) in (rows[:12]+[(None, (None,)*7)]+rows[-12:] if len(rows) > 24 else rows):
     if i is None:
         print('   ...'); continue
     print('   %3d: %4d %d %d  %.3e  %+.3f  %s' % (i+1, k_, e_, ng_, g_/ref, rho, 'yes' if ok else 'no'))
