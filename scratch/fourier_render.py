@@ -37,8 +37,8 @@ a.add_argument('--K', type=int, default=None)
 a.add_argument('--sim', type=Path, default=None)
 args = a.parse_args()
 li.set_scene(args.scene)
-s = args.scene[len('fourier_'):]
-RUN = FOURIER/'output'/('fourier_pacnerf_%s_8k_split_keep_clean' % s)
+s, _, res = args.scene[len('fourier_'):].partition('_')                            # (fourier_<scene>[_<res>], res default 8k)
+RUN = FOURIER/'output'/('fourier_pacnerf_%s_%s_split_keep_clean' % (s, res or '8k'))
 K = args.K if args.K is not None else li.NFRAMES-1
 SIM = args.sim or ROOT/'out_inverse'/'fourier_forward'/args.scene/('sim_K%d.npz' % K)
 OUT = SIM.parent/'render'; OUT.mkdir(parents=True, exist_ok=True)

@@ -28,11 +28,17 @@ def scene_dir(s):
     return WT/'thin-surface'/'data'/'pacnerf_powerfoam'/('%s_f0' % s)
 
 
+def run_dir(name):
+    """<scene>[_<res>] -> the fourier3d run fourier_pacnerf_<scene>_<res>_split_keep_clean (res default 8k), the scene"""
+    s, _, res = name.partition('_')
+    return WT/'thin-surface'/'fourier3d'/'output'/('fourier_pacnerf_%s_%s_split_keep_clean' % (s, res or '8k')), s
+
+
 def main():
-    for s in sys.argv[1:]:
+    for name in sys.argv[1:]:
         t0 = time.time()
-        model = WT/'thin-surface'/'fourier3d'/'output'/('fourier_pacnerf_%s_8k_split_keep_clean' % s)/'model.pt'
-        src = scene_dir(s); out = ROOT/'inverse_data'/('fourier_%s' % s)
+        run, s = run_dir(name); model = run/'model.pt'
+        src = scene_dir(s); out = ROOT/'inverse_data'/('fourier_%s' % name)
         assert model.exists() and src.exists(), (model, src)
         (out/'masks').mkdir(parents=True, exist_ok=True)
         for f in ('conversion.json', 'transforms_all.json'):

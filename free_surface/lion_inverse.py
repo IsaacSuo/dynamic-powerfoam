@@ -62,6 +62,8 @@ def _fourier_scenes():
         SCENES['fourier_elastic%d' % k] = dict(data='fourier_elastic%d' % k, cam='nerf', fps=24, nframes=14, up=1, c0=-.05, v0=tuple(s['v']), mu=1e6,
                                                gt=dict(E=s['E'], nu=s['nu']), beta_min=.003*math.sqrt(E0/s['E']),
                                                photos=str(PACNERF/'data'/'elastic'/str(k)/'data'), mpm=str(PACNERF/'simulation_data'/'elastic'/str(k)))
+    for k, res in ((0, '30k'),):                                                    # (other resolutions of a scene: the same truth, its own foam)
+        SCENES['fourier_elastic%d_%s' % (k, res)] = dict(SCENES['fourier_elastic%d' % k], data='fourier_elastic%d_%s' % (k, res))
 
 
 _fourier_scenes()
