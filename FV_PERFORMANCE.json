@@ -1,0 +1,289 @@
+{
+  "date": "2026-11-07",
+  "branch": "solid-fv-ale",
+  "production_commit": "3c6c56c",
+  "task": "Identify why the new FV trial is slow; no production algorithm or solver implementation changed.",
+  "gpu": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+  "torch": "2.9.1+cu128",
+  "procedure": [
+    "Use full saved scene states at t=0.2039607747661155 and t=0.20833333333333334; no toy geometry.",
+    "Warm caches; re-cut/reset the exact frozen input outside timing; replay a complete physical step without committing it.",
+    "Compare ordinary wall timing to synchronized nested stage timing; collect a separate CPU/CUDA profiler trace.",
+    "Alternate controls on the same state, same precision, same quadrature, same step and tolerances. Eight repetitions for timing; four further repetitions with per-physical-field difference checks."
+  ],
+  "findings": [
+    "Late-state ordinary median step = about 373 ms; surface boundary solve accounts for about 304 ms (~82%).",
+    "Two production geometric re-cuts total about 26 ms (~7%); contact quadrature construction adds about 13 ms.",
+    "The expensive operation is per-quadrature-point B^T diag(d) B implemented by a generic batched matrix product for B=[I,n]. Late state has 138128 points and 7 boundary iterations, with 3 boundary solves per physical step.",
+    "The GPU trace maps the large cost to FP64 CUTLASS kernels for batches of 4x3 times 3x4 matrices. The ordinary global geometry and plastic return are not the main cost.",
+    "The group-selection wave-step probe computes a full RHS, then the driver recomputes that RHS at the identical state. With no merge, this is one redundant RHS out of three.",
+    "CPU synchronization time largely includes waiting for GPU work; it must not be added to GPU kernel time or interpreted as pure host synchronization overhead.",
+    "Replacing generic matrix products by the exact B=[I,n] component formula in a temporary diagnostic control is much faster with roundoff-scale single-step differences."
+  ],
+  "late_state": {
+    "snapshot": "output/ale/fv_state_coupled_groups_frame5b.pt",
+    "contact_cells": 134,
+    "quadrature_points": 138128,
+    "boundary_iterations": 7,
+    "physical_dt": 1.9745169640969565e-06,
+    "ordinary_step_ms": {
+      "median": 372.5770190012554,
+      "min": 364.701343998604,
+      "max": 374.74835899774916,
+      "samples": [
+        364.701343998604,
+        367.61038699842175,
+        371.958228002768,
+        373.1958099997428,
+        373.8142299989704,
+        374.74835899774916
+      ]
+    },
+    "synchronized_step_ms": {
+      "median": 370.14202200043655,
+      "min": 363.9127339993138,
+      "max": 373.5285880029551,
+      "samples": [
+        363.9127339993138,
+        367.9551269997319,
+        368.3731179989991,
+        371.91092600187403,
+        372.95707000157563,
+        373.5285880029551
+      ]
+    },
+    "exclusive_stage_median_ms": {
+      "contact_boundary_solve.exclusive_ms": 304.30569350028236,
+      "rhs.exclusive_ms": 17.575607504113577,
+      "geometry.exclusive_ms": 26.33466150109598,
+      "contact_quadrature.exclusive_ms": 13.043628499872284,
+      "cut.exclusive_ms": 4.987332000382594,
+      "plastic_return.exclusive_ms": 1.5615329994034255,
+      "advance.exclusive_ms": 1.2283755004318664
+    },
+    "calls_per_step": {
+      "contact_boundary_solve": 3,
+      "rhs": 3,
+      "geometry": 2,
+      "contact_quadrature": 2,
+      "cut": 2,
+      "plastic_return": 2,
+      "advance": 1
+    }
+  },
+  "earlier_state": {
+    "snapshot": "output/ale/fv_state_coupled_from_start.pt",
+    "contact_cells": 66,
+    "quadrature_points": 65336,
+    "boundary_iterations": 6,
+    "ordinary_step_ms": {
+      "median": 143.9794335001352,
+      "min": 143.0860809996375,
+      "max": 146.46741899923654,
+      "samples": [
+        143.0860809996375,
+        143.25575700058835,
+        143.76926200202433,
+        144.18960499824607,
+        144.40934199956246,
+        146.46741899923654
+      ]
+    },
+    "calls_per_step": {
+      "contact_boundary_solve": 2,
+      "rhs": 2,
+      "geometry": 2,
+      "contact_quadrature": 2,
+      "cut": 2,
+      "plastic_return": 2,
+      "advance": 1
+    }
+  },
+  "gpu_bmm_shapes": {
+    "[[7685, 3, 3], [7685, 3, 1]]": {
+      "kernel_calls": 3,
+      "kernel_time_ms": 0.049456
+    },
+    "[[138128, 4, 3], [138128, 3, 4]]": {
+      "kernel_calls": 42,
+      "kernel_time_ms": 162.486756
+    },
+    "[[134, 4, 4], [134, 4, 1]]": {
+      "kernel_calls": 14,
+      "kernel_time_ms": 0.028814999999999993
+    },
+    "[[138128, 4, 3], [138128, 3, 1]]": {
+      "kernel_calls": 42,
+      "kernel_time_ms": 7.332162999999999
+    },
+    "[[50489, 3, 3], [50489, 3, 1]]": {
+      "kernel_calls": 6,
+      "kernel_time_ms": 0.6213960000000001
+    },
+    "[[7685, 3, 3], [7685, 3, 3]]": {
+      "kernel_calls": 6,
+      "kernel_time_ms": 0.26943300000000003
+    },
+    "[[137680, 4, 3], [137680, 3, 4]]": {
+      "kernel_calls": 21,
+      "kernel_time_ms": 80.52228499999998
+    },
+    "[[133, 4, 4], [133, 4, 1]]": {
+      "kernel_calls": 7,
+      "kernel_time_ms": 0.014273000000000001
+    },
+    "[[137680, 4, 3], [137680, 3, 1]]": {
+      "kernel_calls": 21,
+      "kernel_time_ms": 3.649986
+    }
+  },
+  "eight_repeat_controls_ms": {
+    "original": {
+      "median": 357.5923349999357,
+      "min": 352.19542599952547,
+      "max": 365.87507000149344,
+      "samples": [
+        352.19542599952547,
+        355.87028800000553,
+        356.09897399990587,
+        356.6875880023872,
+        358.4970819974842,
+        359.570590997464,
+        362.1451890030585,
+        365.87507000149344
+      ]
+    },
+    "formula": {
+      "median": 97.6749329984159,
+      "min": 95.33507100059069,
+      "max": 101.31614599958993,
+      "samples": [
+        95.33507100059069,
+        95.91743999772007,
+        97.04789299939875,
+        97.55937099907896,
+        97.79049499775283,
+        98.15594800238614,
+        98.78414899867494,
+        101.31614599958993
+      ]
+    },
+    "original_reuse": {
+      "median": 254.80049599900667,
+      "min": 252.9420270002447,
+      "max": 258.32789600099204,
+      "samples": [
+        252.9420270002447,
+        253.2588180001767,
+        254.17489300161833,
+        254.3536299999687,
+        255.24736199804465,
+        256.9576460009557,
+        258.1813169999805,
+        258.32789600099204
+      ]
+    },
+    "formula_reuse": {
+      "median": 82.09096100108582,
+      "min": 76.69260700276936,
+      "max": 88.61527699991711,
+      "samples": [
+        76.69260700276936,
+        78.57021100062411,
+        79.07255500322208,
+        81.95835200240253,
+        82.2235699997691,
+        83.49185299812234,
+        83.5159649977868,
+        88.61527699991711
+      ]
+    }
+  },
+  "four_repeat_confirmation_ms": {
+    "original": {
+      "median": 368.23526400075934,
+      "min": 363.0623779972666,
+      "max": 372.36762100292253,
+      "samples": [
+        363.0623779972666,
+        367.1610800010967,
+        369.309448000422,
+        372.36762100292253
+      ]
+    },
+    "formula": {
+      "median": 103.7978349995683,
+      "min": 101.60175300188712,
+      "max": 104.6068599971477,
+      "samples": [
+        101.60175300188712,
+        103.20740599854616,
+        104.38826400059042,
+        104.6068599971477
+      ]
+    },
+    "original_reuse": {
+      "median": 260.86422049957037,
+      "min": 254.59519299693056,
+      "max": 261.41801299672807,
+      "samples": [
+        254.59519299693056,
+        260.4550879987073,
+        261.2733530004334,
+        261.41801299672807
+      ]
+    },
+    "formula_reuse": {
+      "median": 87.98758299781184,
+      "min": 83.96066299974336,
+      "max": 89.52321600008872,
+      "samples": [
+        83.96066299974336,
+        87.57458799664164,
+        88.40057799898204,
+        89.52321600008872
+      ]
+    }
+  },
+  "maximum_physical_differences": {
+    "formula": {
+      "max_position_difference_m": 2.0469737016526324e-16,
+      "max_radius_difference_m": 2.0122792321330962e-16,
+      "max_velocity_difference_m_s": 3.8968828164342995e-14,
+      "max_density_relative_difference": 5.797528855467984e-13,
+      "max_pressure_difference_Pa": 8.713686838746071e-08,
+      "max_deviatoric_stress_difference_Pa": 6.014033715473488e-10
+    },
+    "original_reuse": {
+      "max_position_difference_m": 2.0469737016526324e-16,
+      "max_radius_difference_m": 2.0122792321330962e-16,
+      "max_velocity_difference_m_s": 4.118927421359331e-14,
+      "max_density_relative_difference": 5.208475121489953e-13,
+      "max_pressure_difference_Pa": 7.828930392861366e-08,
+      "max_deviatoric_stress_difference_Pa": 6.142499842098914e-10
+    },
+    "formula_reuse": {
+      "max_position_difference_m": 4.163336342344337e-16,
+      "max_radius_difference_m": 4.198030811863873e-16,
+      "max_velocity_difference_m_s": 4.0967229608668276e-14,
+      "max_density_relative_difference": 5.78202744141593e-13,
+      "max_pressure_difference_Pa": 8.742790669202805e-08,
+      "max_deviatoric_stress_difference_Pa": 6.083382686483674e-10
+    }
+  },
+  "formula": "B^T diag(d) B = [[diag(d), d*n],[(d*n)^T, sum(d*n*n)]]; B^T t = [t, dot(n,t)].",
+  "measured_speedup_single_step": 4.356050052760447,
+  "limits": [
+    "Only temporary diagnostic substitution, not yet wired into production.",
+    "One frozen late step with repeats, plus physical-field checks; not a full trajectory timing or equivalence test.",
+    "No reduction of the physical-step count, quadrature order, convergence tolerance, material model or contact law.",
+    "After these two changes the same diagnostic step still costs about 82-88 ms. The explicit stable timestep is still about 2 microseconds, so total simulation cost remains high.",
+    "Stage medians are separately aggregated and need not sum exactly to the median whole-step time. CPU/CUDA trace scopes overlap; kernel shape totals above use actual kernel events only."
+  ],
+  "reproduce": "PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python free_surface/fv_ale_profile.py output/ale/fv_state_coupled_groups_frame5b.pt --repeat 8 --trace --formula-control --out output/ale/performance_recheck.json",
+  "raw_reports": [
+    "output/ale/performance_frozen.json",
+    "output/ale/performance_formula.json",
+    "output/ale/performance_formula_physical.json"
+  ]
+}
