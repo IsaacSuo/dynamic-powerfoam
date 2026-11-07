@@ -119,6 +119,7 @@ a_.add_argument('--follow-screen', action='store_true', help="logging only, with
 a_.add_argument('--diag2', action='store_true', help="logging only, with --omega-at: k1_diag2.run (differences, Lanczos convergence, integration constraint, cross terms, consistent follow)")
 a_.add_argument('--follow-check', action='store_true', help="logging only, with --omega-at: the tiny and the stiff particles following an anchor's affine motion (k1_slave.follow_omega)")
 a_.add_argument('--slave-check', action='store_true', help="logging only, with --omega-at: also the reduced operator with the stiff particles following their neighbours' fit (k1_slave.py)")
+a_.add_argument('--fv-ale-remap-check', action='store_true', help='isolated FV-ALE geometry/remap trial on the full foam; no solid-dynamics or landing claim')
 args = a_.parse_args()
 gt = json.loads((args.foam/'plasticine_scenes.json').read_text())['scenes'][str(args.scene)]
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
@@ -128,6 +129,10 @@ if args.scene != 0:                                                             
     R_s, c0_, ck_ = (np.array(gt[k_]) for k_ in ('R', 'c0', 'ck'))
     X0 = ck_+(X0-c0_)@R_s.T; C0 = ck_+(C0-c0_)@R_s.T
 args.save.mkdir(parents=True, exist_ok=True)
+if args.fv_ale_remap_check:
+    from free_surface.fv_ale_check import run as fv_ale_check
+    check = fv_ale_check(X0, r0, args)
+    raise SystemExit(0 if check['passed'] else 2)
 have_truth = (args.data/'simulation_data.zip').exists()
 Z = zipfile.ZipFile(args.data/'simulation_data.zip') if have_truth else None
 

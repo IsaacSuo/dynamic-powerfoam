@@ -1,0 +1,311 @@
+{
+  "date": "2026-11-07",
+  "branch": "solid-fv-ale",
+  "baseline_commit": "534b163c545c5df44abb4e3d9a3ce0ab5da0bdbd",
+  "status": "INTEGRATION_TRIAL_ONLY_NOT_SOLID_SOLVER",
+  "constraint": "Keep exact current power-diagram intersected with balls. No Cartesian, tetrahedral or hexahedral replacement.",
+  "implemented": [
+    "production-geometry to FV control-volume adapter including curved caps",
+    "instantaneous ALE mesh volume flux on shared radical planes and spherical caps",
+    "donor-cell conservative remap of extensive scalar/vector channels through moving internal faces",
+    "full existing merged_drop scene-loader integration behind --fv-ale-remap-check"
+  ],
+  "not_implemented": [
+    "solid traction/Riemann solver and stress/plastic history evolution",
+    "material free-boundary evolution and treatment of exposed-cap flux",
+    "contact/friction in the new mechanics",
+    "finite-step GCL exactness (current SSPRK2 converges but is not exact)",
+    "cell disappearance/creation in transport",
+    "full landing under the new model"
+  ],
+  "test_limitations": [
+    "Only 42 / 79 deeply buried generators move, within full 7690 / 7898-cell foams. Exterior held fixed.",
+    "Passive conserved-channel transfer is not constitutive/energy-work validation.",
+    "Remap substeps parameterize a fictitious rezoning path; they are not physical-time steps or landing timing.",
+    "No speed, stability or deformation-quality conclusion for full solid ALE."
+  ],
+  "python": "/home/fangsuo/anaconda3/envs/om/bin/python",
+  "command_template": "PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python -u free_surface/merged_drop.py --foam foams/FOAM --save output/ale --tag TAG --fv-ale-remap-check",
+  "baseline_smoke": {
+    "steps": 2,
+    "command": "--foam foams/fourier8k_clean --steps 2 --c-two-pass --pre-every 1 --c2-refresh --patch-cg",
+    "log": "output/ale/baseline_smoke.log"
+  },
+  "source_working_files_unchanged": true,
+  "input_sha256": {
+    "foams/fourier8k_clean/dem_exact_single/cells.npz": "47d394465957a1890daf1ce1c5ba9d27a7346ba96f6ef9576f62999b682357a7",
+    "foams/fourier8k_clean/dem_exact_single/geometry.npz": "ccdafa66f248c63b7ecb0809a965dc82cf7ef8dd19c712fc7be19587f5f629f9",
+    "foams/fourier8k_clean/plasticine_scenes.json": "74de36a9889607bf56a9f64e1f33da042f4ff4e538999dea63c2fdf7084445d0",
+    "foams/plasticine0_split_keep_clean/dem_exact_single/cells.npz": "5a2de55f51328f2b7dbcbeb25590fb4f64f906c116ada8f45ba6767c0f74e392",
+    "foams/plasticine0_split_keep_clean/dem_exact_single/geometry.npz": "99fd1cc60161bfc85dd12764d053bd132370c0f3f37fc66458604465d778b75e",
+    "foams/plasticine0_split_keep_clean/plasticine_scenes.json": "0fe7329d59fc0fb342860927403c453c1761f4adb1e6ae5eae62e2ca862769fc"
+  },
+  "results": {
+    "clean": {
+      "scope": "geometry + pure remap only; solid dynamics NOT implemented",
+      "foam": "foams/fourier8k_clean",
+      "scene": 0,
+      "cells": 7690,
+      "wall_count": 50631,
+      "median_cell_length_m": 0.014775659770167489,
+      "surface_closure_relative_max": 3.3911531160426016e-14,
+      "dV_finite_difference": [
+        {
+          "epsilon": 0.0001,
+          "relative_l2": 4.2821530782591634e-08,
+          "max_error_per_cell_volume": 1.843971593914731e-05
+        },
+        {
+          "epsilon": 3e-05,
+          "relative_l2": 5.551887320982204e-09,
+          "max_error_per_cell_volume": 1.662495999641888e-06
+        },
+        {
+          "epsilon": 1e-05,
+          "relative_l2": 3.125778030166117e-08,
+          "max_error_per_cell_volume": 1.0040203046406566e-06
+        }
+      ],
+      "translation_volume_relative_max": 1.9118894114526273e-12,
+      "translation_relative_wall_flux_max": 2.541098841762901e-20,
+      "cap_affine_flux_independent_relative_l2": 3.028928952621491e-14,
+      "affine_divergence_relative_max": 4.693702780203533e-11,
+      "moving_exterior_rejected": true,
+      "moving_exterior_message": "remap needs exterior boundary transport; caps are moving: relative=0.888264 cell=3553 area=0.0034267",
+      "isotropic_dilation_relative_flux_max": 2.439454888092385e-19,
+      "rezone_max_site_displacement_m": 0.0010010591694964615,
+      "rezone_amplitude_halvings": 0,
+      "remap_moving_sites": 42,
+      "remap_walls_removed": 8,
+      "remap_walls_added": 11,
+      "remap_domain_volume_change_relative": 0.0,
+      "without_remap_density_error": {
+        "0.0": 0.0,
+        "0.5": 0.0,
+        "0.99": 0.006201625700854865,
+        "1.0": 0.0284032520154629
+      },
+      "remap_refinement": [
+        {
+          "substeps": 8,
+          "seconds": 0.14182400000208872,
+          "conservation_relative_by_channel": [
+            0.0,
+            1.1980215692893368e-16,
+            1.1980215692893368e-16,
+            0.0,
+            0.0,
+            1.6229312111524456e-16
+          ],
+          "uniform_density_error_max": 8.224239781418063e-07,
+          "uniform_density_error_l2": 1.9048174475074547e-08,
+          "tracer_range": [
+            0.4232321893302504,
+            0.6999240442992744
+          ],
+          "tracer_initial_range": [
+            0.4232321893302504,
+            0.6999240442992744
+          ],
+          "exposed_cap_swept_flux_l1_max": 0.0
+        },
+        {
+          "substeps": 16,
+          "seconds": 0.2995445289998315,
+          "conservation_relative_by_channel": [
+            0.0,
+            1.1980215692893368e-16,
+            1.1980215692893368e-16,
+            0.0,
+            0.0,
+            3.245862422304891e-16
+          ],
+          "uniform_density_error_max": 2.0426851987664918e-07,
+          "uniform_density_error_l2": 4.743644409005605e-09,
+          "tracer_range": [
+            0.4232321893302504,
+            0.6999240442992744
+          ],
+          "tracer_initial_range": [
+            0.4232321893302504,
+            0.6999240442992744
+          ],
+          "exposed_cap_swept_flux_l1_max": 0.0
+        },
+        {
+          "substeps": 32,
+          "seconds": 0.5813796289985476,
+          "conservation_relative_by_channel": [
+            0.0,
+            1.1980215692893368e-16,
+            1.1980215692893368e-16,
+            1.5973620923857824e-16,
+            0.0,
+            1.6229312111524456e-16
+          ],
+          "uniform_density_error_max": 5.1005308643325975e-08,
+          "uniform_density_error_l2": 1.1844571408240881e-09,
+          "tracer_range": [
+            0.4232321893302504,
+            0.6999240442992744
+          ],
+          "tracer_initial_range": [
+            0.4232321893302504,
+            0.6999240442992744
+          ],
+          "exposed_cap_swept_flux_l1_max": 0.0
+        }
+      ],
+      "seconds": 2.011179157998413,
+      "checks": {
+        "moving_exterior_guard": true,
+        "closure": true,
+        "rigid_translation": true,
+        "geometric_derivative": true,
+        "cap_moment": true,
+        "changed_neighbours": true,
+        "fixed_domain": true,
+        "conservation": true,
+        "uniform_density_converges": true,
+        "positive_bounded_tracer": true
+      },
+      "passed": true
+    },
+    "split0": {
+      "scope": "geometry + pure remap only; solid dynamics NOT implemented",
+      "foam": "foams/plasticine0_split_keep_clean",
+      "scene": 0,
+      "cells": 7898,
+      "wall_count": 53792,
+      "median_cell_length_m": 0.013426632537252726,
+      "surface_closure_relative_max": 8.150610340175966e-15,
+      "dV_finite_difference": [
+        {
+          "epsilon": 0.0001,
+          "relative_l2": 7.740368841817674e-08,
+          "max_error_per_cell_volume": 1.7786270740061052e-05
+        },
+        {
+          "epsilon": 3e-05,
+          "relative_l2": 8.005367731217817e-09,
+          "max_error_per_cell_volume": 1.9294110599099684e-06
+        },
+        {
+          "epsilon": 1e-05,
+          "relative_l2": 1.3009572488364216e-08,
+          "max_error_per_cell_volume": 1.0485943651916154e-06
+        }
+      ],
+      "translation_volume_relative_max": 7.203198017820695e-14,
+      "translation_relative_wall_flux_max": 6.776263578034403e-21,
+      "cap_affine_flux_independent_relative_l2": 7.636946037969857e-15,
+      "affine_divergence_relative_max": 2.6760185525836778e-12,
+      "moving_exterior_rejected": true,
+      "moving_exterior_message": "remap needs exterior boundary transport; caps are moving: relative=0.700837 cell=3312 area=0.00186541",
+      "isotropic_dilation_relative_flux_max": 2.168404344971009e-19,
+      "rezone_max_site_displacement_m": 0.0008793620846743001,
+      "rezone_amplitude_halvings": 0,
+      "remap_moving_sites": 79,
+      "remap_walls_removed": 20,
+      "remap_walls_added": 19,
+      "remap_domain_volume_change_relative": 0.0,
+      "without_remap_density_error": {
+        "0.0": 0.0,
+        "0.5": 0.0,
+        "0.99": 0.014496674818888017,
+        "1.0": 0.19522798803668273
+      },
+      "remap_refinement": [
+        {
+          "substeps": 8,
+          "seconds": 0.1559949799993774,
+          "conservation_relative_by_channel": [
+            0.0,
+            1.3069900940623393e-16,
+            1.3069900940623393e-16,
+            1.7426534587497855e-16,
+            0.0,
+            1.7634061448812693e-16
+          ],
+          "uniform_density_error_max": 1.559528878480876e-05,
+          "uniform_density_error_l2": 2.420308155487358e-07,
+          "tracer_range": [
+            0.4088713410643383,
+            0.6999772419337464
+          ],
+          "tracer_initial_range": [
+            0.4088713410643383,
+            0.6999772419337464
+          ],
+          "exposed_cap_swept_flux_l1_max": 0.0
+        },
+        {
+          "substeps": 16,
+          "seconds": 0.3003106360010861,
+          "conservation_relative_by_channel": [
+            0.0,
+            0.0,
+            0.0,
+            1.7426534587497855e-16,
+            0.0,
+            0.0
+          ],
+          "uniform_density_error_max": 3.833095275407317e-06,
+          "uniform_density_error_l2": 5.989563241644586e-08,
+          "tracer_range": [
+            0.4088713410643383,
+            0.6999772419337464
+          ],
+          "tracer_initial_range": [
+            0.4088713410643383,
+            0.6999772419337464
+          ],
+          "exposed_cap_swept_flux_l1_max": 0.0
+        },
+        {
+          "substeps": 32,
+          "seconds": 0.6078940900006273,
+          "conservation_relative_by_channel": [
+            0.0,
+            1.3069900940623393e-16,
+            1.3069900940623393e-16,
+            3.485306917499571e-16,
+            0.0,
+            0.0
+          ],
+          "uniform_density_error_max": 9.451032894070011e-07,
+          "uniform_density_error_l2": 1.4850035557389841e-08,
+          "tracer_range": [
+            0.4088713410643383,
+            0.6999772419337464
+          ],
+          "tracer_initial_range": [
+            0.4088713410643383,
+            0.6999772419337464
+          ],
+          "exposed_cap_swept_flux_l1_max": 0.0
+        }
+      ],
+      "seconds": 2.054655128002196,
+      "checks": {
+        "moving_exterior_guard": true,
+        "closure": true,
+        "rigid_translation": true,
+        "geometric_derivative": true,
+        "cap_moment": true,
+        "changed_neighbours": true,
+        "fixed_domain": true,
+        "conservation": true,
+        "uniform_density_converges": true,
+        "positive_bounded_tracer": true
+      },
+      "passed": true
+    }
+  },
+  "references": [
+    "https://arxiv.org/abs/1905.00967",
+    "https://doi.org/10.1016/j.compfluid.2020.104592",
+    "https://guisset.perso.math.cnrs.fr/Articles/elasto_multimat.pdf"
+  ],
+  "interpretation": "These references motivate ALE/FV; this adapter is not claimed to reproduce their complete solid scheme. Keeping curved spherical cells still requires a justified free-boundary/constitutive coupling."
+}
