@@ -1,0 +1,607 @@
+{
+  "date": "2026-11-08",
+  "baseline_commit": "3498da1",
+  "change": "Local ground update within every fresh cut, fused GPU face/constraint preparation and batched geometry checks. The material law, physical dt rule, recutting frequency, grouping rule and boundary law are unchanged.",
+  "implementation": [
+    "Keep the complete original cut at the current state. Collect the complete incident-face stars of cells touched by the ground; leave all other current-state volumes and cap moments in place.",
+    "At the late state, second-pass sphere integration visits 140 cells and gathers 803 wall disks, instead of 7690 cells and 50406 wall disks. Hidden/empty cells are included conservatively.",
+    "Prepare selected faces, floor disks and clipping constraints in fused Warp kernels. Omit only half-planes strictly containing the whole disk, keeping conservative slack near tangency.",
+    "Check negative clipped area and impossible volume increases as before, with one batched host read.",
+    "GroundClip(local=False) retains the full-field reference. Existing non-ground geometry paths keep non-indexed kernel calls."
+  ],
+  "measured_results": [
+    {
+      "snapshot": "output/ale/fv_state_plane_stable.pt",
+      "time": 0.19571219181502358,
+      "full_step_ms": {
+        "median": 62.40536299992527,
+        "min": 57.00631599756889,
+        "max": 71.90283099771477,
+        "samples": [
+          57.00631599756889,
+          57.66683600086253,
+          59.51176099915756,
+          60.06087700006901,
+          60.79274900184828,
+          61.452058998838766,
+          61.89232599717798,
+          62.39961100072833,
+          62.41111499912222,
+          62.512208001862746,
+          62.782082000921946,
+          63.808825998421526,
+          65.32517899904633,
+          67.54432099842234,
+          68.56467900070129,
+          71.90283099771477
+        ]
+      },
+      "local_step_ms": {
+        "median": 57.27951600056258,
+        "min": 53.46412699873326,
+        "max": 62.803752000036184,
+        "samples": [
+          53.46412699873326,
+          55.61981599748833,
+          55.65073400066467,
+          56.55994699918665,
+          56.69300899899099,
+          56.851209003070835,
+          57.05288500030292,
+          57.1660060013528,
+          57.39302599977236,
+          57.70202799976687,
+          58.7374999995518,
+          59.76647100033006,
+          60.30186299904017,
+          61.413639999955194,
+          62.18236999848159,
+          62.803752000036184
+        ]
+      },
+      "paired_saved_ms": {
+        "median": 3.3821680008259136,
+        "min": -0.2900440013036132,
+        "max": 14.84994599741185,
+        "samples": [
+          -0.2900440013036132,
+          0.44636899838224053,
+          0.5008299995097332,
+          1.0050739983853418,
+          1.6855879985087086,
+          2.210345002822578,
+          2.6678510002966505,
+          3.090721002081409,
+          3.673614999570418,
+          3.861026998492889,
+          6.130680998467142,
+          6.779795003239997,
+          8.63217000005534,
+          9.317955002188683,
+          11.713469997630455,
+          14.84994599741185
+        ]
+      },
+      "local_faster_pairs": 15,
+      "local_geometry": {
+        "method": "direct_halfspace",
+        "floor_faces": 4,
+        "recut_wall_disks": 6,
+        "stable_sphere_area": true,
+        "local_ground_update": true,
+        "recomputed_cells": 5,
+        "gathered_wall_disks": 40,
+        "max_volume_increase_m3": 3.8381180422460484e-22,
+        "max_cap_area_increase_m2": 0.0
+      },
+      "rhs_relative_differences": {
+        "0": 9.906505805881517e-16,
+        "1": 1.2969237989536956e-13,
+        "2": 2.2922890768500057e-14
+      },
+      "sequence": {
+        "steps": 48,
+        "dt_max_difference": 5.082197683525802e-21,
+        "physical_differences": {
+          "max_position_difference_m": 2.220446049250313e-16,
+          "max_radius_difference_m": 2.0122792321330962e-16,
+          "max_velocity_difference_m_s": 7.122080702970379e-14,
+          "max_density_relative_difference": 5.262563718128158e-13,
+          "max_pressure_difference_Pa": 7.695052772760391e-08,
+          "max_deviatoric_stress_difference_Pa": 5.385174972616369e-09
+        },
+        "passed": true
+      },
+      "passed": true
+    },
+    {
+      "snapshot": "output/ale/fv_state_plane_direct.pt",
+      "time": 0.20553183879966908,
+      "full_step_ms": {
+        "median": 64.31413700011035,
+        "min": 58.62846099989838,
+        "max": 70.82126599925687,
+        "samples": [
+          58.62846099989838,
+          61.878234999312554,
+          62.47320499824127,
+          62.85238799682702,
+          63.144490999548,
+          63.17026499891654,
+          63.61387799915974,
+          64.22279600155889,
+          64.40547799866181,
+          64.88715299929027,
+          65.33098100044299,
+          65.56001699937042,
+          66.05251700239023,
+          66.91193399819895,
+          66.95009599934565,
+          70.82126599925687
+        ]
+      },
+      "local_step_ms": {
+        "median": 61.41018050038838,
+        "min": 55.81789200005005,
+        "max": 78.71936700030346,
+        "samples": [
+          55.81789200005005,
+          57.86364599771332,
+          58.42926499826717,
+          58.53142100022524,
+          58.72707699745661,
+          60.36537000181852,
+          60.573624999960884,
+          60.76737100011087,
+          62.052990000665886,
+          62.2010750012123,
+          62.74681500144652,
+          62.99428999773227,
+          63.65308699969319,
+          64.819572999113,
+          65.31873000130872,
+          78.71936700030346
+        ]
+      },
+      "paired_saved_ms": {
+        "median": 1.6450144976261072,
+        "min": -20.090906000405084,
+        "max": 12.28984499903163,
+        "samples": [
+          -20.090906000405084,
+          0.17597500118426979,
+          0.27212999702896923,
+          0.740444000257412,
+          0.799397996161133,
+          1.2340659995970782,
+          1.5128649974940345,
+          1.6313659980369266,
+          1.6586629972152878,
+          3.649171001598006,
+          4.715226001280826,
+          4.886801001703134,
+          5.285146002279362,
+          9.048288000485627,
+          9.513089000392938,
+          12.28984499903163
+        ]
+      },
+      "local_faster_pairs": 15,
+      "local_geometry": {
+        "method": "direct_halfspace",
+        "floor_faces": 55,
+        "recut_wall_disks": 200,
+        "stable_sphere_area": true,
+        "local_ground_update": true,
+        "recomputed_cells": 91,
+        "gathered_wall_disks": 548,
+        "max_volume_increase_m3": 3.049318610115481e-20,
+        "max_cap_area_increase_m2": 2.7647155398380363e-18
+      },
+      "rhs_relative_differences": {
+        "0": 3.785050947536468e-13,
+        "1": 1.296090341577347e-11,
+        "2": 7.753963181229934e-13
+      },
+      "sequence": {
+        "steps": 48,
+        "dt_max_difference": 3.815883427380623e-19,
+        "physical_differences": {
+          "max_position_difference_m": 2.4945323584546486e-15,
+          "max_radius_difference_m": 3.58046925441613e-15,
+          "max_velocity_difference_m_s": 3.7836400679225335e-13,
+          "max_density_relative_difference": 4.926049513798355e-13,
+          "max_pressure_difference_Pa": 7.177004590630531e-08,
+          "max_deviatoric_stress_difference_Pa": 3.195765430064057e-09
+        },
+        "passed": true
+      },
+      "passed": true
+    },
+    {
+      "snapshot": "output/ale/fv_state_plane_direct_b.pt",
+      "time": 0.20833333333333334,
+      "full_step_ms": {
+        "median": 65.36277050145145,
+        "min": 58.73713599794428,
+        "max": 82.33629499954986,
+        "samples": [
+          58.73713599794428,
+          61.29964700085111,
+          61.317837000387954,
+          62.27783500071382,
+          62.80275599783636,
+          64.03972200132557,
+          64.36387899884721,
+          65.01729800220346,
+          65.70824300069944,
+          67.2842159983702,
+          67.43892499798676,
+          68.96270599827403,
+          74.44896000015433,
+          74.55019999906654,
+          76.49675799984834,
+          82.33629499954986
+        ]
+      },
+      "local_step_ms": {
+        "median": 61.49034250120167,
+        "min": 57.69800499911071,
+        "max": 73.97721800225554,
+        "samples": [
+          57.69800499911071,
+          58.160004002274945,
+          58.983285998692736,
+          59.01810500290594,
+          59.99443900145707,
+          60.19842400201014,
+          60.94043600023724,
+          61.40407800194225,
+          61.57660700046108,
+          62.432401999103604,
+          63.47234699933324,
+          65.60909799736692,
+          65.84188099805033,
+          66.76410299769486,
+          67.27167300050496,
+          73.97721800225554
+        ]
+      },
+      "paired_saved_ms": {
+        "median": 4.097346500202548,
+        "min": -6.871961999422638,
+        "max": 23.318189996643923,
+        "samples": [
+          -6.871961999422638,
+          -2.1726999984821305,
+          -0.25877000007312745,
+          1.3986779958941042,
+          2.5195399975928012,
+          3.1208250002237037,
+          3.275841001595836,
+          4.076862001966219,
+          4.117830998438876,
+          4.369439997390145,
+          6.341717002214864,
+          7.177286999649368,
+          7.240500995976618,
+          7.786097001371672,
+          8.300929999677464,
+          23.318189996643923
+        ]
+      },
+      "local_faster_pairs": 13,
+      "local_geometry": {
+        "method": "direct_halfspace",
+        "floor_faces": 84,
+        "recut_wall_disks": 310,
+        "stable_sphere_area": true,
+        "local_ground_update": true,
+        "recomputed_cells": 140,
+        "gathered_wall_disks": 803,
+        "max_volume_increase_m3": 4.743384504624082e-20,
+        "max_cap_area_increase_m2": 8.944667923005412e-19
+      },
+      "rhs_relative_differences": {
+        "0": 3.415963079673079e-13,
+        "1": 9.917029294447476e-12,
+        "2": 9.835199222068179e-13
+      },
+      "sequence": {
+        "steps": 48,
+        "dt_max_difference": 9.317362419797304e-21,
+        "physical_differences": {
+          "max_position_difference_m": 4.218847493575595e-15,
+          "max_radius_difference_m": 4.975186929101483e-15,
+          "max_velocity_difference_m_s": 4.4231285301066237e-13,
+          "max_density_relative_difference": 9.371884382787874e-13,
+          "max_pressure_difference_Pa": 1.3710814528167248e-07,
+          "max_deviatoric_stress_difference_Pa": 9.855057214736007e-09
+        },
+        "passed": true
+      },
+      "passed": true
+    }
+  ],
+  "interpretation": "Sixteen alternating full/local pairs on each of three real states. Median per-step cost fell by about 4.5-8.2%, with local faster in 43 of 48 pairs. Do not compare the latest 57-61 ms directly to the earlier 73 ms as an equal-session speedup: baseline timing varies with the machine. The first local version without fused preparation showed no reliable speedup and was replaced. The full-field reference retains its original empty output allocations and unindexed integration; it is not burdened with the optimized path preparation.",
+  "validation": {
+    "clean_full_foam": {
+      "foam": "foams/fourier8k_clean",
+      "test_penetration": 0.001,
+      "single_sphere_analytic_checks": [
+        {
+          "centre_height": 0.3,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": 0.0,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": -0.2,
+          "volume_error": 2.220446049250313e-16,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": 1.2,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": -1.2,
+          "volume_error": 1.743934249004316e-16,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        }
+      ],
+      "closure_error_m2": 1.2633084272768377e-16,
+      "volume_rate_relative_error": 2.5995433706086927e-09,
+      "wall_force_balance_error_N": 6.798699777552591e-17,
+      "step_energy_error_J": -2.1011838102769076e-16,
+      "step_mass_error": 0.0,
+      "tangent_translation_density_error": 5.695444116327053e-14,
+      "plane_boundary": {
+        "contact_cells": 1,
+        "contact_area": 0.00013922014786273138,
+        "wall_pressure_min": 1533.4190487593833,
+        "wall_pressure_max": 1533.4190487593833,
+        "wall_tensile_prediction_cells": 0,
+        "wall_tensile_prediction_area": 0.0,
+        "wall_sliding_cells": 0,
+        "wall_normal_velocity_max": 0.0
+      },
+      "geometry": {
+        "method": "direct_halfspace",
+        "floor_faces": 1,
+        "recut_wall_disks": 0,
+        "stable_sphere_area": true,
+        "local_ground_update": true,
+        "recomputed_cells": 1,
+        "gathered_wall_disks": 9,
+        "max_volume_increase_m3": 0.0,
+        "max_cap_area_increase_m2": 0.0
+      },
+      "friction_checks": {
+        "stick_velocity_error_m_s": 0.0,
+        "sliding_coulomb_force_error_N": 4.336808689942018e-19,
+        "sliding_cells": 1,
+        "minimum_friction_heat_rate_W": -0.0
+      },
+      "checks": {
+        "single_sphere": true,
+        "closure": true,
+        "geometric_flux": true,
+        "force_balance": true,
+        "energy_balance": true,
+        "mass_balance": true,
+        "tangent_translation": true,
+        "impermeable_ground": true,
+        "compressive_contact": true,
+        "friction_stick_slip": true,
+        "deep_clipping": true,
+        "clipping_cannot_increase_volume": true,
+        "regression_closure": true,
+        "regression_volume_rate": true
+      },
+      "deep_geometry": [
+        {
+          "height": 0.03,
+          "floor_cells": 52,
+          "hidden_cells": 1,
+          "closure_m2": 1.2633084272768377e-16,
+          "volume_rate_relative_error": 2.5895266204583607e-09,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.08,
+          "floor_cells": 371,
+          "hidden_cells": 196,
+          "closure_m2": 2.896633729862905e-16,
+          "volume_rate_relative_error": 2.0194739398477037e-09,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.15,
+          "floor_cells": 523,
+          "hidden_cells": 1409,
+          "closure_m2": 3.58624580828664e-17,
+          "volume_rate_relative_error": 1.6977711793074026e-09,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.3,
+          "floor_cells": 556,
+          "hidden_cells": 4233,
+          "closure_m2": 3.5863603368828725e-17,
+          "volume_rate_relative_error": 2.547595831817089e-09,
+          "min_volume": 0.0
+        }
+      ],
+      "degenerate_arc_regression": {
+        "snapshot": "output/ale/fv_state_plane_stable.pt",
+        "previously_corrupted_cell": 6623,
+        "direct_clipped_volume": 3.6056186035127345e-06,
+        "uncut_volume": 3.858682960546647e-06,
+        "max_clipping_volume_increase_m3": 6.776263578034403e-21,
+        "closure_error_m2": 4.7883075823934705e-17,
+        "volume_rate_relative_error": 1.5256654679041585e-09
+      },
+      "passed": true
+    },
+    "split_keep_full_foam": {
+      "foam": "foams/plasticine0_split_keep_clean",
+      "test_penetration": 0.01,
+      "single_sphere_analytic_checks": [
+        {
+          "centre_height": 0.3,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": 0.0,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": -0.2,
+          "volume_error": 2.220446049250313e-16,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": 1.2,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": -1.2,
+          "volume_error": 1.743934249004316e-16,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        }
+      ],
+      "closure_error_m2": 1.225565154237936e-17,
+      "volume_rate_relative_error": 8.846370642138956e-10,
+      "wall_force_balance_error_N": 1.9860273225978185e-15,
+      "step_energy_error_J": -7.901665433074356e-16,
+      "step_mass_error": 2.0922706535830862e-16,
+      "tangent_translation_density_error": 6.661338147750939e-16,
+      "plane_boundary": {
+        "contact_cells": 10,
+        "contact_area": 0.00371371558035123,
+        "wall_pressure_min": 1533.419048759383,
+        "wall_pressure_max": 1533.4190487594133,
+        "wall_tensile_prediction_cells": 0,
+        "wall_tensile_prediction_area": 0.0,
+        "wall_sliding_cells": 0,
+        "wall_normal_velocity_max": 0.0
+      },
+      "geometry": {
+        "method": "direct_halfspace",
+        "floor_faces": 10,
+        "recut_wall_disks": 28,
+        "stable_sphere_area": true,
+        "local_ground_update": true,
+        "recomputed_cells": 14,
+        "gathered_wall_disks": 118,
+        "max_volume_increase_m3": 1.6940658945086007e-21,
+        "max_cap_area_increase_m2": 0.0
+      },
+      "friction_checks": {
+        "stick_velocity_error_m_s": 0.0,
+        "sliding_coulomb_force_error_N": 1.734723475976807e-18,
+        "sliding_cells": 10,
+        "minimum_friction_heat_rate_W": -0.0
+      },
+      "checks": {
+        "single_sphere": true,
+        "closure": true,
+        "geometric_flux": true,
+        "force_balance": true,
+        "energy_balance": true,
+        "mass_balance": true,
+        "tangent_translation": true,
+        "impermeable_ground": true,
+        "compressive_contact": true,
+        "friction_stick_slip": true,
+        "deep_clipping": true
+      },
+      "deep_geometry": [
+        {
+          "height": 0.03,
+          "floor_cells": 117,
+          "hidden_cells": 12,
+          "closure_m2": 1.22237183780112e-17,
+          "volume_rate_relative_error": 8.605528306259632e-10,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.08,
+          "floor_cells": 436,
+          "hidden_cells": 467,
+          "closure_m2": 1.22237183780112e-17,
+          "volume_rate_relative_error": 8.69353128821601e-10,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.15,
+          "floor_cells": 562,
+          "hidden_cells": 2196,
+          "closure_m2": 1.1152148883684587e-17,
+          "volume_rate_relative_error": 7.879928803708912e-10,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.3,
+          "floor_cells": 581,
+          "hidden_cells": 5518,
+          "closure_m2": 8.379929828780094e-18,
+          "volume_rate_relative_error": 9.94140380402391e-10,
+          "min_volume": 0.0
+        }
+      ],
+      "passed": true
+    },
+    "source_worktree": {
+      "source_working_file_hash_changes": [],
+      "checked": 49
+    },
+    "k1_smoke": "Two steps completed with the ground option off: output/ale/ground_local_k1_smoke.log",
+    "scope": "Geometry, force/transport RHS, dt and full-step fields compared, plus 48 successive steps per state with the same existing groups. No complete landing rerun and no claim of full-trajectory bitwise reproducibility."
+  },
+  "profile": {
+    "snapshot": "output/ale/fv_state_plane_direct_b.pt",
+    "production_step_ms": {
+      "median": 63.330319500892074,
+      "min": 57.983006998256315,
+      "max": 65.07918900024379,
+      "samples": [
+        57.983006998256315,
+        58.097164001083,
+        63.13452399990638,
+        63.52611500187777,
+        64.49762000193004,
+        65.07918900024379
+      ]
+    },
+    "exclusive_stage_median_ms": {
+      "contact_boundary_solve.exclusive_ms": 1.5944770020723809,
+      "rhs.exclusive_ms": 15.004384496933199,
+      "geometry.exclusive_ms": 38.16614199968171,
+      "cut.exclusive_ms": 2.9481564979505492,
+      "plastic_return.exclusive_ms": 1.941857999554486,
+      "advance.exclusive_ms": 1.2851000028604176
+    },
+    "scope": "Separate synchronized stage timing, not an additive claim of saved wall time."
+  },
+  "next_target": "The unchanged force/transport RHS and base clipping pipeline remain expensive; the local ground change alone is a modest improvement, not an order-of-magnitude acceleration."
+}

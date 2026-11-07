@@ -217,9 +217,12 @@ def k_geo_site(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), off: 
                nn_o: wp.array(dtype=wp.vec3d), u_o: wp.array(dtype=wp.vec3d), v_o: wp.array(dtype=wp.vec3d), rho_o: wp.array(dtype=wp.float64),
                hi_o: wp.array(dtype=wp.float64), hj_o: wp.array(dtype=wp.float64), at0: wp.array2d(dtype=wp.float64), at1: wp.array2d(dtype=wp.float64),
                narc: wp.array(dtype=wp.int32), fib: wp.array(dtype=wp.vec3d), nfib: int, piece: wp.float64, big: wp.float64, fourpi: wp.float64,
-               nbrs: wp.array2d(dtype=wp.int32), hidden: wp.array(dtype=wp.int32), stable_area: int, floor_enabled: int, floor_height: wp.float64, Vw: wp.array(dtype=wp.float64),
+               nbrs: wp.array2d(dtype=wp.int32), hidden: wp.array(dtype=wp.int32), stable_area: int, floor_enabled: int, floor_height: wp.float64,
+               site_ids: wp.array(dtype=wp.int32), indexed: int, Vw: wp.array(dtype=wp.float64),
                pn_o: wp.array(dtype=wp.vec3d), pA_o: wp.array(dtype=wp.float64), V_o: wp.array(dtype=wp.float64), pole_o: wp.array(dtype=wp.vec3d)):
     s = wp.tid()
+    if indexed == 1:
+        s = site_ids[s]
     zero = wp.float64(0.0)
     one = wp.float64(1.0)
     half_ = wp.float64(0.5)
@@ -409,7 +412,7 @@ class GeometryWarp:
             GeometryWarp._fib[key] = wp.from_torch(torch.stack((torch.cos(th)*torch.sin(ph), torch.sin(th)*torch.sin(ph), torch.cos(ph)), 1).contiguous(), dtype=wp.vec3d)
         pn, pA, V, pole = V3(n), F(n), F(n), V3(n)
         wp.launch(k_geo_site, n, inputs=[pw, rw, I32(off), I32(o), npr, nn, u, v, rho, hi, hj, at0, at1, narc, GeometryWarp._fib[key], npole, float(piece), BIG, 4*math.pi,
-                                         I32(self.nbrs), I32(self.hidden), 0, 0, 0.0], outputs=[Vw, pn, pA, V, pole], device=str(dev))
+                                         I32(self.nbrs), I32(self.hidden), 0, 0, 0.0, I32(o), 0], outputs=[Vw, pn, pA, V, pole], device=str(dev))
         T = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.nn, self.c, self.u, self.v, self.rho, self.hi, self.hj = T(nn), T(c), T(u), T(v), T(rho), T(hi), T(hj)
         self.wall_A, self.wall_c, self.patch_n, self.patch_A, self.V, self.pole = T(wA), T(wc), T(pn), T(pA), T(V), T(pole)

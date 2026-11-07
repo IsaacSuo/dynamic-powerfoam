@@ -19,7 +19,7 @@ Signs=wp.types.vector(length=2*MAX_CONSTRAINTS,dtype=wp.int32)
 
 @wp.kernel(enable_backward=False)
 def disk_clip(axes:wp.array2d(dtype=wp.vec2d),bounds:wp.array2d(dtype=wp.float64),
-    valid:wp.array2d(dtype=wp.int32),radii:wp.array(dtype=wp.float64),
+    valid:wp.array2d(dtype=wp.int32),limits:wp.array(dtype=wp.int32),use_limits:int,radii:wp.array(dtype=wp.float64),
     work:wp.array(dtype=wp.int64),centres:wp.array(dtype=wp.vec3d),
     uu:wp.array(dtype=wp.vec3d),vv:wp.array(dtype=wp.vec3d),two_pi:wp.float64,
     area:wp.array(dtype=wp.float64),centroid:wp.array(dtype=wp.vec3d),
@@ -31,6 +31,7 @@ def disk_clip(axes:wp.array2d(dtype=wp.vec2d),bounds:wp.array2d(dtype=wp.float64
     if rho<=zero:return
     angles=Events();signs=Signs();ne=int(0);coverage=int(0);empty=int(0)
     K=axes.shape[1]
+    if use_limits==1:K=limits[row]
     for k in range(K):
         if valid[row,k]==0:continue
         a=axes[row,k];b=bounds[row,k];length=wp.length(a)
@@ -93,8 +94,9 @@ def disk_clip(axes:wp.array2d(dtype=wp.vec2d),bounds:wp.array2d(dtype=wp.float64
 
 
 class GroundClip:
-    def __init__(self,ground,device):
+    def __init__(self,ground,device,local=True):
         self.ground=ground;self.device=device;self.recut=None;self.size=0
+        self.local=local  # False retains the full-field reference for replay checks.
 
     def geometry(self,p,r):
         n=len(r);dev=p.device;dtype=p.dtype
@@ -117,6 +119,10 @@ class GroundClip:
             mesh.hidden=g.hidden|below;mesh.geometry=g
             mesh.ground_geometry_info={'method':'direct_halfspace','floor_faces':0,'recut_wall_disks':0,'stable_sphere_area':True}
             return mesh
+        if self.local:
+            from free_surface.fv_ale_ground_local import local_geometry
+            return local_geometry(p,r,g,h,plane_ids,touched,self.ground,self.device,self.recut.pipe)
+        base=g
         K=g.nbrs.shape[1]+1
         if K>MAX_CONSTRAINTS:raise RuntimeError('ground disk constraint capacity exceeded')
         axis=torch.zeros((nf,3),dtype=dtype,device=dev);axis[:,1]=-1
@@ -142,7 +148,7 @@ class GroundClip:
         enabled=torch.cat((valid,(j[work]>=0)[:,None]),1).to(torch.int32).contiguous()
         bad=torch.zeros(len(work),dtype=torch.int32,device=dev)
         W=lambda a,t:wp.from_torch(a.contiguous(),dtype=t)
-        wp.launch(disk_clip,len(work),inputs=[W(axes,wp.vec2d),W(bounds,wp.float64),W(enabled,wp.int32),W(rho,wp.float64),
+        wp.launch(disk_clip,len(work),inputs=[W(axes,wp.vec2d),W(bounds,wp.float64),W(enabled,wp.int32),W(bad,wp.int32),0,W(rho,wp.float64),
             W(work,wp.int64),W(centres,wp.vec3d),W(u,wp.vec3d),W(v,wp.vec3d),2*math.pi],
             outputs=[W(A,wp.float64),W(C,wp.vec3d),W(t0,wp.float64),W(t1,wp.float64),W(count,wp.int32),W(bad,wp.int32)],device=self.device)
         if bool(bad.any()):raise RuntimeError('negative ground-clipped disk area')
@@ -159,21 +165,23 @@ class GroundClip:
             W(normals,wp.vec3d),W(u,wp.vec3d),W(v,wp.vec3d),W(rho,wp.float64),W(hi,wp.float64),W(hj,wp.float64),
             W(t0,wp.float64),W(t1,wp.float64),W(count,wp.int32),GeoPipe._fib[(str(self.device),pipe.npole)],
             pipe.npole,float(pipe.piece),BIG,4*math.pi,W(g.nbrs.to(torch.int32),wp.int32),W(hidden.to(torch.int32),wp.int32),
-            1,1,float(self.ground),W(Vw,wp.float64)],outputs=[W(pn,wp.vec3d),W(capA,wp.float64),W(volume,wp.float64),W(pole,wp.vec3d)],device=self.device)
+            1,1,float(self.ground),W(ent,wp.int32),0,W(Vw,wp.float64)],outputs=[W(pn,wp.vec3d),W(capA,wp.float64),W(volume,wp.float64),W(pole,wp.vec3d)],device=self.device)
         volume=torch.where(hidden,torch.zeros_like(volume),volume)
         # A power cell may lie wholly below the plane even if its ball does
         # not. Mark exact empty intersections as hidden as well.
         hidden=hidden|(volume==0)
         capA=torch.where(hidden,torch.zeros_like(capA),capA);pn=torch.where(hidden[:,None],torch.zeros_like(pn),pn)
-        internal=A[:m]>0
-        mesh=PowerControlVolumes(p.clone(),r.clone(),volume,g.i[internal].clone(),g.j[internal].clone(),
-            A[:m][internal],g.nn[internal].clone(),C[:m][internal],capA,pn)
+        wall_area=A[:m];wall_centroid=C[:m]
+        internal=wall_area>0
+        mesh=PowerControlVolumes(p.clone(),r.clone(),volume,base.i[internal].clone(),base.j[internal].clone(),
+            wall_area[internal],base.nn[internal].clone(),wall_centroid[internal],capA,pn)
         mesh.ground_area=torch.zeros_like(r).index_add(0,plane_ids,A[m:])
         mesh.ground_centroid=p.clone();mesh.ground_centroid[plane_ids]=C[m:]
         mesh.ground_normal=torch.zeros_like(p);mesh.ground_normal[:,1]=-1
-        mesh.hidden=hidden;mesh.geometry=g
+        mesh.hidden=hidden;mesh.geometry=base
         mesh.ground_geometry_info={'method':'direct_halfspace','floor_faces':int((A[m:]>0).sum()),
             'recut_wall_disks':len(touched),'stable_sphere_area':True,
+            'local_ground_update':self.local,'recomputed_cells':n,'gathered_wall_disks':m,
             'max_volume_increase_m3':float((volume-g.V).max()),
             'max_cap_area_increase_m2':float((capA-g.patch_A).max())}
         if float((volume-g.V).max())>1e-10*float(r.max()**3):

@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-08",
+  "baseline_commit": "3498da1",
+  "scope": "Read current full production step and measure frozen-state replays. No production model, timestep, topology update frequency or solver implementation changed in this analysis.",
+  "evidence": "output/ale/ground_speed_audit.json; output/ale/ground_speed_trace.json",
+  "snapshot": "output/ale/fv_state_plane_direct_b.pt",
+  "measurement": {
+    "repeats": 6,
+    "ordinary_step_median_ms": 73.45837,
+    "instrumented_step_median_ms": 78.95350,
+    "instrumented_exclusive_base_geometry_ms": 27.77264,
+    "instrumented_exclusive_ground_adapter_ms": 20.35457,
+    "instrumented_exclusive_rhs_ms": 18.74605,
+    "instrumented_exclusive_boundary_solve_ms": 1.44525,
+    "base_clipping_stage_ms": 14.71368,
+    "base_values_stage_ms": 8.53918,
+    "cells": 7690,
+    "wall_disks": 50406,
+    "floor_faces": 84,
+    "wall_disks_requiring_floor_clip": 310,
+    "warning": "Nested synchronized timers add overhead. Medians need not sum. Profiler FV scope rows are not individual GPU kernels and must not be summed with kernels."
+  },
+  "findings": [
+    "GroundClip first calls the complete uncut geometry pipeline. It then copies full wall/arc arrays, globally sorts incidence lists, and launches k_geo_site over all cells again. Only a small subset is changed by the ground plane.",
+    "Overlap candidates are already cached with a coverage check by AlphaComplex.covers. Do not propose adding this existing optimization again.",
+    "k_alpha already runs on the GPU, one thread per cell. It contains nested searches over removed triangles and reverse edges during clipping. Its roughly 14 ms per full step is actual clipping work, not solely CPU/GPU synchronization.",
+    "The ground disk kernel takes approximately 4.8 ms GPU time for both calls in the profiled step. It scans each owner's full neighbour list; half-planes that contain the entire disk can be removed before the edge-intersection loops without changing the mathematical domain, provided tangency tolerances remain conservative.",
+    "The force/transport RHS still takes about 19 ms synchronized wall time although contact itself is cheap. It consists of many small tensor gathers/reductions and host diagnostics; end-to-end gains must be measured rather than inferred by adding CPU waits to GPU times."
+  ],
+  "priority": [
+    {
+      "change": "Make the ground adapter local within each fresh cut",
+      "details": "Reuse already computed uncut cell values for unaffected cells at this same state. Recompute ground-affected cells and faces only, update their volume/surface moments and incidence data without rebuilding full arrays. This is not lagging geometry across physical steps.",
+      "checks": "Compare all geometric moments, forces, stable dt and complete-step fields against baseline on early/late snapshots and deeper clipping cases, including empty cells and topology changes."
+    },
+    {
+      "change": "Fuse repeated RHS tensor work and diagnostic reductions",
+      "details": "Keep conservative shared-face fluxes and constitutive operations unchanged; reduce kernel launches, intermediate arrays and repeated host scalar reads. Measure full-step wall time."
+    },
+    {
+      "change": "Improve the GPU clipping data structures",
+      "details": "Replace repeated reverse-edge scans with explicit adjacency or a bounded edge table, preserving degeneracy handling. This touches the core geometry and warrants broader validation than the local ground optimization."
+    }
+  ],
+  "performance_limits": "The approximately 20 ms ground adapter cost is an upper bound on the savings from that part, not a prediction that it can all be removed. Even eliminating it entirely would improve 73 ms to roughly 53 ms, not by an order of magnitude. Total runtime also depends on the thousands of physical substeps; changing that is a separate numerical-method decision."
+}

@@ -395,7 +395,7 @@ class GeoPipe:
         pn, pA, V, pole = E(n, 3), E(n), E(n), E(n, 3)
         wp.launch(k_geo_site, n, inputs=[pw, rw, W_(soff, wp.int32), W_(ent, wp.int32), np_, V3(nn), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1),
                                          W_(narc, wp.int32), GeoPipe._fib[(str(dev), self.npole)], self.npole, float(self.piece), BIG, 4*math.pi,
-                                         W_(nbrs, wp.int32), W_(hidden.to(i32), wp.int32), int(getattr(self,'stable_area',False)), 0, 0.0, F_(Vw)], outputs=[V3(pn), F_(pA), F_(V), V3(pole)], device=dev)
+                                         W_(nbrs, wp.int32), W_(hidden.to(i32), wp.int32), int(getattr(self,'stable_area',False)), 0, 0.0, W_(ent, wp.int32), 0, F_(Vw)], outputs=[V3(pn), F_(pA), F_(V), V3(pole)], device=dev)
         self._mark('values')
         G = PipeGeometry()
         G.p, G.r, G.n = p, r, n
