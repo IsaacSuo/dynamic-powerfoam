@@ -47,7 +47,7 @@ SCENES = dict(                                                                  
                     v0=(-0.4078950600549248, -.5, -0.06629882732047176), mu=1e6,                 # the scene's -0.05; glued, user 11-06)
                     gt=dict(E=23008.377696598774, nu=.30079413488868173), beta_min=.003,  # (consistent mass: below it the sites far inside
                     photos='/home/fangsuo/py/dynamic-powerfoam/data/pacnerf/data/elastic/0/data'))
-PACNERF = Path('/home/fangsuo/py/dynamic-powerfoam/data/pacnerf')
+PACNERF = Path(os.environ.get('PACNERF_DATA', '/home/fangsuo/py/dynamic-powerfoam/data/pacnerf'))   # (a server: PACNERF_DATA=<dir with gt/elastic.json>)
 
 
 def _fourier_scenes():
@@ -56,6 +56,8 @@ def _fourier_scenes():
     at PAC-NeRF's y = 0 (scene -0.05), frames 0..13 (the photos'; -1 is the empty scene). beta_min = 0.003 s x sqrt(E_0 / E): the damping ratio beta omega / 2 of every mode
     (omega ~ sqrt(E)) the same as pacnerf_e0's at its 0.003 (E from 2.3e4 to 4.2e6 Pa: a fixed 0.003 s would
     overdamp the stiff scenes' bounce)"""
+    if not (PACNERF/'gt'/'elastic.json').exists():                                 # (no PAC-NeRF data here: no fourier scenes)
+        return
     gt = json.loads((PACNERF/'gt'/'elastic.json').read_text()); E0 = gt['0']['E']
     for k in range(10):
         s = gt[str(k)]
