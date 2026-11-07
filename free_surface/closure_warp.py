@@ -2156,7 +2156,7 @@ class TrustCG:
                 break
         wp.launch(k_tr_pred, n, inputs=[g, A['p'], A['Hp']], outputs=[A['tr']])
         v = tr.tolist()
-        return dict(K=int(v[TR_K]), EDGE=v[TR_EDGE] > 0, NEG=v[TR_NEG] > 0, PMP=v[TR_PMP], DELTA=v[TR_DELTA], GP=v[TR_GP], PHP=v[TR_PHP])
+        return dict(K=int(v[TR_K]), EDGE=v[TR_EDGE] > 0, NEG=v[TR_NEG] > 0, PMP=v[TR_PMP], DELTA=v[TR_DELTA], GP=v[TR_GP], PHP=v[TR_PHP], RR=v[TR_RR])   # (RR: the last |r|^2, logging)
 
 
 # the midpoint step's own work on the GPU (2026-10-26, user: "先只做纯工程"): hertz_drop.py's per-step torch work (predictor,

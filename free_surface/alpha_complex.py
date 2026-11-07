@@ -11,7 +11,15 @@ removed region (each boundary edge (a, b) gives the vertex (a, b, new)). Then, i
   wall (i, j)   the face on j's plane meets the open ball (its polygon's distance to the site < r_i)
   link k        an edge of that face, the one shared with face k, meets the open ball
   hidden        no wall and the site outside its own cell.
-float64 throughout; overflow of the fixed per-cell storage is reported, never silent."""
+float64 throughout; overflow of the fixed per-cell storage is reported, never silent.
+11-06 (the k1 cut's cost, free_surface/k1_alpha_bench.py; every output identical to the kernel before, on two states):
+  a vertex test n . V > h is done in float32 first (V32, the vertices' float32 copies) and in float64 only when the float32
+  difference lies within 2^-20 (|V|max + |h|) (the float32 rounding of n, V, h and the dot is below it, so outside it the
+  sign is the float64 one); a plane's vertices are counted first and the removal marks written only when it cuts; the
+  vertices' radius bound R2 (only the early stop reads it) in float32 rounded up by 2^-20 (never below the float64 max:
+  a later stop tests planes that cut nothing); the walls phase computes each face vertex once (edge s's end is edge s+1's
+  start: the same planes in the same order) and keeps each edge's plane and distance for the links (ea, ed2).
+  8k foam at the landing: 14.1 -> 7.3 ms a call. The kernel before: alpha_variants.k_alpha_v mode 0."""
 import numpy as np
 import torch
 import warp as wp
@@ -27,6 +35,11 @@ def vert3(P: wp.array2d(dtype=wp.vec4d), i: int, a: int, b: int, c: int):
     bc = wp.cross(nb, nc); ca = wp.cross(nc, na); ab = wp.cross(na, nb)
     det = wp.dot(na, bc)
     return (P[i, a][3]*bc+P[i, b][3]*ca+P[i, c][3]*ab)/det
+
+
+@wp.func
+def to_f(v: wp.vec3d):
+    return wp.vec3f(wp.float32(v[0]), wp.float32(v[1]), wp.float32(v[2]))
 
 
 @wp.func
@@ -46,6 +59,7 @@ def k_alpha(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), coff: wp
             cn: wp.array(dtype=wp.vec3d), ch: wp.array(dtype=wp.float64),
             P: wp.array2d(dtype=wp.vec4d), Pid: wp.array2d(dtype=int), T: wp.array2d(dtype=wp.vec3i), V: wp.array2d(dtype=wp.vec3d),
             rem: wp.array2d(dtype=int), ea: wp.array2d(dtype=int), eb: wp.array2d(dtype=int), nxt: wp.array2d(dtype=int),
+            V32: wp.array2d(dtype=wp.vec3f), ed2: wp.array2d(dtype=wp.float64),
             walls: wp.array2d(dtype=int), links: wp.array3d(dtype=int), nwall: wp.array(dtype=int), nlink: wp.array2d(dtype=int),
             status: wp.array(dtype=int)):
     """status: 0 fine, 1 hidden, 2 plane storage overflow, 3 vertex storage overflow, 4 wall storage overflow,
@@ -73,6 +87,7 @@ def k_alpha(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), coff: wp
                     T[i, nt] = wp.vec3i(a, b, c)
                 tt = T[i, nt]
                 V[i, nt] = vert3(P, i, tt[0], tt[1], tt[2])
+                V32[i, nt] = to_f(V[i, nt])
                 nt += 1
     R2 = wp.float64(wp.float64(3.0)*R*R)
     origin_in = int(1)
@@ -82,12 +97,26 @@ def k_alpha(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), coff: wp
             break
         n = cn[c]
         nrem = int(0)
-        for t in range(nt):
-            o = int(0)
-            if wp.dot(n, V[i, t]) > h:
-                o = 1
-            rem[i, t] = o
-            nrem += o
+        n32 = to_f(n)
+        h32 = wp.float32(h)
+        tol = wp.float32(9.5367431640625e-07)*(wp.float32(wp.sqrt(R2))+wp.abs(h32))   # 2^-20 (|V|max + |h|)
+        for t in range(nt):                                                    # (counted first: most planes cut nothing)
+            d32 = wp.dot(n32, V32[i, t])-h32
+            if d32 > tol:
+                nrem += 1
+            elif d32 >= -tol:
+                if wp.dot(n, V[i, t]) > h:
+                    nrem += 1
+        if nrem > 0:
+            for t in range(nt):
+                o = int(0)
+                d32 = wp.dot(n32, V32[i, t])-h32
+                if d32 > tol:
+                    o = 1
+                elif d32 >= -tol:
+                    if wp.dot(n, V[i, t]) > h:
+                        o = 1
+                rem[i, t] = o
         if nrem == 0:
             continue
         if h <= zero:
@@ -122,19 +151,22 @@ def k_alpha(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), coff: wp
         m = int(0)
         for t in range(nt):
             if rem[i, t] == 0:
-                T[i, m] = T[i, t]; V[i, m] = V[i, t]
+                T[i, m] = T[i, t]; V[i, m] = V[i, t]; V32[i, m] = V32[i, t]
                 m += 1
         if m+nb > TMAX:
             st = 3
             break
         for e in range(nb):
             T[i, m] = wp.vec3i(ea[i, e], eb[i, e], q)
-            V[i, m] = vert3(P, i, ea[i, e], eb[i, e], q)
+            vn = vert3(P, i, ea[i, e], eb[i, e], q)
+            V[i, m] = vn
+            V32[i, m] = to_f(vn)
             m += 1
         nt = m
-        R2 = zero
+        R2f = wp.float32(0.0)
         for t in range(nt):
-            R2 = wp.max(R2, wp.dot(V[i, t], V[i, t]))
+            R2f = wp.max(R2f, wp.dot(V32[i, t], V32[i, t]))
+        R2 = wp.float64(R2f)*wp.float64(1.00000095367431640625)                # (1 + 2^-20: never below the float64 max)
     # walls and links in the ball
     nw = int(0)
     R2b = R*R
@@ -162,24 +194,30 @@ def k_alpha(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), coff: wp
             dmin = wp.float64(1.0e300)
             kk = int(start)                                                     # (a typed declaration: Warp carries it
             closed = int(1)                                                     # through the loop; 10-24 a plain k = start
-            for s in range(cnt):                                                # stayed at the start, one edge only)
-                l = nxt[i, kk]
-                if l < 0:
-                    closed = 0
-                    break
-                lp = nxt[i, l]
-                if lp < 0:
-                    closed = 0
-                    break
-                va = vert3(P, i, f, kk, l)
-                vb = vert3(P, i, f, l, lp)
-                sg = wp.dot(wp.cross(vb-va, q0-va), nf)
-                if sg > zero:
-                    pos += 1
-                if sg < zero:
-                    neg += 1
-                dmin = wp.min(dmin, seg_dist2(va, vb))
-                kk = l
+            l = int(nxt[i, kk])                                                 # stayed at the start, one edge only)
+            va = wp.vec3d(zero, zero, zero)
+            if l < 0:
+                closed = 0
+            else:
+                va = vert3(P, i, f, kk, l)                                      # (each vertex once: edge s's end is edge s + 1's
+                for s in range(cnt):                                            # start; the edge's plane and distance kept)
+                    lp = nxt[i, l]
+                    if lp < 0:
+                        closed = 0
+                        break
+                    vb = vert3(P, i, f, l, lp)
+                    sg = wp.dot(wp.cross(vb-va, q0-va), nf)
+                    if sg > zero:
+                        pos += 1
+                    if sg < zero:
+                        neg += 1
+                    dd = seg_dist2(va, vb)
+                    dmin = wp.min(dmin, dd)
+                    ea[i, s] = l
+                    ed2[i, s] = dd
+                    va = vb
+                    kk = l
+                    l = lp
             if closed == 0:
                 st = 6
                 break
@@ -192,19 +230,14 @@ def k_alpha(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), coff: wp
                 break
             walls[i, nw] = Pid[i, f]
             nl = int(0)
-            kk = int(start)
             for s in range(cnt):
-                l = nxt[i, kk]
-                lp = nxt[i, l]
-                va = vert3(P, i, f, kk, l)
-                vb = vert3(P, i, f, l, lp)
-                if seg_dist2(va, vb) < R2b and Pid[i, l] >= 0:                  # the edge between the face and plane l
+                l = ea[i, s]
+                if ed2[i, s] < R2b and Pid[i, l] >= 0:                         # the edge between the face and plane l
                     if nl >= LMAX:
                         st = 5
                     else:
                         links[i, nw, nl] = Pid[i, l]
                         nl += 1
-                kk = l
             nlink[i, nw] = nl
             nw += 1
     nwall[i] = nw
@@ -223,28 +256,42 @@ class AlphaComplex:
         self.T, self.V, self.rem = z((n, TMAX), wp.vec3i), z((n, TMAX), wp.vec3d), z((n, TMAX), int)
         self.ea, self.eb, self.nxt = z((n, TMAX), int), z((n, TMAX), int), z((n, PMAX), int)
         self.walls, self.links = z((n, WMAX), int), z((n, WMAX, LMAX), int)
+        self.V32, self.ed2 = z((n, TMAX), wp.vec3f), z((n, TMAX), wp.float64)          # (11-06: the vertices' float32 copies, the face edges' distances)
         self.nwall, self.nlink, self.status = z(n, int), z((n, WMAX), int), z(n, int)
         from powerfoam.bvh import AABBTree
         self.tree = AABBTree(device)
         self.f32, self.f32_falls = False, 0                                        # (the clipping in single precision, alpha_complex32; a cell that closes badly: the double kernel)
+        self.ov_p, self.ov_margin, self.n_overlaps = None, 0., 0
 
     def overlaps(self, p, r, margin=0.):
         """the overlapping pairs (Power Foam's BVH) with the radii raised by margin: a superset of the overlaps at any
-        radii up to r (1 + margin) at these sites (|p_i - p_j| < r_i + r_j <= (1 + margin)(r0_i + r0_j)), kept"""
+        radii up to r (1 + margin) at these sites (|p_i - p_j| < r_i + r_j <= (1 + margin)(r0_i + r0_j)), kept with the
+        sites they were found at (covers)"""
         rm = r*(1+margin)
         self.tree.update(p.float().contiguous(), rm.float().contiguous())
         adj, off = self.tree.build_cech_complex()
-        n = len(p)
-        deg = (off[1:]-off[:-1]).long()
-        self.ov = (torch.repeat_interleave(torch.arange(n, device=p.device), deg), adj.long())
-        self.ov_p, self.ov_r = p, rm
+        self.ov_off, self.ov_adj, self.ov_key = off, adj, object()                    # (the BVH's CSR by cell; a new key each build)
+        self.ov = None                                                                # (the expanded pair list, made when candidates asks)
+        self.ov_p, self.ov_r, self.ov_margin = p.detach().clone(), rm, margin
+        self.n_overlaps += 1
+
+    def covers(self, p, r):
+        """the kept overlaps still hold every pair overlapping at (p, r) (11-06, for keeping them across the cuts): each
+        site's r_i + |p_i - p0_i| within its kept radius rm_i = r0_i (1 + margin), p0 the sites they were found at (then
+        |p_i - p_j| < r_i + r_j gives |p0_i - p0_j| < rm_i + rm_j); 1e-6 spared for the BVH's float32"""
+        if self.ov_p is None or self.ov_p.shape != p.shape:
+            return False
+        return bool((r+(p-self.ov_p).norm(dim=1) <= self.ov_r*(1-1e-6)).all())
 
     def candidates(self, p, r, reuse=False):
         """the planes of the overlapping pairs, nearest first per cell, those reaching the ball (h < r_i: a pair
-        that does not overlap has h >= r_i); reuse: the kept overlaps if they still cover (the same sites, r within
-        the margin), else rebuilt"""
-        if not (reuse and getattr(self, 'ov_p', None) is p and bool((r <= self.ov_r).all())):
-            self.overlaps(p, r)
+        that does not overlap has h >= r_i, so any superset of the overlapping pairs gives the same planes); reuse: the
+        kept overlaps if they still cover (covers), else rebuilt with the kept margin"""
+        if not (reuse and self.covers(p, r)):
+            self.overlaps(p, r, self.ov_margin)
+        if self.ov is None:
+            off = self.ov_off; deg = (off[1:]-off[:-1]).long()
+            self.ov = (torch.repeat_interleave(torch.arange(len(p), device=p.device), deg), self.ov_adj.long())
         i, j = self.ov
         n = len(p)
         d = p[j]-p[i]
@@ -272,7 +319,7 @@ class AlphaComplex:
             self.f32_falls += not done
         if not done:
             wp.launch(k_alpha, self.n, inputs=[wf(p, wp.vec3d), wf(r, wp.float64), wf(coff.int(), wp.int32), wf(j.int(), wp.int32), wf(nn, wp.vec3d), wf(h, wp.float64),
-                                               self.P, self.Pid, self.T, self.V, self.rem, self.ea, self.eb, self.nxt],
+                                               self.P, self.Pid, self.T, self.V, self.rem, self.ea, self.eb, self.nxt, self.V32, self.ed2],
                       outputs=[self.walls, self.links, self.nwall, self.nlink, self.status])
         return dict(walls=wp.to_torch(self.walls), links=wp.to_torch(self.links), nwall=wp.to_torch(self.nwall), nlink=wp.to_torch(self.nlink),
                     status=wp.to_torch(self.status), ncand=len(j))

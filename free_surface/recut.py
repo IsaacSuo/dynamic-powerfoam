@@ -65,29 +65,46 @@ class GraphedCG:
 class Recut:
     def __init__(self, n, device='cuda', margin=.05):
         self.n, self.dev, self.margin = n, device, margin
-        self.A = AlphaComplex(n, device)
+        self.A = AlphaComplex(n, device); self.A.ov_margin = margin
         self.stats = dict(geometry=0, cg=0, overlaps=0)
         self.gcg = None
+        self.st_min = 2.**-20                                                     # (the line search's floor: below it the solve stops, stats['stalled'])
+        self.cg_rtol = lambda err: min(.1, err)                                      # (11-06: a finer solve for fewer geometry calls is tried by the driver's --radii-rtol)
+        self.geom_cls = Geometry                                                     # (geometry_warp.GeometryWarp: the same values for the run, in Warp; no patch_nn, no gradient)
+        self.pipe = None                                                             # (geo_pipe.GeoPipe: the whole call in Warp with one host read, 11-06)
 
     def geometry(self, p, r, reuse=False):
-        """reuse: the overlap candidates of the last call at these sites while they still cover (AlphaComplex)"""
-        if not reuse:
-            self.A.overlaps(p, r, self.margin); self.stats['overlaps'] += 1
+        """the cut at (p, r). The overlap candidates (the BVH's pairs, radii raised by margin) are kept across the calls
+        and the cuts while they cover (AlphaComplex.covers: each site's motion since within the margin), else found again
+        (11-06; before, each solve's first call found them again); reuse is kept for the callers' signature"""
+        n0 = self.A.n_overlaps
+        if self.pipe is not None and not self.A.f32:
+            try:
+                G, S = self.pipe(self.A, p, r)
+            finally:
+                self.stats['overlaps'] += self.A.n_overlaps-n0
+            self.stats['geometry'] += 1
+            return G, S
         out = self.A(p, r, reuse=True)
+        self.stats['overlaps'] += self.A.n_overlaps-n0
         bad = out['status'].clone(); bad[bad == 1] = 0
         if bool((bad > 0).any()):
             raise RuntimeError('alpha complex: per-cell storage overflow or an open cut (status %s)' % torch.unique(out['status']).tolist())
         S = self.A.structure_gpu(out, self.n)
         self.stats['geometry'] += 1
-        return Geometry(p, r, S), S
+        return self.geom_cls(p, r, S), S
 
     def jacobian(self, G, r):
-        keep = G.wall_A > 0
-        i, j = G.i[keep], G.j[keep]
+        """(i, j, c, d): c = A / (2 L) per pair (0 where the wall has no area: 11-06, all pairs kept, no masked copy and its
+        host read; the same matrix), d the diagonal; with geo_pipe's site lists (site_off, site_ent) appended when G has them
+        (WarpCG's product by site)"""
+        A = G.wall_A.detach(); i, j = G.i, G.j
         L = (G.p[j]-G.p[i]).norm(dim=1)
-        c = (G.wall_A[keep]/(2*L)).detach()
+        c = torch.where(A > 0, A/(2*L), torch.zeros_like(A))
         d = torch.zeros(self.n, dtype=r.dtype, device=r.device).index_add(0, i, c).index_add(0, j, c)+G.patch_A.detach()/(2*r)
         d = torch.where(d > 0, d, d.max())                                         # (hidden: repaired before any solve)
+        if getattr(G, 'site_off', None) is not None:
+            return i, j, c, d, G.site_off, G.site_ent
         return i, j, c, d
 
     def dvol(self, G, dp):
@@ -97,9 +114,8 @@ class Recut:
         p_j).dp_j) / L, linear in y, so dV_i = A / L ((c - p_i).dp_i - (c - p_j).dp_j) with c the wall's centroid, and
         dV_j = -dV_i. The cap moves with its site: dV_i = a_i.dp_i, a_i = -sum_walls A n its area vector (closure). A
         common translation keeps every volume (sum_walls A n + a = 0)"""
-        keep = G.wall_A > 0
-        i, j = G.i[keep], G.j[keep]
-        A, c, p = G.wall_A.detach()[keep], G.wall_c.detach()[keep], G.p.detach()
+        i, j = G.i, G.j                                                             # (11-06: all pairs, a wall without area adds 0)
+        A = G.wall_A.detach(); A = torch.where(A > 0, A, torch.zeros_like(A)); c, p = G.wall_c.detach(), G.p.detach()
         d = p[j]-p[i]; L = d.norm(dim=1)
         dw = (A/L)*(((c-p[i])*dp[i]).sum(1)-((c-p[j])*dp[j]).sum(1))
         a = torch.zeros_like(p).index_add(0, i, -(A/L)[:, None]*d).index_add(0, j, (A/L)[:, None]*d)
@@ -120,11 +136,17 @@ class Recut:
         largest (10-24: an overall norm left the tiny cells' corrections loose, 6e-9 against the tol 1e-9). On CUDA the
         check iterations between two reads are one replay of GraphedCG (10-28: 0.45 ms per iteration plain on the 8k
         foam, nearly all kernel launches)"""
-        i, j, c, d = J
+        i, j, c, d = J[:4]
         if b.is_cuda:
-            if self.gcg is None or self.gcg.check != check:
-                self.gcg = GraphedCG(self.n, check, b.device)
-            x, k = self.gcg(J, b, scale, rtol, maxit)
+            if len(J) > 4 and getattr(self, 'use_wcg', False):                    # (cg_warp.WarpCG on geo_pipe's site lists, 11-06)
+                if getattr(self, 'wcg', None) is None or self.wcg.check != check:
+                    from free_surface.cg_warp import WarpCG
+                    self.wcg = WarpCG(self.n, check, b.device)
+                x, k = self.wcg(J, b, scale, rtol, maxit)
+            else:
+                if self.gcg is None or self.gcg.check != check:
+                    self.gcg = GraphedCG(self.n, check, b.device)
+                x, k = self.gcg(J[:4], b, scale, rtol, maxit)
             self.stats['cg'] += k
             return x
         def H(x):
@@ -168,34 +190,48 @@ class Recut:
                 self.stats['overflow'] = self.stats.get('overflow', 0)+1
                 r = torch.sqrt(.5*(r*r+r_base*r_base))
         nrep = 0
+        pre = None                                                                 # (11-06: the error and the norm read with the check before them)
         for rd in range(self.n+1):
+            res = Vt-G.V.detach()
             hid = S['hidden'] | (G.V.detach() <= 0)
-            if not bool(hid.any()):
+            h_, e_, n_ = torch.stack((hid.any().double(), (res/Vt).abs().max(), res.norm())).tolist()   # (one read: any hidden, the error, the norm)
+            if h_ == 0:
+                pre = (e_, n_)
                 break
             if rd == self.n:
                 raise RuntimeError('solve_radii: %d sites still hidden or empty after %d repair rounds' % (int(hid.sum()), rd))
             r = self.repair(p, r, hid); nrep += int(hid.sum())
             G, S = self.geometry(p, r)
-        res = Vt-G.V.detach()
-        q = G.V.detach()/Vt                                                        # V / target at the start: extremes, 1 / 99 %,
-        off = (q < .5) | (q > 2)                                                   # the material share outside [0.5, 2]
-        self.stats['start_ratio'] = (float(q.min()), float(q.max()), float(torch.quantile(q, .01)), float(torch.quantile(q, .99)),
-                                     float(Vt[off].sum()/Vt.sum()), torch.nonzero(off).flatten())
+        if getattr(self, 'log_start', True):                                       # (logging only; the explicit run turns it off)
+            q = G.V.detach()/Vt                                                    # V / target at the start: extremes, 1 / 99 %,
+            off = (q < .5) | (q > 2)                                               # the material share outside [0.5, 2]
+            self.stats['start_ratio'] = (float(q.min()), float(q.max()), float(torch.quantile(q, .01)), float(torch.quantile(q, .99)),
+                                         float(Vt[off].sum()/Vt.sum()), torch.nonzero(off).flatten())
         it = 0
         while True:
-            err = float((res/Vt).abs().max())
+            if pre is not None:
+                (err, nr), pre = pre, None
+            else:
+                err, nr = torch.stack(((res/Vt).abs().max(), res.norm())).tolist() # (one read: the error and the residual's norm)
+            if it == 0:
+                self.stats['err0'] = err                                           # (the start's error, kept for the logs)
+                if getattr(self, 'trace0', False):
+                    self.stats['top0'] = torch.argsort((res/Vt).abs(), descending=True)[:3].tolist()
             if err <= tol or it >= maxit:
                 break
             it += 1
-            dw = self.cg(self.jacobian(G, r), res, Vt, rtol=min(.1, err))       # inexact Newton: the solve as fine as the error
+            dw = self.cg(self.jacobian(G, r), res, Vt, rtol=self.cg_rtol(err))  # inexact Newton: the solve as fine as the error (cg_rtol, default min(.1, err))
             w = r*r
-            if float((dw/w).abs().max()) <= 4*torch.finfo(w.dtype).eps:            # the step changes no weight: converged
+            dmax, pos1 = torch.stack(((dw/w).abs().max(), (w+dw > 0).all().double())).tolist()   # (one read: the step's size, the full step's sign)
+            if dmax <= 4*torch.finfo(w.dtype).eps:                                 # the step changes no weight: converged
                 break                                                              # (10-24: a 1e-10 bound stopped tiny cells, big
                                                                                    # radii, at 6e-9 volume error)
-            st, nr = 1., float(res.norm())
+            st = 1.
+            if getattr(self, 'trace', None) is not None:
+                kw_ = int((res/Vt).abs().argmax()); self.trace.append(['it %d: err %.2e at %d (V/target %.3g), |dw/w| max %.2e' % (it, err, kw_, float(G.V.detach()[kw_]/Vt[kw_]), dmax), 0])
             while True:
                 wt = w+st*dw
-                if bool((wt > 0).all()):
+                if (pos1 > 0) if st == 1. else bool((wt > 0).all()):
                     try:
                         Gt, St = self.geometry(p, torch.sqrt(wt), reuse=True)
                     except RuntimeError:                                       # a trial weight so large its cell overflows the
@@ -203,10 +239,18 @@ class Recut:
                         self.stats['overflow'] = self.stats.get('overflow', 0)+1   # twins asked for w x 18 at full step)
                     if Gt is not None:
                         rt = Vt-Gt.V.detach()
-                        if not bool(St['hidden'].any()) and bool((Gt.V > 0).all()) and float(rt.norm()) <= (1-st/2)*nr:
+                        a_, e_, n_ = torch.stack((((~St['hidden'].any()) & (Gt.V > 0).all() & (rt.norm() <= (1-st/2)*nr)).double(), (rt/Vt).abs().max(), rt.norm())).tolist()
+                        if a_ > 0:                                                 # (one read: accepted, and the next error and norm)
+                            pre = (e_, n_)
                             break
                 st *= .5
-                if st*float((dw/w).abs().max()) <= torch.finfo(w.dtype).eps:   # no step that still moves a weight lowers
+                if getattr(self, 'trace', None) is not None:
+                    self.trace[-1][1] += 1
+                if st < self.st_min:                                               # (11-06: past 2^-20 halvings no solve ever recovered: the stalls
+                    self.stats['stalled'] = self.stats.get('stalled', 0)+1        # kept the same error for up to 200 iterations of ~36 halvings, 7400
+                    self.stats['stall_err'] = err                                  # geometry calls in a step; normal steps need at most 14)
+                    return r, G, S, it, nrep
+                if st*dmax <= torch.finfo(w.dtype).eps:                         # no step that still moves a weight lowers
                     self.stats['floor'] = self.stats.get('floor', 0)+1        # the residual: the volumes are at their own
                     return r, G, S, it, nrep                                   # evaluation floor (10-25: radii x (1 +
                                                                                # 1e-13) moved a cell's V by 6e-9, so tol

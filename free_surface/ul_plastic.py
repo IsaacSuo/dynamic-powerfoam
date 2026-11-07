@@ -213,7 +213,7 @@ class PlasticUL:
         self.tau_y = sigma_y/math.sqrt(3)
         self.stick = False                                                          # (set_stick: the glue's limit from the material's shear yield)
         self._ul_agg, self._ul_tol = agg, vol_tol
-        self._recut = Recut(n, dev); self._recut.A.f32 = True
+        self._recut = Recut(n, dev); self._recut.A.f32 = False                    # (11-06: double: the single precision clipping flipped the structure near degenerate cuts, a cell's V off by 12 %, the radii solve stalled)
         G, _ = self._recut.geometry(self.X, self._ulr)
         nb = int((G.wall_A.detach() > 0).sum())
         Kw = 3*nb if Kw is None else Kw

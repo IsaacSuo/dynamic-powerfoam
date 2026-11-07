@@ -341,3 +341,468 @@ Lanczos（对角预条件后）：κ = 8.7e5，最硬的模态 70–83 % 在单�
 5. **alpha complex 核为什么慢**（探针副本 `tmp/alpha_probe.py` / `alpha_clock.py` / `alpha_fast*.py`，clock64 与 `__activemask` 计数；未改模块）：一格一线程，8k 只有约 7500 线程，GPU 远未占满；时间与格子数无关（随机 10 % 的格子 23 ms，全部 22 ms）。同一 warp 的 32 格测平面时只有平均 5.6 个线程一起执行（切时 26.6 个），各撮轮流；这块笔记本 GPU（RTX 5070 Ti Laptop）的双精度只有单精度的 1/64，每撮都占满双精度单元 → 排队。同一代码换成 float32 只为计时：21.0 → 7.5 ms，墙数相同。⚠ 无效（输出与原版逐项相同、时间不变）：找反向边改查被删三角形表 + 新三角形填空位（与 10-28 早先的 `rl` 尝试一样）；测试循环展开 4 次。可做未做（用户 10-28：收益已小，停）：A. 测试先用 float32、落在舍入误差上界内的再用 float64（判定逐个与 float64 相同，预计核 21 → 9–11 ms，每步约 −25 ms）；B. 一个 warp 合作算一个格子（原生 CUDA，预计核 2–3 ms，每步约 −40 ms）；候选平面的排序（两次全局 argsort）每次剖分 7.5 ms。
 
 未做：容差放到 1e-3 后每步只剖 1 次（预测起点误差 7.7e-4 已低于它，解半径约 0.09 s），代价是最差格子体积误差 1e-5 → 1e-3、墙与稳定项 / 跳变项系数每步约 1e-3 的抖动，待定。
+
+## 22. 提速三：k1 显式运行的重切分（2026-11-06；`free_surface/k1_explicit_run.py`、`k1_profile.install_cut / install_struct_count`、`k1_alpha_bench.py`，日志 `output/discrete_plasticity/k1_explicit/{rp_last,rp_predict,cutprof,cutprof2,cutprof3,cutprof4,structcnt}_raw.log`）
+
+同一段：k1 第 250 步存档起显式 60 步（dt 5.2e-5，跟随 V0），前 2 步不计时，GPU 空闲。结果全程与改前一致（40/60 步后位置差 ≤ 3e-15，F、L 差 ≤ 1e-12，原子加法的舍入）。
+
+1. **半径起点用一阶预测**（`merged_ul.update_ul`，`--radii-start predict`，`--explicit` 时默认）：第 21 节的 `Recut.predict` 接到 k1 上，起点误差中位 9.7e-2 → 8.6e-4，Newton 2–3 → 1 次，每步剖分 3.48 → 2.0 次（容差 1e-5 时的下限：预测剩下的二阶误差约 1e-3）。切分用的位置改为自有副本，`gen` 标记确认上一次剖分属于当前状态（存档恢复后不拿旧剖分预测）。
+   - 起点误差大的是小格子大球的表面格子（3854：V0 / 中位 0.17，r ≈ 1.9 h）：体积对半径的相对灵敏度 ≈ r² ΣA / (L V)，普通格子约 24，这种格子约 140；中心点每步只动约 0.2 % h，几何体积每步离开 L 的目标 5–10 %。
+2. **裁剪核**（`alpha_complex.k_alpha`，输出与改前逐项相同，三个状态核对）：顶点测试先 float32（V32），落在 2^-20 (|V|max + |h|) 内才 float64；每个平面先计数、真切时才写删除标记；R2（只用于提前停）用 float32 向上取 2^-20；墙阶段每个面顶点只算一次（第 s 条边的终点即第 s+1 条的起点，同样的平面同样的顺序），边的平面与距离留给连接判定。单核 14.1 → 7.3 ms（第 250 步状态），11.4 → 7.1（第 674 步）。改前的核留在 `alpha_variants.k_alpha_v` mode 0（生成脚本在任务临时目录）。
+3. **BVH 跨步保留**（`AlphaComplex.covers`）：每个中心点 r_i + |p_i − p0_i| ≤ r0_i (1 + margin)(1 − 1e-6) 时，旧的重叠表必含所有现在重叠的对；候选只取 h < r_i 的对（必重叠），所以候选与改前相同。约每 5 步重建一次，4.0 → 0.7 ms / 步。
+4. **求解里的读回**：起点的 V / 目标统计只在隐式驱动的日志需要时算（`Recut.log_start`），误差与残差范数一次读回，试探步的三项接受判据一次读回。求解杂项约 6.4 → 3 ms / 步。
+
+重切分每步（ms）：95.5 → 87.3（核）→ 77.3（BVH、读回）→ 71.4（同样代码重跑，波动约 ±5 %）。现在（cutprof4）：剖分 44.6（每次 22.3：核与状态检查 7.8、取值 6.0、候选排序 4.6、结构 3.6；BVH 0.65 / 步），装配 15.0（弹簧表维护 7.1、墙数据 2.0、拟合 1.8、聚合 1.3、帽与极分解 1.0、墙 1.0），预测 5.6（其中 CG 3.2），Newton 的 CG 3.2，求解杂项 2.9。整步约 100 ms（跟随 14.3、收尾 10.6、力与速度 3.9）。
+
+**结构变化计数**（`--struct-count`，5.07 万面墙、24.7 万条连接）：相邻两步之间每步都变（墙 +8 / −9、连接 +72 / −73，最多 17 面墙、113 条连接）；同一步预测起点到收敛 59 次中 3 次有变（最多 1 面墙、6 条连接）。所以"拓扑不变就只更新几何"（动力学正则剖分一类的建议）跨步不成立，步内大多成立但没有便宜而严格的证书，没做。
+
+没做（按大小）：弹簧表维护改 Warp（二分查找代替 isin / argsort，约 −6 ms）；结构、候选排序改 Warp 去同步（约 −6、−5 ms）；取值的胶水（每次调用新分配约二十个数组，约 −5 ms）；装配其余块（约 −5 ms）；B：一个 warp 合作裁一个格子（核约再 −8 ms，要原生 CUDA）。
+
+### 22.1 结构重排第 1 阶段：几何调用（2026-11-06；`free_surface/geo_pipe.py`，`--geom pipe` 现为默认；核对 `k1_geo_bench.py`，日志 `k1_explicit/{tprof1,pipe1}_raw.log`）
+
+torch.profiler 看整步（`k1_tprof.py`，`--tprof`）：GPU 实际在算 51.5 ms / 步，墙钟约 100 ms；每步约 2,250 次启动、约 150 次读回；同一份"每格有哪些墙"每步被各阶段全局重排约 18 次。几何调用改成一条 Warp 流水线、每次只读回一次：
+- 候选：每个格子的全部重叠项按 (h, 重叠序号) 排好并跨调用保留（BVH 重建时整段堆排序，其余调用每重叠项一个线程重算 h、每格一个线程插入排序，几乎不动）；h < r_i 的前缀即候选，顺序与原来两次全局稳定排序相同。
+- 裁剪核不动。结构由裁剪核的按格墙表直接生成（每格按 j 插入排序 = 原来的键序），连接、圆存在标记、压缩、每点条目与邻居表用前缀和与原子游标。取值两个核不动，数组用 torch 缓存分配（每次调用自有，求解里起点与试探并存）。
+- 核对（两个状态）：候选的偏移与站点、墙对、连接、隐藏、邻居集合全同；墙面积、墙心、圆逐位相同；帽面积、法向、体积差 ≤ 4e-16（求和顺序）。60 步显式与改前位置差 2.7e-15、F、L ≤ 1.1e-12。
+- 每次调用 22.3 → 15.7 ms（裁剪核 7.6、取值 4.2、结构 1.4、候选 1.2、BVH 检查与偶尔重建 0.7、读回 0.2）；重切分 71.4 → 58.7 ms / 步，整步约 100 → 88.6 ms。
+
+### 22.2 结构重排第 3、4、2 阶段：装配、收尾、半径 Newton（2026-11-06；`asm_warp.py`、`end_warp.py`、`cg_warp.py`；日志 `k1_explicit/{asmchk,asm1,endchk,end2,cg_torch,cg_warp}_raw.log`）
+
+- 第 3 阶段装配（`--asm warp`，默认）：墙对与弹簧表都按键有序，墙有无弹簧、弹簧有无墙用二分查找；新弹簧表按"各自前缀计数 + 对方在自己之前的个数"直接写位置合并，不排序；连接墙、拟合（M 原子累加，奇异时用特征值求伪逆，阈值同 torch 的 pinv）、聚合（先首端极小的、再末端极小的，同原顺序）、墙与格子数据各一个核，最后读一次计数。核对（`--asm-check 4`）：所有整数数组与计数逐项相同，浮点 ≤ 6e-15（R 来自 M 的求和顺序）。装配 15.8 → 6.3 ms / 步（弹簧表 7.5 → 1.5）。
+- 第 4 阶段收尾（`--end warp`，显式默认）：每格一个核（极分解按 polar_batch 的规则逐格收敛，H、翻转、耗散、F_end 与 rot_proper、ep 旋转、屈服格子的返回映射用 wp.eig3 代替 CPU 上的 eigh、屈服标记、L 更新），每根弹簧一个核；塑性功、储能、计数留在 GPU，记日志时 `EndWarp.flush` 读一次（起点取第一次收尾时 W 的值：存档恢复后）。核对（`--end-check 4`）：Ln、ep ≤ 1e-15，F_e ≤ 1.3e-14（特征分解的舍入），屈服标记、余量、塑性功、计数相同。收尾 11.7 → 1.5 ms / 步。
+- 第 2 阶段半径 Newton：Jacobian 与 dvol 不再用布尔掩码取子集（无面积的墙系数为 0，同一矩阵）；读回合并（开头的隐藏检查与误差、步长与整步正负、接受与下一轮误差各一次）；CG 改为 `cg_warp.WarpCG`（`--cg warp`，默认）：每轮 5 个核（按 geo_pipe 的格子条目做乘积，无原子；两个单线程标量核；点积分 128 槽原子累加），每 10 轮一张 Warp 图，每 10 轮读一次停止标志，迭代次数与原来相同（每次切分中位 60）。每次 CG 3.1 → 1.6 ms；预测 5.6 → 2.9 ms。
+- 显式同一段 60 步，每一阶段后与前一版位置差 ≤ 3e-15、F、L ≤ 1.5e-12，能量记账相同。隐式（重放 5 步）：旧代码两次之间位置 1.6e-7、F 3.9e-5、L 7.5e-6（停在容差上加原子顺序），新旧之间 3.6e-7、4.5e-5、1.9e-5，同一量级。
+
+每步（显式 dt 5.2e-5，第 250 步存档起 60 步）：开始时 126 ms（重切分 95.5）→ 第 22 节小项后约 100 → 几何调用 88.6 → 装配约 82 → 收尾约 69 → 半径 Newton **59.5 ms**（重切分 40.7：几何调用 2 × 14.5、装配 5.3、预测 2.9、Newton CG 1.6、杂项 1.8；跟随 13.6；速度 2.3；力 1.3；收尾 1.5）。剩下的 GPU 本身：裁剪核每次约 7.5 ms（B：一个 warp 合作一个格子）、跟随的柱估计约 7 ms（发射 + 排序 + 求和）、取值核约 3 ms / 次。
+
+## 23. 切分保留多步（2026-11-06；`free_surface/k1_lag.py`，`merged_drop.py --explicit --cut-every k / --cut-eps / --lag-patch / --lag-omega`；日志 `k1_explicit/{lagpatch,lagpatch2,lagpatch3,lag_k1,lag_k5,lag_k10,lag_k20}_raw.log`）
+
+写法：最近一次切分 x_m 为参照（算子 H_m 不变，xn 停在 x_m），F_rel = I + G；非切分步开头换算 F0 = F_rel(x_n)^-1 F_e、C = F_rel(x_n)^-T、Ln 的常数 L_n − C:G(x_n)、弹簧偏移 p = (I + Ḡ_n)^-1 (x_j − x_i − dl_n)、Rh = polar(F_e)；同一能量形式、同一套核；切分时状态原样带过，能量不跳。推导：两种算子之差 e_m F_rel^-1 − e_n = O(区间累积应变 × 离散误差)，区间累积应变 → 0 时收敛到每步切分。
+
+- 仿射分片检验（同一仿射运动 10 步，每步切分 vs 只切一次）：F_e、L、ep 差 ≤ 1.7e-13（纯应变 1.4 %、加转动 4.8 %），帽格子同样精确。弹簧余量：两边都有的逐位一致（4 步内 ≤ 1e-16），10 步后最大差 1.6e-5 全来自一根弹簧（4065–6690）：每步切分时它的墙一度消失，弹簧关闭后重生、余量清零，只切一次时保留余量——成员变化（拓扑滞后），不是换算误差。（中途补了 Rh = polar(F_e)，与每步切分时 update_ul 的读法一致；对这一差别没有影响。）
+- 步长：k = 20 区间开头、第 20 步、切分后 ω_max 都是 3.437e4（前 4 位不变），上限 5.82e-5 s > dt 5.2e-5 s。
+- 撞击段（第 250 步存档起 60 步）对每步切分：位置差中位 1.2e-10 / 2.6e-10 / 4.9e-10（k = 5 / 10 / 20），F 差中位 2e-8 / 4e-8 / 8e-8，随 k 线性。⚠ 但最大差占自身变化的比例：位置 5 % / 11 % / 22 %，F 15 % / 19 % / 29 %，L 19 % / 20 % / 48 %；体积储能 −1.5 % / −3.6 % / −5.6 %。原因：区间内累积应变并不小——每 10 步：中位 2e-5、90 % 3e-3–6e-3、99 % 9e-2、最大 0.24–0.57；超过 0.1 的约 50–60 格（离地 1.2–2.7 h，多为小格子与帽格子），它们邻居的平均应变 0.07–0.09（自身 / 邻居中位 1.6–1.8）：撞击区真实的约 0.8 % / 步（应变率约 160 / s），最极端的小格子（3854 等）是邻居的 5–7 倍。
+- 用时：k = 5 约 19.6 ms / 步，k = 10 约 12 ms / 步（每步切分 60.7）；重切分时预测起点误差按 k² 增长（k = 5：2.2e-2 = 25 × 8.6e-4），Newton 2 次。
+
+结论：写法本身对（分片检验、稳定性、体内差 ∝ k 且可忽略）；"区间内累积应变小"的前提在撞击区不成立，固定 k 在那里误差随 k 线性变大。按累积应变自适应切分（`--cut-eps`）是一致的做法：撞击时接近每步切分，平静阶段长间隔；收益取决于整段运行中平静阶段的比例，待测。
+
+### 23.1 完整落地（2026-11-06；日志 `k1_explicit/{full_e1,full_k1,full_k1b,full_k1c,full_k1d}_raw.log`，`k1_profile/{imp_new,imp_pred,imp_pred2}_raw.log`）
+
+- 显式按应变阈值 1 % 切分（`full_e1`）：12,020 步 391.8 s（32.6 ms / 步），自由下落 3,600 步只切 1 次（4.7 ms / 步），撞击 0.19–0.40 s 每 1.2 步一切（54.8），之后每 2.1 步一切（35.2，物体几乎静止仍有个别格子两步内应变过 1 %）。未记账能量：t 0.26 / 0.31 / 0.62 时 9.7 % / 16.8 % / 14.3 %（隐式 k1 同期约 5 %），0.31 s 后总能量回升约 3 %；切分时最大累积应变一次达 4.74，未查。
+- 显式每步切分（`full_k1`、`full_k1b` 重跑、`full_k1c/d` 带诊断）：**可重复地**在第 4,200–4,400 步（t ≈ 0.218–0.229 s）发散（两次运行第 4,200 步动能、总能量、塑性功前 4 位相同），之前与阈值切分逐帧一致（第 1–4 帧中心点差 < 1 μm，第 5 帧最大 0.85 mm）。诊断：168 号（V0 / 中位 0.14，带帽，离地约 3.3 h）在第 4,185–4,199 步被跟随管住、自身单步应变 5–52 %；第 4,200 步重建跟随时它的列刚度估计 154,011（目标 9,600 的 16 倍），被标记但三个最大墙邻居都给不出合格锚点 → V0 规则把它**悄悄放空**，当步速度 4 → 27 m/s、应变 10，第 4,201 步 Lanczos ω_max 6.6e5（上限 3.85e4 的 17 倍，最高模态在 168 与邻居 3782）。阈值目标附近（9,500–9,700）的格子每步进出跟随但不致发散。结论：发散来自"被标记却放空"这一规则缺口，与切分频率无关；显式步的稳定性另无运行时保证（列刚度估计偏低约 3.6 倍，Lanczos 只在少数状态测过）。未改。
+- 隐式（主循环 330 步，`--profile`）：切分提速对隐式同样有效，但要配一阶预测——不预测时几何调用每步 3.6 次、每次 35 ms（起点误差大，试探半径偏得多），撞击段切分 248 ms / 步；预测后 2.1 次、每次约 16 ms、切分 51 ms / 步（旧版 138）。现默认 `--radii-start predict`（显式、隐式）。`end_warp` 在 θ = ½ 核对（`--end-check 4`，第 250 步存档起）：Ln、ep ≤ 1.4e-15，F_e ≤ 1.2e-14，屈服标记、余量、塑性功、计数相同；现为隐式默认（`W.end_flush_each`：每步读一次给隐式的日志），收尾 7.7 → 1.0 ms / 步。330 步 43.6 s（旧版 300 步 51.2 s）；151–300 步 259 → 157 ms / 步（切分 138 → 51，收尾 8.4 → 1.1，Newton 105 → 102 不变）。不预测那次第 301–330 步 Newton 失控（最多 207 次，2.7 s / 步），预测的两次没有，各一次运行，不归因。之后隐式约八成时间在 Newton（CG 的条件数，与 168 一类病态小帽格子相关）。
+
+### 23.2 F 体积塌缩的逐步账（2026-11-06；`free_surface/k1_vol_account.py`，`--vol-account`；日志 `k1_foam/volacc_raw.log`）
+
+隐式完整落地（fourier8k_clean，现默认设置）本次停在第 348 步。每步每格精确记账 Δ(log det F − L) = (a − b) + ret，a = log det(I + ΔG)，b = C:ΔG（与 ΔL 差 0），试探步 log det 与 a 差 4e-16。
+- 回映贡献 0；漂移全部来自 a − b。最塌的 5930、4012、6696（V0 / 中位 0.15、0.09、0.10）log det F − L 累计 −11.8、−11.5、−10.5。
+- ⚠ 不是小振幅的慢棘轮：6696 在接触前（≤ 260 步）a − b ≈ 0；第 260–320 步的 47 步里累计 −10.5（290–320 步占 −8.5）。这些步里 tr ΔG 达 −0.94、−0.83（一步内 F 体积乘 e^-2.75），约三分之二的步变号；L 每步 ±0.37（体积每步 ±45 %）。½tr(ΔG²) 合计只有 3.6，解释不了 −10.5：单向性来自大振幅下 log det 的凹性对线性读数 C:ΔG（压缩步 a ≪ b，膨胀步 a < b）。
+- Newton 失败：起点 |g| = 2.6e4 倍重量，几乎每次迭代都止于信赖域边界，一次撞 CG 上限，300 次不够把它降下来。
+问题由此变为：接触后这些格子为何每步体积 ±45 % 地振荡。
+
+### 23.3 两遍读 C 的单变量对照（2026-11-06；`MergedStep.c_two_pass`、`newton_log`，`merged_drop.py --c-two-pass --newton-log`；日志 `k1_foam/{c1pass,c2pass}_raw.log`，`nlog_{c1pass,c2pass}.json`）
+同一起点（fourier8k_clean scene 0，t = 0），两组都带 `--vol-account 6696 --newton-log`，唯一差别是 `--c-two-pass`：第一遍照常解完，在其根 z1 只重读 C = (I + G(z1)/2θ)^-T（R̂、β 逐位不变，每步核过），再解一遍；步末用第二遍的 C。
+- 漂移（log det F − L）第 300 步：原版最小 −7.27，< −1 的格 30 个、< −3 的 13 个；两遍最小 −0.245，没有 < −0.3 的。第 275 步 −4.88 对 −0.28。在这条轨迹上，冻结 C 是漂移的主因（实测，单变量）。
+- 拆分 fin = a − tr ΔG、frz = (I − C):ΔG 单项都大（≈ ∓½ tr ΔG²），两者本应相消，只有和有意义：两遍时全体求和 −155 / +154 抵消；原版 −190 / +56 不抵消。
+- 抽动幅度几乎不变：第 300 步每格累计 |tr ΔG| 99 % 分位 2.48 对 2.90，最大 13.5 对 13.1；|ΔL| 2.34 对 2.71。抽动不是冻结 C 造成的，漂移是。
+- 两遍后 C 仍未自洽：max |C(z2) − C2| 达 0.43（99 % 分位 ≤ 0.006）；|C2 − C1| 最大 3.5（预测点附近 I + G 近奇异的格）。
+- 成本：到第 300 步 36 s 对 33 s；第二遍从 |g| 3–19 倍重量起，2–7 次 Newton。
+- ⚠ 失败步不可作比较：原版这次跑完 750 步（238 s），同配置的 volacc 在 348 步失败——失败本身在重跑间不可复现。两遍组在 313 步失败，模式与原版不同：600 次迭代中 550 次 CG 撞 300 上限，ρ 中位 1.000，新乘积算的真实线性残差与 CG 递推残差一致——二次模型准、线性解不动（条件数），|g| 停在 0.0126 倍重量（容差 0.001）；格子没塌（F 最小奇异值 0.61）。
+- 原版停滞步（37 步 > 50 次 Newton，都在 430 步以后）：几乎每次止于信赖域边界，ρ 中位 0.43–0.8，无撞上限、无负曲率，真实残差与递推一致——半径被能量沿步的非线性限住，不是 CG。
+- 原版跑完时漂移最小 −27.5，< −1 的格 133 个：不失败时 F 也在塌。
+
+### 23.4 预条件刚度块：同一困难状态上的回放，及每步刷新的整段运行（2026-11-06；`--replay-mode pre1_cached / pre1_fresh / pre2_cached / pre2_fresh / blk_time`，`--pre-every 1 --c2-refresh`；日志 `k1_foam/{cap1,cap2,pre302,pre302b,pre303b,pre1run}_raw.log`）
+- 两遍版（加第一遍收敛检查）两次整段运行 cap1、cap2 都跑完 750 步：乘积 69.5 万 / 50.6 万，墙钟 425 / 417 s；单次运行间波动约 ±20 %。
+- ⚠ 同一快照、同一配置的回放不可逐位重复（cap2 第 302 步缓存块组 3715–5452 次乘积）。
+- 回放（cap2 第 302、303 步，每组 4–7 次）：第一遍刚度块按当前状态重建（单次 7.2 / 4.6 ms）比原样缓存（旧 1 / 2 步）乘积 1488–1548 对 3715–5452、1000–1045 对 3683–3992；撞上限 CG 的真实残差 / |g| 中位 0.015 对 0.40–0.50。第二遍按 C2 重建：302 步（|C2 − C1| 3.14）424–648 对 785–983，303 步（0.96）无差别。
+- 整段运行 pre1run（只改 `--pre-every 1 --c2-refresh`）：⚠ 第 373 步失败（第一遍 300 次 Newton，278 次撞上限，块本步刚重建，真实残差 / |g| 中位 0.99）；第 359 步同类（153 次，124 次撞上限，乘积 3.9 万）。刷新后仍停滞 → 查块近似质量与线性算子。到第 372 步乘积 18.0 万、176 s；t 0.2833 处墙钟 94 s，cap1 / cap2 为 67 / 114 s，在波动内，尚不能确认整段提速。失败时漂移 min −0.203、max +0.443，均 |.| 1.07e-3，|.| > 0.1 的 9 格；FRAME 7 高度、铺展与 cap1/cap2 相同到 1 mm。
+- 漂移正向尾比负向重（302 步：+0.482 对 −0.294）。
+
+### 23.5 停滞点上的乘积、三种块与预条件谱（2026-11-06；`k1_opcheck.py`，`--replay-mode opcheck --op-at 40`；日志 `k1_foam/op373_raw.log`）
+状态：pre1run 第 373 步快照，第一遍回放 40 次 Newton 后冻结（最后 9 次 CG 都撞上限，|g| 0.041 倍重量；屈服 7443 格，接触 452，滑动 39）。
+- 乘积（CG 的单边 h = 1e-9）：重复 1e-14–1e-9；线性 1e-5–1e-4；对称 1e-5–2e-3；h ≤ 1e-8 不跨任何分支（1e-6 跨 7 个屈服）。但沿实际 CG 步方向，h = 1e-9 单边与中心都偏 4.8e-3（舍入），1e-11 完全错；该方向 1e-8 单边仅 3.5e-6。PCG 600 次后递推残差 3e-6，真实残差停在 0.025：现乘积使可达线性残差约 2–5 % |g|，与 CG 停止阈 η = 0.01 同量级。
+- 三种块（每点 P^-1/2 H_kk P^-1/2 的范数，理想 1.73）：在用块对 |g| 最大的 170、4969 两格是 98（软了约 100 倍，两格都在屈服）；停滞点即时重建后 2.0；精确对角块 1.73。步内滞后成立（局部）。
+- 同点 PCG 300 次乘积：递推 |r| / |g| 在用 2.36、即时重建 0.48、精确对角 0.037；TrustCG：在用撞上限，重建 223 次到边界，精确 127 次到边界。
+- 预条件谱（Lanczos 80 步，中心 h 1e-8）：最大值 167 / 45 / 6.8（在用的最大两个 100 % 在 170、4969 上），最小值 3e-3 / 1.6e-3 / 1.3e-4，条件数都约 3–5e4。精确对角块也不降条件数：软端落在 7126、4971（V0 / 中位 0.02）等格上，跨格耦合（Σ 非对角 / 对角）在部分格达 2.5–5 → 块对角近似本身不够，需要跨格的预条件。
+
+### 23.6 同点 PCG 重做：乘积步长 × 三种块（2026-11-06；`k1_opcheck.py` 改：同一右端、同一停止 |r| ≤ η|g| = 0.01|g|、上限 600，真实残差用中心差分 1e-8 独立核算；日志 `k1_foam/op373b_raw.log`）
+停滞点同 §23.5（回放不逐位重复：这次 40 次后 |g| 0.043 倍重量）。
+- 精确对角块：两种 h 都在 353–356 次乘积达到停止，真实残差 1.05–1.1 %（递推 0.93–0.97 %），0.6 s。在 1 % 这一档，乘积精度不是障碍；§23.5 的"2.5 % 下限"是在用块跑到递推残差 3e-6 时测的，与方向有关，撤回其一般性。
+- 在用块、停滞点重建块：两种 h 都 600 次撞上限。在用块 h = 1e-8 时递推 0.16 对真实 0.77（脱节更严重），h = 1e-9 时 0.094 对 0.117：换 h 不能替代换块，不建议盲目改 h。
+- 子问题模型下降 q 递推与真实一致到 4–5 位，三种块最终都到同一最小值 −1.205e-9；差别只在到达速度。
+- 停止时残差 93 % 集中在 6 个屈服格（170、4969、6867、954、6499、6155），和在用块时相同的几个格。精确对角块 356 > 300（实际上限）：按专家判据仍"明显偏慢"，且慢的部分局部化 → 小片区联合预条件有依据。
+- Ritz 残差：三种块的最大特征值都收敛（残差 1e-6；在用块的 103 / 167 残差 0.27，相对 0.3 %，100 % 落在 170、4969）；**最小 Ritz 值的残差 (1.5e-2, 1.4e-2, 3.8e-3) 都大于其值本身 (3e-3, 1.6e-3, 1.3e-4)，软端未收敛，§23.5 的条件数 3–5e4 和"软端在 7126、4971"只是下界/未证实**。
+- 精确对角块的代价：363 色 × 3 × 2 = 2178 次梯度求值，整体不可用；只对残差集中的几十个格做单点列（每格 6 次）可行。
+
+### 23.7 小片区联合预条件 A / B / C / D（2026-11-06；`k1_opcheck.patch`，`--replay-mode patch`；日志 `k1_foam/patch373_raw.log`）
+同一冻结点（第 373 步快照，40 次 Newton 后，|g| 0.051 倍重量），同一右端、停止递推 |r| ≤ 0.01|g|、上限 600、生产乘积（单边 1e-9），"真实残差"用中心差分 1e-8 独立算。
+- A（停滞点重建的便宜块）：600 次撞上限，真实残差 0.063，0.93 s。残差 99 % 在 6 格 [4969, 170, 7106, 6323, 1958, 6754]（都屈服，3 个接触）。
+- B（A + 这 6 格的精确 3×3 对角块，36 次求值）：600 次撞上限，真实 0.073。**无收益** → 收益不来自对角块更准。
+- C（6 格 18×18 联合块，组内 |非对角| / |对角| 0.80，特征值 17.7 .. 7.5e7，对称正定，其余 A）：**116 次乘积到递推停止**（0.23 s，含 36 次构建），但真实残差 0.0545 — 递推与真实脱节（100 次时 0.018 对 0.068）。
+- D（C + 18 个耦合 > 0.1 的邻居，72×72，再 108 次求值）：70 次到递推停止，真实 0.063，总 214 次求值、0.26 s。
+- 所有组的模型下降 q 都到 −1.9912e-9；剩余真实残差 88–90 % 仍在 4969、170 等格。
+- ⚠ 没有一组按真实残差达到 1 %。未验证的解释：联合块的特征值达 7.5e7（cm 下限 7.8，比 1e7），M⁻¹r 在组内分量比组外小 ~1e-7，而乘积只按 |d|_max 取一个全局 h（1e-9），组内格子的扰动 ~1e-16 m，低于坐标分辨率 → 组内方向上的乘积是舍入噪声；"真实残差"用同样的全局 h 也受此影响，其本身也不可信。待验证：FD(p) 对 FD(p_G) + FD(p_R)（混合尺度线性性）、FD(p_G) 对已测列 H_{:,G} p_G。
+
+### 23.8 写入扰动与拆分乘积（2026-11-06；`k1_opcheck.patch_split`，`--replay-mode split`；日志 `k1_foam/split373_raw.log`）
+同一冻结点（这次 40 次后 |g| 0.064 倍重量；A 选出的 6 格 [170, 4969, 6480, 6867, 244, 6754]）。
+- ⚠ §23.7 的"坐标舍入吞掉微小分量"被否定：C 停止前 4 条搜索方向在组内的分量占 |v| 的 6–8 %（不是 1e-7），最终 p 占 97 %；实际写入的扰动与目标相差 1e-7–1e-5，18 个分量没有一个不变。
+- 六格完整列的步长一致性：h = 1e-8 对 1e-9 差 ≤ 4e-6，对 1e-7 差 ≤ 4e-4 → 列可靠到约 1e-5。
+- 乘积本身：沿最终 p，生产乘积（单边 1e-9）与拆分乘积（列 + 组外差分）差 3.5e-2（组内行 3.6e-2）；拆分乘积的单边对中心只差 5e-5；沿两条搜索方向差 5e-5、3e-4。生产乘积的误差在最刚的组内方向上达百分之几，机制是梯度求值误差经 1/h 放大，不是扰动写入。
+- C + 生产乘积：176 次到递推 0.7 %，独立核算 4.3 %（列方案）/ 5.4 %（整体中心差分）：脱节。
+- **C + 拆分乘积：180 次（0.56 s）到递推 0.83 %，独立核算 0.83 %（列方案）/ 1.09 %（整体中心差分，本身带同样的差分误差）：递推与独立一致，按真实残差达到 1 %。** A 为 600 次撞上限、6–8 %。
+- 结论：在这个点上，六格联合块 + 组内用列的乘积，以 180 次乘积（含 36 次构建）解到规定精度；障碍是刚方向上差分乘积的精度，不是预条件器单独的问题。
+
+### 23.9 完整单步回放：停滞 CG 的回退（2026-11-06；`k1_patchcg.py`，`MergedStep.patch_cg`，`merged_drop.py --patch-cg`；日志 `k1_foam/full373_{base,patch,patch2}_raw.log`）
+触发：某次 Newton 的标准 CG 撞上限（非边界、非负曲率）→ 在该点：六格由该 CG 的残差向量选出，列（中心差分 1e-8，每格 6 次求值）、联合块（对称化、下限 cm）、其余块照 Newton 所用；拆分乘积（组内列、组外生产单边差分）；M-范数 Steihaug，停止递推 0.5 %|g|；列与块只在这一次 CG 内固定，之后丢弃。两组都从 `snap_pre1run_fail_step373.pt`，`--pre-every 1 --c2-refresh --c-two-pass`。
+- 基线：第一遍 300 次 Newton 用完，84245 次乘积，34.3 s，|g| 0.00179 倍重量（容差 0.001），第二遍未进。
+- 回退：**整步完成**——第一遍 23 次 Newton，第二遍 2 次，共 1468 次梯度求值（标准 CG 乘积 768 + 回退求解 469 [列 72 + 回退 CG 397]），1.6 s；触发 2 次（第一遍第 22 次、第二遍第 25 次），每次：选格 ~0 s，列 0.025 s，分解 0.106 / 0.003 s，迭代 0.45 / 0.35 s；核查另计 8 次求值 0.01 s。
+- 回退出口的独立残差：第 1 次 0.46 %（列 + 组外中心）/ 1.65 %（整体中心差分）；第 2 次 0.44 % / 0.46 %。两种核算在第 1 次不一致，1.65 % 在阈值之上——按整体中心差分计未过 1 %。
+- 两次的六格：[170, 4969, 6754, 7202, 6480, 2263]、[170, 4969, 1958, 6754, 7202, 3386]；联合块特征值 17.7..7.5e7、17.6..8.1e6。
+- 步末：形状能 2.187e-4 → 2.187e-4，体积能 1.216e-4 → 1.212e-4，塑性功格 +6.3e-4、弹簧 +7.6e-5；J 0.883..1.183，det F 全正；漂移 min −0.203、max +0.453（步前 +0.443）；|x − x_n| max 2.8 mm，|v| max 3.3 m/s。
+- ⚠ 首版的"拆分乘积对称性"检查用了 d1、d2，两者 H-共轭，数值 1.0 无意义；改为 u = d1、v = M⁻¹r1 重跑（patch2）。
+- patch2（对称性检查修正后的重跑，同一快照）：整步再次完成，第一遍 22 次 Newton、第二遍 2 次，1399 次梯度求值（标准 CG 700 + 回退 455 [列 72 + CG 383]），1.6 s；拆分乘积的对称性（u = d1，v = M⁻¹r₁）1.2e-7、6.9e-6；回退出口独立残差 0.46 % / 0.36 % 与 0.50 % / 0.52 %（两种核算这次一致，都在 1 % 内）；步末能量账与 patch 相同到 4 位。回放之间六格的组成略有不同（170、4969、6754、7202 四格每次都在）。
+
+### 23.10 第 359 步回归与账目（2026-11-06；日志 `k1_foam/full359_{base,patch}_raw.log`）
+- 第 373 步 patch2 的 1399 次梯度求值 = 标准 CG 917（含撞上限的 2 × 300）+ 回退 455（列 72 + CG 383）+ Newton 自身 Π 求值 27（预测 2、试探 24、第二遍起点 1）；核查 10 次另列。撞上限的 600 次占 43 %。
+- 第 359 步（原运行 156 次 Newton、38808 次乘积）：基线收敛，168 次 Newton，42433 次求值，24.7 s；回退收敛，38 次 Newton，4318 次求值（标准 CG 2795 + 列 180 + 回退 CG 1299 + Π 44），6.2 s。步末能量账、J、漂移、位移、速度两组相同到 4 位。
+- ⚠ 回退在这一步自身大多没到停止：5 次触发，出口为边界（|r| 3.1）、上限 0.56、上限 0.047、上限 0.13、上限 1.17；六格每次不同，常含 V0 / 中位 0.05 的 6478、6480、3600；联合块特征值 4–9.7e6；对称性 2e-9–3e-6。步仍快 4 倍，因为回退给出的步沿能量仍有效。此处六格不够覆盖困难运动，与专家的提醒一致；按约定不扩大组、不改触发。
+
+### 23.11 完整落地开回退（2026-11-06；`patchrun`：pre1run 的配置 + `--patch-cg`；日志 `k1_foam/patchrun_raw.log`）
+- 跑完 750 步，无失败（pre1run 同配置无回退在第 373 步失败；cap1 / cap2 为旧刷新策略，跑完）。墙钟 **631 s**，对 cap1 / cap2 的 425 / 417 s。
+- 梯度求值总数 493237（第一遍 399419、第二遍 93818），与 cap2 的 505972 相当。其中回退：触发 302 次（几乎都在 t > 0.32 的后段），回退 CG 乘积 58402 + 列 10872，耗时 246.9 s（39 %）；触发前撞上限的标准 CG 300 × 302 = 90600 次（18 %）。
+- 回退出口：285 次到容差、16 次撞上限、1 次边界；独立残差 ≤ 1 % 的 284 / 302，两种核算 2 倍内一致 287 / 302（中位 0.47 % / 0.48 %）。
+- 慢的原因是实现速度而非乘积数：回退每次求值 ≈ 3.6 ms（Python 循环、每次乘积主机同步、列乘法用 einsum），标准图 ≈ 0.75 ms。乘积数相同、墙钟多 50 %。
+- Newton 每步中位 22（cap2 23），> 50 次的步 6（cap2 17），最大 126。
+- 终态：高度 0.150，x 宽 0.788，z 宽 0.726（cap1 / cap2：0.150 / 0.784–0.789 / 0.722–0.724），相同到 1 mm；塑性功 0.1614（cap2 0.1614）。
+- ⚠ 漂移尾部变重：min −0.484（体积比 0.617）、max +0.644（1.90），|.| > 0.1 的 14 格（第 373 步状态时 9 格，max +0.443）；cap1 / cap2 终态 min −0.291 / −0.282（当时未记 max）。单次运行，无法归因于回退，但要记下。
+
+### 23.12 回退搬进 Warp 图（2026-11-06，用户"搬吧"；`k1_patchcg.SplitCG`，`--patch-check-py`；日志 `k1_foam/full373_warp_raw.log`、`patchrun2_raw.log`）
+TrustCG 的核与簿记不变，一张图里两处替换：乘积 k_sp_mask + k_sp_hd（cm d_r + 组外差分 + Σ_k H_:,k d_k），预条件 k_tr_update 用组内置零的 Pinv_m 再 k_sp_joint（y_S = J⁻¹ r_S）；组大小放在设备整数里，图只捕获一次（1.2 s）。列仍在 torch 里建。
+- 第 373 步同点对照（python 路径同步解一次）：K 185 对 176，|p_warp − p_py| / |p| 1.8e-3，模型下降 2.296e-9 相同；迭代 0.133 s 对 0.534 s（4×）。第二次触发：迭代 0.105 s，列 0.027 s，分解 0.002 s。整步 25 次 Newton，1567 次求值（含对照的 python 解），3.1 s 含图捕获。
+- 完整落地 patchrun2（配置同 patchrun，回退在设备上）：跑完 750 步，**356 s**（patchrun 631 s，cap1 / cap2 425 / 417 s）；求值 520181（patchrun 493237，cap2 505972）；回退触发 265 次，回退 CG 乘积 71107 + 列 9540，回退耗时 41.7 s（patchrun 246.9 s）。终态高度 0.150，z 宽 0.719，塑性功 0.1614；⚠ x 宽 1.043（其他运行 0.78–0.79；c1pass 曾 1.15–1.22）：有离群格，质心不变。漂移 min −0.416、max +0.646，|.| > 0.1 的 12 格，与 patchrun 同量级。
+- ⚠ 回退出口分布不同：设备版 撞上限 133 / 容差 125 / 边界 7，独立残差 ≤ 1 % 的 146 / 265；python 版 16 / 285 / 1，284 / 302。第 373 步同点对照两条路径一致（K 185 对 176），整段差异未解释：轨迹不同，或设备路径在某类状态上有差别。待查：在 patchrun2 回退撞上限的步上用 `--patch-check-py` 同点对照。
+- 同点对照（第 359 步快照，每次触发两条路径都解）：4 次触发出口类型逐次相同（边界 / 上限 / 容差 / 上限），乘积数 102 对 100、300 对 300、214 对 222、300 对 300，|p_warp − p_py| / |p| 2e-3–1.6e-2，模型下降相同到 4 位。设备路径与 python 路径等价；整段出口分布的差异来自轨迹不同（撞上限的那些状态六格不够，见 §23.10），不是实现。patchrun2 存的两个"难步"（336、348：Newton 122 / 128 次）回放时无回退触发（CG 都小，难在信赖域）。
+
+### 23.13 Power Foam 渲染（2026-11-06，用户"不能用 powerfoam 的渲染吗"、"每步解的半径就能更新"；`free_surface/render_k1.py`；图 `k1_foam/render_patchrun3/`）
+foam = fourier3d `fourier_pacnerf_elastic0_8k_free_clean`（格 = 球 ∩ 功率胞，每格 SH 颜色 + 格内坐标上的 Fourier 纹理），按 cells.npz 的 source_index 取 7690 格（点差 0，半径差 4e-9）。每帧：中心点 → 该步位置（去掉常平移 (−3.4, −4.5, −0.6) mm），半径 → 该步解出的切分半径 W._ulr（frames 现在也存 F），纹理波矢按 polar(F) 转（SH 不转），邻接由渲染器重建；第 0 帧经更新与原 foam 渲染差 6e-6。patchrun3（同配置再跑一次，272 s，x 宽 0.952：离群格又出现但较小）全部 75 帧 × 相机 0、3。压扁后表面斑驳、透视：Power Foam 大压缩下的已知伪影。页面：claude.ai/artifact/… Power Foam Render。
+
+## 24. 塑性场景批量（2026-11-07；`free_surface/run_batch.sh`，foam `foams/<名>_split_keep_clean`，输出 `output/discrete_plasticity/batch/<名>/`，画廊 `batch/gallery/`）
+12 个场景各用自己训练的 foam（fourier3d *_8k_split_keep_clean，`convert_foam.py` 转，7809–7913 格，每个一个连通块）；batch 0–9 参数来自 gt/plasticine.json；cat、playdoh 的 E、ν、τ_Y 取论文 Table 1（cat 1e6 / 0.3 / 3.85e3，playdoh 2e6 / 0.3 / 1.54e4），v = (0, −0.5, 0) 由真值前 3 帧质心算出（该算法在 batch 上复现 gt 的 v 到 1e-3）；真值路径 `--truth`。配置同 patchrun3（两遍 C、每步重建块、回退）。
+- 跑完 7 / 12：playdoh、plasticine 1、2、3、5、6、9，128–310 s；末帧高度差 MPM 0–1.6 cm（我们偏高，量法），宽差 ≤ 3 cm，Chamfer 6.6–11 mm。
+- ⚠ 失败 5 / 12，都是第一遍 300 次 Newton 不收敛、|g| 0.36–2.1 倍重量、CG 很短（信赖域停滞，不是撞上限，回退未触发）：cat 473 步（t 0.39）、plasticine0 331、4 337、7 281、8 289。共同点：屈服应变小（4e-4–3.9e-3；跑完的 7.7e-3–3.8e-2，plasticine0 8.9e-3 例外）、失败时少数极小格（V0 / 中位 0.01–0.26）F 最小奇异值 0.000–0.005 或 e_i / e_y 至 12730，漂移 min −3.5 / max +2.1。plasticine0 在 fourier8k_clean 上三次跑完，在自己的 split_keep foam 上失败：foam 相关（split_keep 的极小格是 clean 的两倍，§19）。
+- 渲染：第 0 帧与原 foam 差 1e-6–1e-4（plasticine5 3e-2，未查）。
+
+### 24.1 plasticine0 失败步的对照与根源（2026-11-07；日志 `batch/plasticine0/p0rep{,2}_raw.log`；帧 `frames_plasticine0.npz`）
+失败步 331 的快照上：原方案（第一遍 C 在预测点读）300 次 Newton 不收敛，CG 都短、ρ 来回，回退未触发；对照（第一遍 C = I，即在步起点读；第二遍照旧）45–58 次 Newton 收敛，1.3–1.7 s，回退触发 2–4 次。但步末状态：漂移 min −20.39（步前已 −20.388）、max +2.08（步前 +2.06）——**状态在进入这一步前就坏了**，这一步只是解不动它。
+- 坏格：8 个，V0 / 中位 0.011–0.123，初始高度 0.30–0.39（落地时在接触区），从第 270 步起（触地约 250–260 步）各自在一两帧内 F 的体积部分跳变（三个奇异值相等：纯体积，不是压扁）：5007 在 280→290 步 F 体积 ×0.63，300→310 步 ×e⁻²⁰；4813 270→330 步 ×e^{+2.06}；L 全程有界。这些步 Newton 都收敛了。
+- 同一场景在 fourier8k_clean 上终态无一格 |漂移| > 1（最大 0.66）；split_keep foam 的极小格（V0 < 5 % 中位）203 个对 81 个。
+- 这些步里两遍 C 的读数：第一遍预测点的 C 与根上相差 |C₂ − C₁| 最大 11–49，第二遍后根上仍差 0.14–2.2；对 |ΔG| ~ 1 的格，冻结 C 的误差是 O(|ΔG|²)，两遍也压不住。F 乘法更新 F ← (I + ΔG) F 对这类格一步就能把体积乘到 e^{±1} 以至 e^{−20}。
+- 结论：331 步的不收敛是后果；根源是接触区极小格的 F 体积在冻结 C 下的乘法更新失控，与专家早先的 F̄（单模形状态 + L 持有体积）建议对应。
+- 逐步账（`p0acc`，重跑到 335 步，这次没失败，5007 停在漂移 −1.4）：5007（已聚合，used = 1）在 288–291 步 tr ΔG +0.56、+1.76、+1.72、+0.40 而 a = log det(I + ΔG) 为 −0.10、−0.37、−0.54、−0.23（ΔG 有一个强负本征方向、两个更强的正方向），四步漂移 −1.0；之后周期 2 抽动 tr ΔG ±0.1–0.8，a ≈ b，漂移稳定。批量运行里同一格在 300–310 步塌到 −20，是同一机制更极端的一次（重跑不可复现）。聚合格的 G 是非极小邻居自身拟合的体积加权平均，所以邻居的拟合本身就有 |G| ~ 1。
+- ⚠ 修正"聚合"的理解：k_gg_cell 里 G = (Sg + (x − x_n) ⊗ a + Ge Mc) / V，聚合值 Ge 只进帽闭合项 Ge Mc；格子的 G 主体仍是自己墙面的和 Sg / V。极小格（V0 / 中位 0.035）的 1 / V 把同样的墙面位移放大 30 倍。从 265 步快照回放 30 步：5007 的 7 个邻居（V0 / 中位 0.31–4.7）终态漂移都在 ±0.003 内，5007 −1.17 → 失控的是极小格自己的拟合，不是邻居传给它的。
+
+### 24.2 掉到 −20 的那一步，与第一遍 C = I 的对照（2026-11-07；`--resume`、`--snap-drift`、`--c1 start`、回放模式 `retcheck`；日志 `batch/plasticine0/p0{A,B,ret}_raw.log`，快照 `snap_p0A_drift6791_step267.pt`、`snap_p0B_drift501_step266.pt`）
+从健康快照（p0acc 第 265 步）续跑到底，A = 原方案（第一遍 C 在预测点读），B = `--c1 start`（第一遍 C = I，第二遍照旧）：
+- **A 第 319 步失败，B 第 359 步失败**，都是第一遍 300 次 Newton 不收敛。B 的两本账也没合上：第 300 步 |漂移| > 0.1 的格 36 对 A 的 38，第 350 步 58；两组都在续跑后 1–2 步内各塌一个极小格（A：6791 第 267 步 −12.2；B：501 第 266 步 −10.9）。
+- **塌下去就是一步，发生在步末的塑性回映**（逐步账的 ret 项：A 6791 第 267 步 ret −11.43，B 501 第 266 步 ret −13.75；a、b 都只有 O(1)）。回放第 267 步（`retcheck`）：6791（V0 / 中位 0.011，屈服，β 0.005）的试探增量 I + ΔG 奇异值 1.62 / 1.24 / 0.071，**det(I + ΔG) = −0.143**，F_n 的 det −0.316——这一步格子翻转了。rot_proper 给出正常的正交 R（det +1），但 sym(Rᵀ F_n) 的本征值为 [−0.092, 1.61, 2.12]，回映取 log(max(w, 1e-6)) = −13.8，再按 Hencky 平均 lm = −4.2 把三个方向一起缩到 e^lm = 0.015 → F_e 奇异值 [0.020, 0.019, 0.009]，log det 掉 −11.4；L 照常加 C:G。torch 端 `_end_torch` 结果相同（−11.43）：是算法本身，不是 Warp 实现。同一步的 501（det +3.24，未翻转）回映保体积（ret 0）。
+- 结论：两本账在极小格上分家的"断崖"不是乘法更新的慢漂移，而是翻转的试探 F 进了对数回映。翻转本身来自接触区极小格一步内 |ΔG| ~ 1.6（1 / V 放大的自身拟合）。第一遍 C = I 既不保可解，也不防分家。
+
+### 24.3 第一层：不翻转的可行域检查（2026-11-07，专家；`MergedStep.flip_guard`，`--flip-guard 0.05`；日志 `batch/plasticine0/p0g267{,b,c}_raw.log`、`p0G{,2}_raw.log`）
+G 对 x 线性、新切分上 G(x_n) = 0，所以 det(I + G(z + t p) / θ) 是 t 的三次式，不用新的能量求值：预测点先缩到 det ≥ 0.05 的 t，每次 Newton 试探步也缩到可行长度（二分 40 次，取 0.9 倍），信赖域缩到该长度；时间步不变。
+- 第 267 步回放（6791 翻转的那步）：预测点缩到 t 0.179；之后 Newton 的下降方向持续把 6791 推向翻转，第 1–4 次迭代 z 的 det 0.16 → 0.54 → 0.15 → 0.060 → 0.051，第 5–22 次停在边界 det = 0.050，每次 CG 1 次乘积、|g| 卡在 420、ρ = 1（接受但不前进）；第 13–24 次 det 从 0.0499 数值滑到 −0.0067，一旦低于边界，检查不再缩步（z 不可行时无处可缩），求解进入翻转区并在那里收敛（47 次），回映照旧 ret −11.7。
+- 即：这个时间步的能量在不翻转的范围内没有可接受的解，最小值在翻转区——正是专家说的"卡在边界"的情况。
+- 续跑（p0G，预测点未缩）：第 364 步失败，86 步有缩短，z 不可行 79 步；6791 仍在 267 步塌。
+- 专家纠正（11-07）：上一版检查没守住边界（det 一路滑到 −0.0067 并接受了翻转结果），不能据此说"不翻转就无解"。改为：沿搜索方向求 det 的三次式**第一次**穿过边界的位置（256 点采样 + 二分）、每个接受点重新核对、不合格就拒绝、z 永远是最后一个可行点；参考 G 在 CG 乘积扰动之前取（之前取在之后，差 1e-9 导致假"z 不可行"）。"求解停滞（卡在墙边）"与"检查失守"分开计。
+- 修好后的单步（`p0g267e`）：预测点缩到 t 0.179，15 次缩短，**检查零失守**；第 4 次迭代起 det 钉在 0.050（6791），|g| 卡在 420 倍重量，ρ = 1，信赖域收缩到零，300 次不收敛——干净的"卡在墙边"。这只说明当前 Newton 方向被墙挡住，不证明墙内无解（专家）。
+- 墙边检查（`wallcheck`，`p0wall`）：停在墙边的点上，对 6791 的 det 对 51 个模板点位置求导得墙法向 n（|n| 7.2e3）；梯度分解：沿法向只有 0.024 倍重量（符号：能量把 det 往下推），**沿墙 420 倍重量**——梯度几乎全在墙内。沿墙的预条件切向方向做线搜索（带检查）：t 0.1 时能量 −7.4e-3（斜率 −0.074），det 从 0.050 升到 0.089，|g| 420 → 385；t 1 时 det −0.69（切向直线走远后出墙）。结论：**墙内有路**。停滞是信赖域 Newton 方向指向墙外被挡住，不是不翻转范围内无解。
+
+### 24.4 沿墙滑动（2026-11-07，专家；`MergedStep._slide`，`--slide 0.25`；日志 `batch/plasticine0/p0slide{,2,3}_raw.log`）
+专家要求：遇墙换方向而不是无限缩同一方向；检查不得收缩信赖域；ρ 用实际接受的步重算；三次式交点由导数根划分单调区间求精确第一交点（已改，不再采样）。
+- 实现：截短后的 Newton 步照常按 ρ 接受；截短严重（t* < 0.25）时，活动集 = 挡住这一步的格（三次式第一交点处）+ z 上 det < 1.5 m 的格，各自 det 对 2 跳模板点位置的差分梯度正交化为法向；预条件梯度投影到切空间，长度取被挡 Newton 步的 M 范数，再加一个沿法向把 det 一阶抬回 1.2 m 的分量；第一交点截断、Armijo 接受；下一个 Newton 方向重新算。
+- v1（活动集按 z 上贴墙的格）：截短时 z 还离墙远，活动集为空，方向退化成 1e-3 长的预条件梯度，300 次 |g| 445 → 131。
+- v2：前 3 次滑动有效（|g| 446 → 336 → 316 → 182，能量 −0.017、−0.003、−0.019，零失守），随后贴墙：差分法向的 1e-7 误差使切向一阶仍压 det，而 det(z) − m ≈ 0，交点 t_c 几何缩小（1e-5…1e-14）；且接受点可落在 m(1 − 1e-6) 之内，交点搜索在 t = 0 处就不满足 ≥ 0，返回"不穿墙"→ 全程试探进翻转区（det −13.7），被接受点复查拦下 20 次（已拒绝，未提交）但求解卡死。
+- v3（交点相对 det(z) 定义；滑动加法向抬升）：零失守；|g| 300 次内 177 → 8.4（Newton 小步，每次 2 次乘积），滑动每次只走 t ≈ 9e-5、能量 −1.3e-6，抬升没起作用（原因待查：被另一个格挡住，或长度标度）。差分法向的代价：每次滑动约 300 次梯度求值，这一步共 9.6 万次、138 s。
+- KKT 核对（`p0wall2`，检查 + 滑动，300 次后）：|g| 7.33 倍重量（起点 500），沿墙法向 0.42、沿墙 7.31；零失守。不是约束最优（切向梯度远未归零），也未到原容差：是慢收敛。此处墙的曲率很大：切向方向走到 t = 1e-2（位移 ~3e-4 m）det 就从 0.053 掉到 0.045，再远即翻转——投影梯度式的滑动在这种曲率下只能走极小步。
+- 滑动为何只能走极小步（`p0slide4`）：贴墙后，抬升后的方向沿 6791 法向的一阶 det 变化是 +1.05e-2（如设计），但在 t = 1e-3（位移约 3e-5 m）处实际 det 变化已是 −1.0e-4：二阶项在 t ~ 1e-4 就压过一阶。墙（det = 0.05 的曲面）在 ~1e-4 m 的尺度上弯曲，而步内位移 1–4 mm，6791 本身约 1–2 mm；切向一阶方法在此只能爬行。结论：不是实现问题，是这个格子的可行域在时间步的位移尺度下薄且弯；要么带约束二阶（SQP，需要 det 的 Hessian），要么模型侧让能量本身抵抗 det → 0（现在只有 L 受体积能约束，det F 自由）。
+
+### 24.5 解析法向与局部非线性修正：改代码后的单步对照（2026-11-07，Codex）
+
+用户授权“改了重跑”，保持 dt = 1/1200、能量、材料、原停止容差不变。只回放 `snap_p0A_drift6791_step267.pt`；所有组第一遍最多 300 次 Newton，不收敛不提交步末、不进入第二遍。
+
+实现（`k1_feasible.py`，`MergedStep._slide`）：
+- 用余子式与现有 G 的转置核直接构造完整模板系数；每个活动格子 3 次转置作用，缓存仅活到当前切分结束。包含聚合的扩展依赖，不截成固定两环。不再逐坐标差分完整能量梯度。
+- `projected`：P 度量下联立投影、联立法向抬升；先定切向长度，再加入抬升；Armijo 用最终实际方向的 g·p，修复原版加抬升后仍用旧斜率的问题。活动集优先保留真正挡路的格子。
+- `soc`：在上述方向的试探点上，用解析法向对完整非线性 det 做局部联立法向修正，修正过大就回溯；接受前在全部格子上检查，并用原能量下降验收。这是可行点回缩/局部非线性约束修正，不是完整的 Lagrangian Hessian SQP，也不代表验证了所有二阶约束方法。可行性约束针对被接受的迭代点，不能把回缩前的切向直线当成全部可行的曲线。
+- 私有 G 前向/转置缓冲区，不污染生产梯度；每步重建缓存。`--slide-method legacy|projected|soc`，默认 projected；soc 仍是显式实验开关。未开启 slide 的运行不采用新方向。
+- 回放时显式覆盖 snapshot 中保存的 newton_max/slide/flip_guard，避免命令行实验选项被旧快照悄悄恢复。
+
+正确性核对（实际快照切分）：G 私有前向对生产 G 相对 3.85e-16；缓存模板对独立前向作用 2.36e-16；法向对生产 det 中心方向差分，h=1e-7 / 1e-8 相对 2.04e-9 / 1.68e-8；三格联立抬升相对 1.29e-16。私有辅助调用前后生产位置、G、梯度缓冲区逐位不变。Python 编译与 git diff --check 通过。
+
+同一 GPU 串行回放（耗时是驱动报告的单步计时；不是完整落地耗时）：
+
+| 方法 | 梯度求值总数 | 耗时 | 300 次后残差 / ‖fg‖ | 结果 |
+|---|---:|---:|---:|---|
+| 原版 legacy 本次重跑 | 96177 | 102.2 s | 8.2746 | 未收敛 |
+| 解析一阶 projected | 25072 | 23.6 s | 3.7882 | 未收敛 |
+| 局部曲率修正 soc | 28600 | 26.6 s | 0.7997 | 未收敛 |
+| soc 重复 | 28929 | 25.6 s | 0.8642 | 未收敛 |
+
+四次均无检查失守。原容差仍为 0.001 ‖fg‖（这里不是整个物体的重量）。SOC 重复的终点 min det = 0.05000099966，近边界格为 6791；梯度法向分量 0.6667、切向分量 0.5498，仍不是原方程根，也不是约束最优。原版终点切向分量 8.2406。
+
+代价拆分：projected 沿墙部分 8.18 s、仅 2 个格构造模板；soc 11.56 s、10 个缓存模板、3577 次私有线性 G 作用/3280 次法向修正；这些线性几何作用不是完整梯度求值，已单列，耗时计入总时间。SOC 重复沿墙 11.33 s。不要将求值数下降直接当成整段加速。
+
+结论：先前“实现因素已排除、138 秒是模型尺度决定的代价”不成立；解析导数与方向修正有实测收益。另一方面，新实验仍未解决该步，不能声称大时间步已经可用，也不能从这次一阶方向加局部回缩失败推导可行域无解。未增加迭代预算、未跑完整落地、未修改 F/L 模型。
+
+日志：`output/discrete_plasticity/batch/plasticine0/codex_guard/{projected,soc,soc_repeat,legacy_repeat}_raw.log`；逐次沿墙数据 `slide_*.json`，终点与完整检查轨迹 `feasible_{soc_repeat,legacy_repeat}.json`。
+
+
+## 24.6 Full-gradient integration groups in the production driver (2026-11-07)
+
+完整程序局部积分聚合：2026-11-07
+
+实际修改生产程序 MergedUL / merged_drop，无独立模型原型。
+每次重切分后按当前几何体积及连通墙面建立互不重叠的小组。
+目标组体积为当前中位体积的 0.5 倍，每组最多 8 格。
+使用组内按当前体积加权的完整 G，形状能、体积能、弹簧与步末更新均读取它。
+力使用该聚合的转置回传；预条件器先聚合系数再计算刚度。
+位置、质量、每格材料历史与 V0 能量权重均未合并。
+
+验收：plasticine0_split_keep_clean，7898 格，原 dt=1/1200，原 Newton 容差。
+从 t=0 完整跑到 t=0.625，750 步，实测 480 秒。
+每步提交前检查 F 试探状态的正定向；没有靠放宽残差或接受翻转继续。
+全程最小增量行列式 0.628223。
+末帧 F 最小奇异值 0.867003。
+末帧 log(det(F))-L：最小 -0.43776，最大 0.184658，平均绝对值 0.00074266。
+
+核对：生产梯度的仿射再现、转置/前向一致性、完整能量对位置的方向导数均通过；
+步末 Warp 与 Torch 路径在实际驱动中的前两步核对通过。
+第一次只改梯度、未同步预条件器的整段尝试在第 315 步未收敛，已保留失败日志。
+
+限制：本次只验收跑通这一个场景，不代表其他场景或重复运行的成功率。
+外轮廓与 MPM 存在明显差异，变软、离群粒子、模型精度均未验收。
+F 与 L 的定义仍保留原模型，没有证明二者严格一致。
+该功能默认关闭，以 --integration-min-volume 0.5 开启。
+旧的显式推进及部分直接读取原始算子的诊断暂不支持此开关，驱动会明确拒绝。
+完整帧文件留在仓库原有输出目录：/home/fangsuo/py/dynamic-powerfoam/output/discrete_plasticity/batch/plasticine0/frames_codex_fullagg05_blocks.npz
+
+
+Reproduce:
+
+```bash
+PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python -u free_surface/merged_drop.py \
+  --foam foams/plasticine0_split_keep_clean --scene 0 --truth plasticine/0 \
+  --save /home/fangsuo/py/dynamic-powerfoam/output/discrete_plasticity/batch/plasticine0 \
+  --tag codex_fullagg05_blocks --data /home/fangsuo/py/dynamic-powerfoam/data/pacnerf \
+  --c-two-pass --pre-every 1 --c2-refresh --patch-cg --snap-fail --vol-account \
+  --integration-min-volume 0.5 --integration-check --end-check 2
+```
+
+
+## 24.7 Five previously failing scenes rerun; repeatability audit (2026-11-07)
+
+User requested all previous failures rerun with the production full-gradient integration scheme; outliers excluded from acceptance.
+Same dynamics settings as §24.6: target group volume 0.5 current median, cap 8 cells, two C passes, pre-every 1, c2-refresh, patch-CG, dt=1/1200, original residual tolerance. Each starts from t=0. One run per scene.
+
+| Scene | Outcome | Accepted steps | Simulation wall time |
+|---|---|---:|---:|
+| plasticine8 | Newton failure at step 282 | 281 | 113 s |
+| plasticine7 | Newton failure at step 286 | 285 | 101 s |
+| plasticine4 | Newton failure at step 315 | 314 | 144 s |
+| cat | Newton failure at step 297 | 296 | 62 s |
+| plasticine0 | Newton failure at step 330 | 329 | 87 s |
+
+0/5 completed. Every failure is pass 1 exhausting 300 Newton iterations. No accepted endpoint flipped; min accepted increment determinants respectively 0.8762, 0.8801, 0.7622, 0.8762, 0.6281. Failure-step diagnostics do not show the prior F-collapse pathology. This is not a robust solve fix.
+
+plasticine4 and cat initially stopped at the new affine startup assertion, before stepping. Original unaggregated gradient itself fails on 2 cells (plasticine4) and 1 cell (cat). Verification now explicitly reports those original defects, demands affine exactness on groups with exact source stencils, bounds errors by the convex average of original errors, and retains production G/transpose/energy-derivative checks. No dynamics equations, physical parameters or convergence tolerance changed. These two cases do NOT pass a global affine patch test; warnings stay in logs. Initial startup failures are preserved separately from actual landing failures.
+
+plasticine0 passed 750 steps in §24.6 but failed this repeat. All four previously recorded core-file SHA256 hashes match the repeat's initial manifest exactly (merged_ul.py, merged_drop.py, k1_integration.py, k1_feasible.py). Parameter headers and runner settings match. Saved coordinates (every 10 steps) are bit-identical through step 230; max coordinate difference is 7.7e-10 m at 240, 2.9e-4 m at 280, 4.7e-2 m at 300. Step-300 coordinate RMS difference is 0.55 mm. The first saved frame already differs by ~1e-13 in radii and ~1e-15 in F/L. Step-280 wall counts differ. Which calculation/branch amplifies the differences has NOT been identified. Do not call this normal randomness, physical chaos, or a demonstrated root cause. Prior full dependency/environment hashes are unavailable.
+
+Logs: batch/<scene>/codex_fullagg05_batch1_raw.log for 8/7/0; codex_fullagg05_batch1_checked_raw.log for 4/cat. Failure snapshots share those tags. User-facing results and audit: outputs/failed_scenes_rerun/{results.txt,status.json,config_repeat_audit.json}. The old one-pass success remains a historical observation, not evidence of reliability.
+
+
+## 24.8 Full-gradient integration experiment reverted (2026-11-07)
+
+User requested reverting the experiment. Restored merged_ul.py and k1_feasible.py byte-for-byte from the pre-integration backups. Restored merged_drop.py integration changes while preserving the subsequently added repeat-count/repeatcheck diagnostic entry point. That diagnostic specifically needs the reverted aggregation state and now exits with an explicit incompatibility message; its source is preserved. Removed the unused k1_integration.py from the active source tree after archiving it.
+
+The original per-cell full gradient and its transpose, original preconditioner, two-pass C, c2-refresh, patch-CG, and prior feasibility/sliding functionality remain. The old auxiliary cap-fit aggregation was not changed by this rollback. Experimental logs, snapshots, frames and renders are retained. Sections 24.6–24.7 describe historical experiments, not the current model.
+
+
+### 24.9 F/L volume matching diagnostic (2026-11-07; default OFF)
+
+User requested a test of using L to correct F's volumetric drift. Added
+`k1_f_volume_test.py` and optional main implicit driver switch
+`--f-volume-test observe|match-l` (default `off`). No change to merged_ul.py,
+end_warp.py, the force law, dt, convergence tolerance, or the reverted gradient
+aggregation. This is a diagnostic intervention, NOT a complete new constitutive law.
+
+For valid positive-orientation returned F only, match-l multiplies F by
+exp((L-log(det F))/3), preserving its isochoric shape. Also applied on initial
+state after snapshot restoration. Extra shape stored-energy change recorded
+separately; the original force and plastic-work formulas do not account for
+this intervention, so do not assert energy conservation. Both arms stop BEFORE
+the end update if the converged endpoint increment or F has non-positive determinant.
+
+Four complete-program attempts: observe/match-l from the same pre-step-265
+snapshot, and observe/match-l from t=0, plasticine0_split_keep_clean. All found
+the first inversion at step 267 in cell 6791 (V0/median 0.01105), despite Newton
+convergence. They deliberately stopped there; these are not Newton failures.
+From the snapshot, increment determinant -0.143652 / -0.142914; from t=0,
+-0.307819 / -0.301171. From t=0 the matched run had completed 266 steps with
+max |log(det F)-L| = 8.11e-16 and max isochoric relative change 4.42e-16.
+Before its flipping step, this cell's F singular values were 1.07692, 1.07481,
+1.06443; det F = exp(L) = 1.23206. The new L implied J=0.68670, while endpoint
+F had determinant -0.37106. Thus volumetric drift is not necessary for this
+particular inversion. Post-step scalar correction alone does not prevent it.
+This does not reject a properly derived isochoric-state model with new kinematics.
+
+No abs(det), negative-stretch clamp repair, relaxed tolerance, or smaller time
+step was used. No final shape/runtime benchmark: all attempts stopped at the
+first inverted endpoint. Raw logs, command/code/snapshot hashes, metrics and
+full pre-inversion snapshots:
+`output/discrete_plasticity/batch/plasticine0/f_volume_test_20261107` (absolute
+base `/home/fangsuo/py/dynamic-powerfoam/`). User report and copied logs:
+`C:/Users/not_3/Documents/Codex/2026-11-05/ni-s/outputs/f_volume_test/result.txt`.
+
+
+### 24.10 Step 267 inversion traced (2026-11-07; diagnostics only)
+
+Fixed fresh_match pre-step-267 replay of plasticine0: cell 6791. Independent
+CPU/adjoint/private-forward reconstruction agrees at ~1e-13 to 1e-15. G0 and Ge
+endpoint determinants +1.318 / +1.017; the final wall-flux gradient is -0.301.
+Mc=a=0 for this cell. Dangerous compression eigenvalue -1.183; wall term
+-1.097, tau -0.086. Neighbor 1404's relative motion along that direction is
+1.167 mm, its coefficient -990/m, contribution -1.155. All 20 center-point
+tetrahedra with the six wall neighbors remain positive along the motion chord;
+this is supporting geometry evidence, not proof of a continuum solution.
+
+The previous cut to current cut changes the own-site coefficient norm 222 ->
+2724/m (12.27x), despite cell volume growing 60%. Neighbor 1404's wall weight
+changes .03714 -> 1.09407; other weights are negative. SAME endpoint motion
+read with the old cut gives det +1.3946, with the current cut -0.30118. Both
+operators reproduce their respective saved gradients. This is a kinematic
+counterfactual, not a solved lagged-cut method. The preceding step had moved
+the cell nearly 8 mm vertically. Do not explain this only by shrinking volume.
+
+Pass 1's root was already inverted, triggering C_at's C=I fallback for pass 2.
+Final pass has det(I+G)=+.535 but det(I+2G)=-.301, beta=.00576, L-derived J=.687.
+The frozen objective decreases smoothly across the determinant zero; this is
+not proof of infeasibility in the positive domain. The incremental map flips
+without preexisting F-volume drift. Earlier local speed growth is observed,
+but its energy source is still unassigned. No material/gradient/step change.
+Only fixed empty accepted-step summary statistics after diagnostic stops.
+Full user report: outputs/f_flip_diagnosis/result.txt in the Codex workspace;
+raw large dumps: batch/plasticine0/f_volume_test_20261107/flip_diagnosis.
+
+
+### 24.11 Valid C iteration can rescue the step (2026-11-07; experiment)
+
+User challenged the inference that finite/approximate pressure cannot prevent
+the inversion. Same complete-program pre-step-267 fresh_match snapshot, same
+dt=1/1200 and tol=1e-3. At the original inverted root, rereading C from the valid
+midpoint changes its inferred endpoint J from .687 to .111. Three more original
+Newton iterations with that C move cell 6791's incremental determinant from
+-.301 to +.957, all cells positive. Repeated rereading reaches a positive root
+whose residual remains within tolerance AFTER the final C reread. Thus pressure
+is sufficient in this case; do not claim a barrier/new material is necessary.
+
+Ungarded outer iterations have inverted intermediate iterates. A strict arm
+keeps every accepted endpoint map above det=.05, reads C only before the first
+singularity on its reading path (no identity fallback), refreshes blocks, and
+uses at most 20 original Newton iterations before rereading C. Fixed-C-to-full-
+convergence still stalls at the wall; timely rereading avoids that blockage.
+The final stricter pair preserves Rh/spring beta from the ORIGINAL predictor,
+not the shortened predictor, to isolate that confound. Both repeated trials:
+54 Newton, 867/896 evaluations, 1.091/1.245 s solve time, accepted flips 0,
+6791 endpoint det +.504, final reread residual .000702/.000646 (<.001), normal
+end update executed, min F singular value .846. State not projected afterwards.
+The endpoint displacement chord is also checked. All production physical code
+unchanged; runtime wrapper calls the complete existing driver/Newton kernels.
+
+This is one step, not a full landing or material/energy validation. Residual
+log(det F)-L mismatch about [-.107,+.090] remains. Earlier 12-outer-iteration
+budget was insufficient for C/position consistency; extended 32 bound allowed
+convergence. Do not report the finite-budget runs as nonexistence of a root.
+Data: batch/plasticine0/f_volume_test_20261107/valid_c_tests (initial, extended,
+fixed1/fixed2). User report: Codex workspace outputs/c_valid_read_test/result.txt.
+
+### 24.12 Full valid-C landing attempt (2026-11-07; incomplete)
+
+Complete original driver from t=0, plasticine0_split_keep_clean scene 0, no F
+projection, dt=1/1200 and tol=.001 unchanged. Runtime guard-fixed adapter:
+20 Newton iterations per C chunk, 32 outer solves, accepted det margin .05.
+Submitted steps 1..277 (t=.230833); accepted/committed flips 0, guard breaches 0.
+At step 277 logdetF-L range [-.14908,+.08030], mean abs .0002816, min F sv .843.
+Step 278 reached the outer budget without verified C consistency. Reread 32
+residual .01290; following frozen-C inner root .0003875. These are DIFFERENT
+criteria. The first adapter omitted a final C check AFTER the last budgeted
+inner solve: do not claim that last root was tested and failed consistency.
+Endpoint min det .49568; accepted min in this step .14619. No state committed.
+189 s driver / 215 s process, 20761 counted evaluations incl rejected step;
+other jobs shared the GPU, not a timing benchmark. Physical source hashes stable.
+
+A 128-outer replay with final check added is NOT a valid comparison: restoring
+the step-start snapshot then recutting failed to reproduce geometry. Radius
+solve error 38.1, initial V/target 5.85e-11..39.1; first outer residual 16311
+versus 416 in the continuous run. It submitted zero steps. Do not use that
+replay's failure to conclude that more iterations cannot solve original 278.
+Need in-process frozen-cut/end-iterate capture to test that claim reliably.
+
+User report: Codex outputs/c_valid_full_run/result.txt, exact initial adapter
+hash verified. Raw run: batch/plasticine0/validc_full_20261107; noncomparable
+replay: validc_full_20261107_resume128. No claim of complete landing success.
+
+### 24.13 Remove final C consistency gate; full attempt (2026-11-07)
+
+User requests runnability first, deferring volume/energy evaluation. Runtime
+adapter --accept-frozen-root now accepts convergence with CURRENT frozen C;
+no final reread consistency test. Original two passes, safe C, strict guard,
+material, dt=1/1200, tol=.001, initial state, and L formula unchanged. Additional
+C refreshes only rescue unfinished chunks (20 Newton each; 32 rescues max).
+Full fresh run, not snapshot-resumed: steps 1..281 committed; 278 passed.
+Step 282 genuinely failed CURRENT-C residual: 327.81 versus .001, 660 Newton,
+2627 counted evaluations, 69.2 s solve. Incremental det stuck at margin .05;
+C changes after early rescue rounds down to roundoff. This is wall stagnation,
+not rejection of an already-converged root by the removed consistency gate.
+No feasible-domain nonexistence conclusion. Failed step not committed.
+Zero accepted/committed flips and guard breaches; all submitted residuals within
+original tolerance (max .00098058). Driver 186 s / process 202 s, total 19121
+counted evaluations including failure. Physical source hashes unchanged.
+Report: Codex outputs/c_frozen_accept_run/result.txt. Raw run and snapshot:
+batch/plasticine0/validc_full_20261107_frozen_accept1.
+Volume/energy diagnostics remain logs only, not extra acceptance criteria.
+
+### 24.14 Signed-log inversion return experiment (2026-11-07; failed full run)
+
+Opt-in --inversion-return signed-log; default original. Torch and Warp return
+use log(max(abs(w),1e-6)), retaining the principal stretch signs in returned Fe.
+No F/L projection, force/L/material changes. Original two-pass C, pre-every 1,
+c2-refresh, patch-cg, Newton 300, dt=1/1200, tol=.001. Flip guard off; no outer
+C consistency gate. This is an experimental signed-magnitude return, NOT a
+complete invertible elastoplastic model or validated yield/energy law.
+
+Full fresh plasticine0_split_keep_clean run: 400 steps committed, step 401
+pass 1 fails at normalized residual 1.0002 after 300 Newton. Driver 300 s,
+process 320 s; 315511 counted evaluations. All submitted residuals <.001.
+First inversion at step 267, cell 6791: trial det -.1521869. SAME trial, old
+return det +3.43e-6 (logabsdet loss -10.7015), new return det -.1521869 (loss
+2.4e-15); returned sv old .0196/.0193/.0090 vs new .538/.537/.526.
+Positive-cell Torch outputs identical old/new; inverted-step Torch/Warp F
+relative difference 1e-14. All finite; signs retained. Three inverted cells
+501/938/6791 persist. Return logabsdet error max 1.46e-13, but later trial F
+determinant magnitude grows to 1.90e6. Last frame's extent statistics have
+huge outliers (height 53.4 m, x width 266 m). Not a usable simulation.
+
+The known negative-stretch clamp collapse is eliminated; complete runnability
+and reasonable state evolution are NOT established. Do not report this as
+success or as a full Irving-style invertible material. Default remains original.
+Raw: batch/plasticine0/signed_return_20261107_full1. Codex report/patch/logs:
+outputs/inversion_return_run. Test harness init-stat bug was fixed before full1;
+that aborted setup submitted zero steps. Source checks/hashes recorded.
+
+### 24.5 复核 Codex 的充分搜索（2026-11-07；`k1_krylov.py`、`k1_tangent.py`，`--krylov-tr`，默认关；Codex 结果 `C:\Users\not_3\Documents\Codex\2026-11-05\ni-s\outputs\krylov_trial\`；我的检查 `--replay-mode tangentcheck`，日志 `k1_foam/tanchk_raw.log`）
+- 做法：每个 Newton 点上用预条件 Lanczos（全重正交化两遍）建 Krylov 空间，在三对角上精确解信赖域子问题（Moré–Sorensen，含 hard case），被拒的试探在同一点上复用该空间只换半径；接受或重读 C 时作废；乘积用 GPU 上的解析 Hessian 向量积（k1_tangent），不再差分。CG 撞上限时退到 6 格联合块。外层接受规则（真实能量、ρ）不变。
+- 我的切线核对（pre1run 第 373 步快照，20 次 Newton 后；屈服 7443、接触 452、极小 222）：解析 H v 对中心差分的相对差，h = 1e-7 / 1e-8 / 1e-9 依次 3e-4 / 3e-6 / 4e-8（随 h² 下降，即差分自身截断误差；解析切线精确到 ≤ 4e-8），随机、屈服格、接触格、极小格、梯度方向都一样；u·Hw 与 w·Hu 相同到 7 位。最大误差行是 4969、170（行范数 2.6e5，最刚的两格），仍在截断量级。之前测到的差分乘积在刚方向上的 5e-3 误差（§23.8）在解析乘积里不存在。
+- Codex 的单步回放：plasticine8 失败步原方案 3 次过 1 次，新搜索 3/3（28–33 次 Newton）；cat473 Newton 186 → 24；pre1373、cat289 都过；外层残差都在容差内。新搜索每个难步更慢：0.67 → 2.37 s、1.6 → 2.1 s、2.1 → 3.6 s。
+- Codex 的 cat 全程：手动中断于第 403 步（未跑完），无失败；到 t 0.333 墙钟 246 s 对原版 237 s；第 9 帧与原版相同（高度 0.274）；漂移最小值 −3.18 对 −3.78，|.| > 0.1 的格数相同（21–23）。即：新搜索不改变极小格的翻转/漂移，它只让难步更稳地解出来。
+- 服务器整段（seetacloud A800，`/root/autodl-tmp/plasticine-k1`，环境 lion：torch 2.9.1 + cu128、warp 1.10.0，与本机同；只传了代码和该 foam，MPM 真值不上传）：plasticine8 + `--krylov-tr`，其余同批量配置，**750 步跑通**，986 s（本机前两次同配置无新搜索分别在第 289、332 步失败）；Newton 每步中位 29、最大 133，乘积 170 万。末帧（MPM 由本机补算）：高度 0.160 对 0.161，x 宽 0.690 对 0.710，z 宽 0.734 对 0.717，Chamfer（中心点）5.8 / 10.9 mm。漂移 min −0.61、max +0.56，|.| > 0.1 的格较少。单次运行：仍不足以说明失败率。帧：`batch/plasticine8/server/`，已加入画廊。
+- 本机 `--krylov-tr` 补跑（11-07，`run_batch_retry.sh`，RETRY=kry）：plasticine7 跑通 930 s（前两次第 281、369 步失败），末帧高度 0.166 对 0.163、x 宽 0.666 对 0.722；plasticine0 跑通 1028 s（前两次第 331、499 步），x 宽 0.755 对 0.767、z 0.769 对 0.764；plasticine4 跑通 2024 s（前两次第 337、328 步），但撞击时（t 0.25–0.41）有 45 格被甩出（体积 0.3 %，含 V0 / 中位 2–5 的格），之后约 7 m/s 外飞，末帧外沿高 1.52 / x 宽 3.16（MPM 0.091 / 0.887），质心差 1 cm、Chamfer 9.2 mm。至此 12 个场景都有跑通的结果，全部进画廊（plasticine4 带飞出格）。三个补跑各一次：只说明新搜索能让它们过，不说明失败率。
