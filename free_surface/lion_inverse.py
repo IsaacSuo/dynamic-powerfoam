@@ -237,6 +237,7 @@ def load_foam():
 
 # ---------------------------------------------------------------- one forward
 CHAIN = 0                                                                          # (--chain 1: ClosureWarp.set_chain, the rigid chain cells)
+NEWTON_MAX = int(os.environ.get('NEWTON_MAX', '50'))                               # (MidpointStep's Newton cap per step; 11-07 the 30k foam: 200)
 DRAG = 0.                                                                          # (--drag s > 0: the ground's tangential force without memory, k_t x s)
 GLUE = 'site'                                                                     # (--glue-point: where the ground's glue holds a cell, ClosureWarp.set_glue_point)
 SHAPE = 'rigid'                                                                    # (--ball-shape: the ground's normal contact ball, ClosureWarp.set_ball_shape)
@@ -321,7 +322,7 @@ def forward(theta, frames, tol=1e-3, save_frames=False, verbose=True, on_step=No
     W.visc_ref(Xe)
     W.tball[0], W.tball[1] = 2., .5
     fg_e = W.ext(fg)
-    CG = TrustCG(W, mass_e, DT, per=2, product_iters=1); ST = MidpointStep(W, CG, mass_e, Kbb, fg_e, DT, MU)
+    CG = TrustCG(W, mass_e, DT, per=2, product_iters=1); ST = MidpointStep(W, CG, mass_e, Kbb, fg_e, DT, MU, newton_max=NEWTON_MAX)
     ST.smooth_pred = ST.carry_delta = True                                           # (dem_old1's: the same solution, faster)
     if DRAG > 0:
         ST.glue_memory, ST.glue_scale = False, DRAG
