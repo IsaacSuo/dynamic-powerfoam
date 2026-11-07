@@ -2,30 +2,35 @@
   "date": "2026-11-07",
   "branch": "solid-fv-ale",
   "baseline_commit": "534b163c545c5df44abb4e3d9a3ce0ab5da0bdbd",
-  "status": "INTEGRATION_TRIAL_ONLY_NOT_SOLID_SOLVER",
+  "status": "FAILED_INITIAL_CONTACT_TRIAL_NOT_VALIDATED_SOLID_SOLVER",
   "constraint": "Keep exact current power-diagram intersected with balls. No Cartesian, tetrahedral or hexahedral replacement.",
   "implemented": [
     "production-geometry to FV control-volume adapter including curved caps",
     "instantaneous ALE mesh volume flux on shared radical planes and spherical caps",
     "donor-cell conservative remap of extensive scalar/vector channels through moving internal faces",
-    "full existing merged_drop scene-loader integration behind --fv-ale-remap-check"
+    "full existing merged_drop scene-loader integration behind --fv-ale-remap-check",
+    "Full merged_drop integration behind --fv-ale, using the same foam/scene/material input",
+    "First-order cell-centred acoustic ALE flux and SSPRK2 with actual re-cut geometry at both stages",
+    "Wilkins/Jaumann deviatoric stress and perfect von Mises return; no F or L is evolved",
+    "Mass / actual cut volume gives density; stiffened-gas EOS gamma=2 initially matches bulk modulus",
+    "Integrated spherical-cap velocity condition, with measured pointwise mismatch",
+    "Conservative removal of tiny buried cells using exact volume gains; domain and channel-conservation checks",
+    "Snapshots, original IDs across removal, step/cost records and state inspection"
   ],
   "not_implemented": [
-    "solid traction/Riemann solver and stress/plastic history evolution",
-    "material free-boundary evolution and treatment of exposed-cap flux",
-    "contact/friction in the new mechanics",
-    "finite-step GCL exactness (current SSPRK2 converges but is not exact)",
-    "cell disappearance/creation in transport",
-    "full landing under the new model"
+    "Validated contact traction on the actual exposed boundary",
+    "General boundary-cell disappearance/creation with controlled shape error and conservative remap",
+    "Pointwise-compatible spherical free-boundary kinematics",
+    "Exact finite-step geometric conservation law",
+    "Full 0.625 s landing, MPM comparison, mesh/time convergence or speed optimization"
   ],
   "test_limitations": [
-    "Only 42 / 79 deeply buried generators move, within full 7690 / 7898-cell foams. Exterior held fixed.",
-    "Passive conserved-channel transfer is not constitutive/energy-work validation.",
-    "Remap substeps parameterize a fictitious rezoning path; they are not physical-time steps or landing timing.",
-    "No speed, stability or deformation-quality conclusion for full solid ALE."
+    "Conservation, covariance and short pulse checks do not validate the whole solid model.",
+    "All full landing attempts failed early in contact; no final shape or whole-run timing is available.",
+    "Common-state continuations start at t=0.192733959 from the initial dilate-radius trial; not independent runs from t=0."
   ],
   "python": "/home/fangsuo/anaconda3/envs/om/bin/python",
-  "command_template": "PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python -u free_surface/merged_drop.py --foam foams/FOAM --save output/ale --tag TAG --fv-ale-remap-check",
+  "command_template": "PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python free_surface/merged_drop.py --foam foams/fourier8k_clean --save output/ale --tag repro --fv-ale --fv-legacy-ball-contact --fv-derefine --fv-resume output/ale/fv_state_solid_clean.pt --fv-steps 10000 --fv-budget 180",
   "baseline_smoke": {
     "steps": 2,
     "command": "--foam foams/fourier8k_clean --steps 2 --c-two-pass --pre-every 1 --c2-refresh --patch-cg",
@@ -40,272 +45,840 @@
     "foams/plasticine0_split_keep_clean/dem_exact_single/geometry.npz": "99fd1cc60161bfc85dd12764d053bd132370c0f3f37fc66458604465d778b75e",
     "foams/plasticine0_split_keep_clean/plasticine_scenes.json": "0fe7329d59fc0fb342860927403c453c1761f4adb1e6ae5eae62e2ca862769fc"
   },
-  "results": {
-    "clean": {
-      "scope": "geometry + pure remap only; solid dynamics NOT implemented",
-      "foam": "foams/fourier8k_clean",
-      "scene": 0,
-      "cells": 7690,
-      "wall_count": 50631,
-      "median_cell_length_m": 0.014775659770167489,
-      "surface_closure_relative_max": 3.3911531160426016e-14,
-      "dV_finite_difference": [
-        {
-          "epsilon": 0.0001,
-          "relative_l2": 4.2821530782591634e-08,
-          "max_error_per_cell_volume": 1.843971593914731e-05
+  "references": [
+    "https://arxiv.org/abs/1905.00967",
+    "https://doi.org/10.1016/j.compfluid.2020.104592",
+    "https://guisset.perso.math.cnrs.fr/Articles/elasto_multimat.pdf",
+    "https://wwwmpa.mpa-garching.mpg.de/~volker/arepo/arepo_paper.pdf",
+    "https://doi.org/10.1016/j.camwa.2026.06.015"
+  ],
+  "interpretation": [
+    "Both interior dilation and fixed-radius controls reached a buried-cell collapse and vanishing stable dt.",
+    "Conservative removal of cell 7610 preserved domain and extensive quantities and crossed that failure point.",
+    "Next failure: t=0.199544481 s, about 9.15 ms after first contact, almost empty exposed cell 3502.",
+    "Its sphere bottom is covered by sphere 6130, but inherited contact applies 2.90 N to about 2.2e-14 kg. This is an incorrect boundary adaptation, not evidence that FV/ALE cannot work.",
+    "Removing this spurious force alone has not been tested; it would not establish a solution for boundary-cell collapse.",
+    "Pre-collapse dt about 2.34e-6 s, around 356 steps per old 1/1200 s step. Measured step cost about 43-53 ms; not a whole-run speed claim.",
+    "Contact/free-boundary coupling needs a validated formulation before further landing or performance claims."
+  ],
+  "geometry_remap_previous_stage": {
+    "results": {
+      "clean": {
+        "scope": "geometry + pure remap only; solid dynamics NOT implemented",
+        "foam": "foams/fourier8k_clean",
+        "scene": 0,
+        "cells": 7690,
+        "wall_count": 50631,
+        "median_cell_length_m": 0.014775659770167489,
+        "surface_closure_relative_max": 3.3911531160426016e-14,
+        "dV_finite_difference": [
+          {
+            "epsilon": 0.0001,
+            "relative_l2": 4.2821530782591634e-08,
+            "max_error_per_cell_volume": 1.843971593914731e-05
+          },
+          {
+            "epsilon": 3e-05,
+            "relative_l2": 5.551887320982204e-09,
+            "max_error_per_cell_volume": 1.662495999641888e-06
+          },
+          {
+            "epsilon": 1e-05,
+            "relative_l2": 3.125778030166117e-08,
+            "max_error_per_cell_volume": 1.0040203046406566e-06
+          }
+        ],
+        "translation_volume_relative_max": 1.9118894114526273e-12,
+        "translation_relative_wall_flux_max": 2.541098841762901e-20,
+        "cap_affine_flux_independent_relative_l2": 3.028928952621491e-14,
+        "affine_divergence_relative_max": 4.693702780203533e-11,
+        "moving_exterior_rejected": true,
+        "moving_exterior_message": "remap needs exterior boundary transport; caps are moving: relative=0.888264 cell=3553 area=0.0034267",
+        "isotropic_dilation_relative_flux_max": 2.439454888092385e-19,
+        "rezone_max_site_displacement_m": 0.0010010591694964615,
+        "rezone_amplitude_halvings": 0,
+        "remap_moving_sites": 42,
+        "remap_walls_removed": 8,
+        "remap_walls_added": 11,
+        "remap_domain_volume_change_relative": 0.0,
+        "without_remap_density_error": {
+          "0.0": 0.0,
+          "0.5": 0.0,
+          "0.99": 0.006201625700854865,
+          "1.0": 0.0284032520154629
         },
-        {
-          "epsilon": 3e-05,
-          "relative_l2": 5.551887320982204e-09,
-          "max_error_per_cell_volume": 1.662495999641888e-06
+        "remap_refinement": [
+          {
+            "substeps": 8,
+            "seconds": 0.14182400000208872,
+            "conservation_relative_by_channel": [
+              0.0,
+              1.1980215692893368e-16,
+              1.1980215692893368e-16,
+              0.0,
+              0.0,
+              1.6229312111524456e-16
+            ],
+            "uniform_density_error_max": 8.224239781418063e-07,
+            "uniform_density_error_l2": 1.9048174475074547e-08,
+            "tracer_range": [
+              0.4232321893302504,
+              0.6999240442992744
+            ],
+            "tracer_initial_range": [
+              0.4232321893302504,
+              0.6999240442992744
+            ],
+            "exposed_cap_swept_flux_l1_max": 0.0
+          },
+          {
+            "substeps": 16,
+            "seconds": 0.2995445289998315,
+            "conservation_relative_by_channel": [
+              0.0,
+              1.1980215692893368e-16,
+              1.1980215692893368e-16,
+              0.0,
+              0.0,
+              3.245862422304891e-16
+            ],
+            "uniform_density_error_max": 2.0426851987664918e-07,
+            "uniform_density_error_l2": 4.743644409005605e-09,
+            "tracer_range": [
+              0.4232321893302504,
+              0.6999240442992744
+            ],
+            "tracer_initial_range": [
+              0.4232321893302504,
+              0.6999240442992744
+            ],
+            "exposed_cap_swept_flux_l1_max": 0.0
+          },
+          {
+            "substeps": 32,
+            "seconds": 0.5813796289985476,
+            "conservation_relative_by_channel": [
+              0.0,
+              1.1980215692893368e-16,
+              1.1980215692893368e-16,
+              1.5973620923857824e-16,
+              0.0,
+              1.6229312111524456e-16
+            ],
+            "uniform_density_error_max": 5.1005308643325975e-08,
+            "uniform_density_error_l2": 1.1844571408240881e-09,
+            "tracer_range": [
+              0.4232321893302504,
+              0.6999240442992744
+            ],
+            "tracer_initial_range": [
+              0.4232321893302504,
+              0.6999240442992744
+            ],
+            "exposed_cap_swept_flux_l1_max": 0.0
+          }
+        ],
+        "seconds": 2.011179157998413,
+        "checks": {
+          "moving_exterior_guard": true,
+          "closure": true,
+          "rigid_translation": true,
+          "geometric_derivative": true,
+          "cap_moment": true,
+          "changed_neighbours": true,
+          "fixed_domain": true,
+          "conservation": true,
+          "uniform_density_converges": true,
+          "positive_bounded_tracer": true
         },
-        {
-          "epsilon": 1e-05,
-          "relative_l2": 3.125778030166117e-08,
-          "max_error_per_cell_volume": 1.0040203046406566e-06
-        }
-      ],
-      "translation_volume_relative_max": 1.9118894114526273e-12,
-      "translation_relative_wall_flux_max": 2.541098841762901e-20,
-      "cap_affine_flux_independent_relative_l2": 3.028928952621491e-14,
-      "affine_divergence_relative_max": 4.693702780203533e-11,
-      "moving_exterior_rejected": true,
-      "moving_exterior_message": "remap needs exterior boundary transport; caps are moving: relative=0.888264 cell=3553 area=0.0034267",
-      "isotropic_dilation_relative_flux_max": 2.439454888092385e-19,
-      "rezone_max_site_displacement_m": 0.0010010591694964615,
-      "rezone_amplitude_halvings": 0,
-      "remap_moving_sites": 42,
-      "remap_walls_removed": 8,
-      "remap_walls_added": 11,
-      "remap_domain_volume_change_relative": 0.0,
-      "without_remap_density_error": {
-        "0.0": 0.0,
-        "0.5": 0.0,
-        "0.99": 0.006201625700854865,
-        "1.0": 0.0284032520154629
+        "passed": true
       },
-      "remap_refinement": [
-        {
-          "substeps": 8,
-          "seconds": 0.14182400000208872,
-          "conservation_relative_by_channel": [
-            0.0,
-            1.1980215692893368e-16,
-            1.1980215692893368e-16,
-            0.0,
-            0.0,
-            1.6229312111524456e-16
-          ],
-          "uniform_density_error_max": 8.224239781418063e-07,
-          "uniform_density_error_l2": 1.9048174475074547e-08,
-          "tracer_range": [
-            0.4232321893302504,
-            0.6999240442992744
-          ],
-          "tracer_initial_range": [
-            0.4232321893302504,
-            0.6999240442992744
-          ],
-          "exposed_cap_swept_flux_l1_max": 0.0
+      "split0": {
+        "scope": "geometry + pure remap only; solid dynamics NOT implemented",
+        "foam": "foams/plasticine0_split_keep_clean",
+        "scene": 0,
+        "cells": 7898,
+        "wall_count": 53792,
+        "median_cell_length_m": 0.013426632537252726,
+        "surface_closure_relative_max": 8.150610340175966e-15,
+        "dV_finite_difference": [
+          {
+            "epsilon": 0.0001,
+            "relative_l2": 7.740368841817674e-08,
+            "max_error_per_cell_volume": 1.7786270740061052e-05
+          },
+          {
+            "epsilon": 3e-05,
+            "relative_l2": 8.005367731217817e-09,
+            "max_error_per_cell_volume": 1.9294110599099684e-06
+          },
+          {
+            "epsilon": 1e-05,
+            "relative_l2": 1.3009572488364216e-08,
+            "max_error_per_cell_volume": 1.0485943651916154e-06
+          }
+        ],
+        "translation_volume_relative_max": 7.203198017820695e-14,
+        "translation_relative_wall_flux_max": 6.776263578034403e-21,
+        "cap_affine_flux_independent_relative_l2": 7.636946037969857e-15,
+        "affine_divergence_relative_max": 2.6760185525836778e-12,
+        "moving_exterior_rejected": true,
+        "moving_exterior_message": "remap needs exterior boundary transport; caps are moving: relative=0.700837 cell=3312 area=0.00186541",
+        "isotropic_dilation_relative_flux_max": 2.168404344971009e-19,
+        "rezone_max_site_displacement_m": 0.0008793620846743001,
+        "rezone_amplitude_halvings": 0,
+        "remap_moving_sites": 79,
+        "remap_walls_removed": 20,
+        "remap_walls_added": 19,
+        "remap_domain_volume_change_relative": 0.0,
+        "without_remap_density_error": {
+          "0.0": 0.0,
+          "0.5": 0.0,
+          "0.99": 0.014496674818888017,
+          "1.0": 0.19522798803668273
         },
-        {
-          "substeps": 16,
-          "seconds": 0.2995445289998315,
-          "conservation_relative_by_channel": [
-            0.0,
-            1.1980215692893368e-16,
-            1.1980215692893368e-16,
-            0.0,
-            0.0,
-            3.245862422304891e-16
-          ],
-          "uniform_density_error_max": 2.0426851987664918e-07,
-          "uniform_density_error_l2": 4.743644409005605e-09,
-          "tracer_range": [
-            0.4232321893302504,
-            0.6999240442992744
-          ],
-          "tracer_initial_range": [
-            0.4232321893302504,
-            0.6999240442992744
-          ],
-          "exposed_cap_swept_flux_l1_max": 0.0
+        "remap_refinement": [
+          {
+            "substeps": 8,
+            "seconds": 0.1559949799993774,
+            "conservation_relative_by_channel": [
+              0.0,
+              1.3069900940623393e-16,
+              1.3069900940623393e-16,
+              1.7426534587497855e-16,
+              0.0,
+              1.7634061448812693e-16
+            ],
+            "uniform_density_error_max": 1.559528878480876e-05,
+            "uniform_density_error_l2": 2.420308155487358e-07,
+            "tracer_range": [
+              0.4088713410643383,
+              0.6999772419337464
+            ],
+            "tracer_initial_range": [
+              0.4088713410643383,
+              0.6999772419337464
+            ],
+            "exposed_cap_swept_flux_l1_max": 0.0
+          },
+          {
+            "substeps": 16,
+            "seconds": 0.3003106360010861,
+            "conservation_relative_by_channel": [
+              0.0,
+              0.0,
+              0.0,
+              1.7426534587497855e-16,
+              0.0,
+              0.0
+            ],
+            "uniform_density_error_max": 3.833095275407317e-06,
+            "uniform_density_error_l2": 5.989563241644586e-08,
+            "tracer_range": [
+              0.4088713410643383,
+              0.6999772419337464
+            ],
+            "tracer_initial_range": [
+              0.4088713410643383,
+              0.6999772419337464
+            ],
+            "exposed_cap_swept_flux_l1_max": 0.0
+          },
+          {
+            "substeps": 32,
+            "seconds": 0.6078940900006273,
+            "conservation_relative_by_channel": [
+              0.0,
+              1.3069900940623393e-16,
+              1.3069900940623393e-16,
+              3.485306917499571e-16,
+              0.0,
+              0.0
+            ],
+            "uniform_density_error_max": 9.451032894070011e-07,
+            "uniform_density_error_l2": 1.4850035557389841e-08,
+            "tracer_range": [
+              0.4088713410643383,
+              0.6999772419337464
+            ],
+            "tracer_initial_range": [
+              0.4088713410643383,
+              0.6999772419337464
+            ],
+            "exposed_cap_swept_flux_l1_max": 0.0
+          }
+        ],
+        "seconds": 2.054655128002196,
+        "checks": {
+          "moving_exterior_guard": true,
+          "closure": true,
+          "rigid_translation": true,
+          "geometric_derivative": true,
+          "cap_moment": true,
+          "changed_neighbours": true,
+          "fixed_domain": true,
+          "conservation": true,
+          "uniform_density_converges": true,
+          "positive_bounded_tracer": true
         },
-        {
-          "substeps": 32,
-          "seconds": 0.5813796289985476,
-          "conservation_relative_by_channel": [
-            0.0,
-            1.1980215692893368e-16,
-            1.1980215692893368e-16,
-            1.5973620923857824e-16,
-            0.0,
-            1.6229312111524456e-16
-          ],
-          "uniform_density_error_max": 5.1005308643325975e-08,
-          "uniform_density_error_l2": 1.1844571408240881e-09,
-          "tracer_range": [
-            0.4232321893302504,
-            0.6999240442992744
-          ],
-          "tracer_initial_range": [
-            0.4232321893302504,
-            0.6999240442992744
-          ],
-          "exposed_cap_swept_flux_l1_max": 0.0
-        }
-      ],
-      "seconds": 2.011179157998413,
+        "passed": true
+      }
+    },
+    "scope": "Geometry and pure remap only, before solid implementation"
+  },
+  "physical_step_authorization": "User permits smaller stable physical steps for this trial, with actual dt and cost reported. Output cadence remains 1/24 s.",
+  "important_model_differences": [
+    "Experimental adaptation, NOT reproduction of the referenced mature polyhedral solid solver.",
+    "EOS differs from k1 logarithmic volume energy. Matching E, nu and yield stress does not imply equivalent trajectories.",
+    "Scalar impedance is also used for shear dissipation; not an exact elastic characteristic solver.",
+    "Free caps satisfy impermeability only in integrated P0 sense; pointwise mismatch is nonzero.",
+    "Inherited Hertz-ball contact is KNOWN INVALID for disappearing FV cells. Retained behind --fv-legacy-ball-contact only for diagnostic reproduction.",
+    "Total energy balance checks the conserved channel and external work, not a constitutive free-energy/entropy identity.",
+    "Inactive original frame slots have mass=radius=0 and NaN fields. Consumers must filter mass>0; old rendering with this format is not validated."
+  ],
+  "mechanics_checks": {
+    "clean": {
+      "foam": "foams/fourier8k_clean",
+      "cells": 7690,
       "checks": {
-        "moving_exterior_guard": true,
-        "closure": true,
-        "rigid_translation": true,
-        "geometric_derivative": true,
-        "cap_moment": true,
-        "changed_neighbours": true,
-        "fixed_domain": true,
-        "conservation": true,
-        "uniform_density_converges": true,
-        "positive_bounded_tracer": true
+        "uniform_translation": true,
+        "pairwise_conservation": true,
+        "rotation_covariance": true,
+        "plastic_return": true,
+        "twenty_step_pulse": true,
+        "conservative_derefinement": true
+      },
+      "translation_rhs_max": 1.5863149012479777e-10,
+      "translation_radius_rate_max": 3.7959396004999445e-15,
+      "translation_velocity_error": 1.4432899320127035e-15,
+      "translation_density_error": 1.8318679906315083e-13,
+      "closed_domain_mass_rate": -2.220446049250313e-16,
+      "internal_force_sum": [
+        6.661338147750939e-16,
+        -6.661338147750939e-16,
+        6.661338147750939e-16
+      ],
+      "internal_energy_rate": 0.0,
+      "cap_integrated_flux_defect": 4.795688814966429e-20,
+      "rotation_force_relative_error": 2.5798619314778437e-10,
+      "rotation_stress_rate_relative_error": 2.1754420465985635e-10,
+      "rotation_radius_rate_relative_error": 8.34003643664402e-10,
+      "returned_von_mises_max": 1553.9070362595846,
+      "yield_stress": 1553.907036259584,
+      "plastic_work_min": 1.9803449698361265e-05,
+      "plastic_energy_channel_change": 0.0,
+      "pulse_mass_error": 0.0,
+      "pulse_total_energy_error": 0.0,
+      "pulse_dt_range": [
+        1.1696453808406155e-06,
+        1.1696555462404389e-06
+      ],
+      "pulse_density_range": [
+        999.8366636202712,
+        1000.1086481292264
+      ],
+      "pulse_cap_mismatch": {
+        "sample_count": 512,
+        "sampled_area": 0.7529222351190392,
+        "rms_normal_speed_mismatch": 0.005266732762948125,
+        "max_normal_speed_mismatch": 0.026628511841096984
+      },
+      "derefine_check": {
+        "local_index": 7524,
+        "volume": 5.611878249460307e-09,
+        "mass": 5.611731844132159e-06,
+        "volume_partition_defect": 1.3593944091829164e-11,
+        "negative_gain_relative": 1.7215782569434263e-10,
+        "conservation_relative_max": 1.6826299955189525e-16,
+        "uniform_density_error_max": 9.561240688071848e-13,
+        "receiving_cells": 6,
+        "cells_after": 7689,
+        "continued_mass_error": 0.0,
+        "continued_energy_error": 0.0
       },
       "passed": true
     },
     "split0": {
-      "scope": "geometry + pure remap only; solid dynamics NOT implemented",
       "foam": "foams/plasticine0_split_keep_clean",
-      "scene": 0,
       "cells": 7898,
-      "wall_count": 53792,
-      "median_cell_length_m": 0.013426632537252726,
-      "surface_closure_relative_max": 8.150610340175966e-15,
-      "dV_finite_difference": [
-        {
-          "epsilon": 0.0001,
-          "relative_l2": 7.740368841817674e-08,
-          "max_error_per_cell_volume": 1.7786270740061052e-05
-        },
-        {
-          "epsilon": 3e-05,
-          "relative_l2": 8.005367731217817e-09,
-          "max_error_per_cell_volume": 1.9294110599099684e-06
-        },
-        {
-          "epsilon": 1e-05,
-          "relative_l2": 1.3009572488364216e-08,
-          "max_error_per_cell_volume": 1.0485943651916154e-06
-        }
-      ],
-      "translation_volume_relative_max": 7.203198017820695e-14,
-      "translation_relative_wall_flux_max": 6.776263578034403e-21,
-      "cap_affine_flux_independent_relative_l2": 7.636946037969857e-15,
-      "affine_divergence_relative_max": 2.6760185525836778e-12,
-      "moving_exterior_rejected": true,
-      "moving_exterior_message": "remap needs exterior boundary transport; caps are moving: relative=0.700837 cell=3312 area=0.00186541",
-      "isotropic_dilation_relative_flux_max": 2.168404344971009e-19,
-      "rezone_max_site_displacement_m": 0.0008793620846743001,
-      "rezone_amplitude_halvings": 0,
-      "remap_moving_sites": 79,
-      "remap_walls_removed": 20,
-      "remap_walls_added": 19,
-      "remap_domain_volume_change_relative": 0.0,
-      "without_remap_density_error": {
-        "0.0": 0.0,
-        "0.5": 0.0,
-        "0.99": 0.014496674818888017,
-        "1.0": 0.19522798803668273
-      },
-      "remap_refinement": [
-        {
-          "substeps": 8,
-          "seconds": 0.1559949799993774,
-          "conservation_relative_by_channel": [
-            0.0,
-            1.3069900940623393e-16,
-            1.3069900940623393e-16,
-            1.7426534587497855e-16,
-            0.0,
-            1.7634061448812693e-16
-          ],
-          "uniform_density_error_max": 1.559528878480876e-05,
-          "uniform_density_error_l2": 2.420308155487358e-07,
-          "tracer_range": [
-            0.4088713410643383,
-            0.6999772419337464
-          ],
-          "tracer_initial_range": [
-            0.4088713410643383,
-            0.6999772419337464
-          ],
-          "exposed_cap_swept_flux_l1_max": 0.0
-        },
-        {
-          "substeps": 16,
-          "seconds": 0.3003106360010861,
-          "conservation_relative_by_channel": [
-            0.0,
-            0.0,
-            0.0,
-            1.7426534587497855e-16,
-            0.0,
-            0.0
-          ],
-          "uniform_density_error_max": 3.833095275407317e-06,
-          "uniform_density_error_l2": 5.989563241644586e-08,
-          "tracer_range": [
-            0.4088713410643383,
-            0.6999772419337464
-          ],
-          "tracer_initial_range": [
-            0.4088713410643383,
-            0.6999772419337464
-          ],
-          "exposed_cap_swept_flux_l1_max": 0.0
-        },
-        {
-          "substeps": 32,
-          "seconds": 0.6078940900006273,
-          "conservation_relative_by_channel": [
-            0.0,
-            1.3069900940623393e-16,
-            1.3069900940623393e-16,
-            3.485306917499571e-16,
-            0.0,
-            0.0
-          ],
-          "uniform_density_error_max": 9.451032894070011e-07,
-          "uniform_density_error_l2": 1.4850035557389841e-08,
-          "tracer_range": [
-            0.4088713410643383,
-            0.6999772419337464
-          ],
-          "tracer_initial_range": [
-            0.4088713410643383,
-            0.6999772419337464
-          ],
-          "exposed_cap_swept_flux_l1_max": 0.0
-        }
-      ],
-      "seconds": 2.054655128002196,
       "checks": {
-        "moving_exterior_guard": true,
-        "closure": true,
-        "rigid_translation": true,
-        "geometric_derivative": true,
-        "cap_moment": true,
-        "changed_neighbours": true,
-        "fixed_domain": true,
-        "conservation": true,
-        "uniform_density_converges": true,
-        "positive_bounded_tracer": true
+        "uniform_translation": true,
+        "pairwise_conservation": true,
+        "rotation_covariance": true,
+        "plastic_return": true,
+        "twenty_step_pulse": true,
+        "conservative_derefinement": true
+      },
+      "translation_rhs_max": 8.91082524310751e-11,
+      "translation_radius_rate_max": 1.897969800251228e-15,
+      "translation_velocity_error": 5.551115123125783e-17,
+      "translation_density_error": 4.440892098500626e-16,
+      "closed_domain_mass_rate": -5.551115123125783e-17,
+      "internal_force_sum": [
+        1.4432899320127035e-15,
+        -8.881784197001252e-16,
+        -4.440892098500626e-16
+      ],
+      "internal_energy_rate": 7.105427357601002e-15,
+      "cap_integrated_flux_defect": 5.473330036171501e-20,
+      "rotation_force_relative_error": 3.063887589793993e-10,
+      "rotation_stress_rate_relative_error": 3.049980417954214e-10,
+      "rotation_radius_rate_relative_error": 6.632215362746292e-08,
+      "returned_von_mises_max": 1553.9070362595844,
+      "yield_stress": 1553.907036259584,
+      "plastic_work_min": 4.600950233234822e-05,
+      "plastic_energy_channel_change": 0.0,
+      "pulse_mass_error": 0.0,
+      "pulse_total_energy_error": 0.0,
+      "pulse_dt_range": [
+        1.8185520796672097e-06,
+        1.8200470109223098e-06
+      ],
+      "pulse_density_range": [
+        999.8355087865993,
+        1000.2214613268561
+      ],
+      "pulse_cap_mismatch": {
+        "sample_count": 512,
+        "sampled_area": 0.7478719126212103,
+        "rms_normal_speed_mismatch": 0.006283211298989855,
+        "max_normal_speed_mismatch": 0.02670309762854442
+      },
+      "derefine_check": {
+        "local_index": 7587,
+        "volume": 2.438291424872517e-08,
+        "mass": 2.438087960498121e-05,
+        "volume_partition_defect": 8.961522334166114e-13,
+        "negative_gain_relative": 2.9316689425200636e-11,
+        "conservation_relative_max": 1.8356770246558687e-16,
+        "uniform_density_error_max": 2.502442697505103e-13,
+        "receiving_cells": 5,
+        "cells_after": 7897,
+        "continued_mass_error": 0.0,
+        "continued_energy_error": 0.0
       },
       "passed": true
     }
   },
-  "references": [
-    "https://arxiv.org/abs/1905.00967",
-    "https://doi.org/10.1016/j.compfluid.2020.104592",
-    "https://guisset.perso.math.cnrs.fr/Articles/elasto_multimat.pdf"
-  ],
-  "interpretation": "These references motivate ALE/FV; this adapter is not claimed to reproduce their complete solid scheme. Keeping curved spherical cells still requires a justified free-boundary/constitutive coupling."
+  "contact_trials": {
+    "solid_clean": {
+      "status": "budget_stopped_not_complete",
+      "time_reached": 0.19273395898539772,
+      "physical_steps": 1000,
+      "rejected_attempts": 0,
+      "dt_min": 2.339337756904311e-06,
+      "dt_max": 2.3393377600167865e-06,
+      "wall_seconds": 44.36984389499776,
+      "mass_relative_error": 0.0,
+      "energy_source_balance_error": -8.606195763058093e-16,
+      "final_cap_mismatch": {
+        "sample_count": 512,
+        "sampled_area": 0.7529239598320265,
+        "rms_normal_speed_mismatch": 0.001876579716742444,
+        "max_normal_speed_mismatch": 0.061061761293539726
+      },
+      "report": "output/ale/fv_solid_solid_clean.json"
+    },
+    "solid_clean_cont": {
+      "status": "failed",
+      "start_time": 0.19273395898539772,
+      "time_reached": 0.19605439969128272,
+      "physical_steps": 2680,
+      "rejected_attempts": 457,
+      "dt_min": 2.538703121293391e-13,
+      "dt_max": 2.3393377635056097e-06,
+      "wall_seconds": 134.8542517599999,
+      "mass_relative_error": -3.8336690217258784e-16,
+      "energy_source_balance_error": -5.295744324654497e-15,
+      "final_cap_mismatch": {
+        "sample_count": 512,
+        "sampled_area": 0.7524791390903083,
+        "rms_normal_speed_mismatch": 0.0018773625852007757,
+        "max_normal_speed_mismatch": 0.05186604555477231
+      },
+      "failure": "RuntimeError('physical dt below 1e-12; not advanced')",
+      "report": "output/ale/fv_solid_solid_clean_cont.json"
+    },
+    "solid_fixed": {
+      "status": "failed",
+      "start_time": 0.19273395898539772,
+      "time_reached": 0.19626284422621337,
+      "physical_steps": 2296,
+      "rejected_attempts": 9,
+      "dt_min": 8.772616932230772e-12,
+      "dt_max": 2.339337760000333e-06,
+      "wall_seconds": 110.12870605500211,
+      "mass_relative_error": -3.8336690217258784e-16,
+      "energy_source_balance_error": -8.557296923495263e-17,
+      "final_cap_mismatch": {
+        "sample_count": 512,
+        "sampled_area": 0.7524613896205328,
+        "rms_normal_speed_mismatch": 0.0018824366112381984,
+        "max_normal_speed_mismatch": 0.051229421820462806
+      },
+      "failure": "RuntimeError('physical dt below 1e-12; not advanced')",
+      "report": "output/ale/fv_solid_solid_fixed.json"
+    },
+    "solid_derefine": {
+      "status": "failed",
+      "start_time": 0.19273395898539772,
+      "time_reached": 0.19954448125612365,
+      "physical_steps": 3020,
+      "rejected_attempts": 5,
+      "dt_min": 1.4850731914757183e-12,
+      "dt_max": 2.339337760000333e-06,
+      "wall_seconds": 150.02981796200038,
+      "mass_relative_error": 0.0,
+      "energy_source_balance_error": -1.266479944677299e-15,
+      "active_cell_count": 7689,
+      "derefinements": [
+        {
+          "local_index": 7610,
+          "volume": 3.195985257953125e-09,
+          "mass": 3.370376267411564e-06,
+          "volume_partition_defect": 1.9989858980591744e-12,
+          "negative_gain_relative": 3.16168730406515e-10,
+          "conservation_relative_max": 3.021611412070078e-16,
+          "uniform_density_error_max": 1.8418599978531347e-13,
+          "receiving_cells": 6,
+          "cells_after": 7689,
+          "original_id": 7610,
+          "time": 0.19615129525997213,
+          "seconds": 0.04475728499892284
+        }
+      ],
+      "final_cap_mismatch": {
+        "sample_count": 512,
+        "sampled_area": 0.7515997854115141,
+        "rms_normal_speed_mismatch": 0.0023300379518069844,
+        "max_normal_speed_mismatch": 0.055387179577994106
+      },
+      "failure": "RuntimeError('retry dt below 1e-12; state not advanced')",
+      "report": "output/ale/fv_solid_solid_derefine.json"
+    },
+    "solid_frame5": {
+      "status": "failed",
+      "start_time": 0.19954448125612365,
+      "time_reached": 0.19954448125612365,
+      "physical_steps": 0,
+      "rejected_attempts": 2,
+      "dt_min": null,
+      "dt_max": 0.0,
+      "wall_seconds": 1.1416446510011156,
+      "mass_relative_error": 0.0,
+      "energy_source_balance_error": 0.0,
+      "active_cell_count": 7689,
+      "derefinements": [],
+      "final_cap_mismatch": {
+        "sample_count": 512,
+        "sampled_area": 0.7515997854115141,
+        "rms_normal_speed_mismatch": 0.002330037951806984,
+        "max_normal_speed_mismatch": 0.055387179577993995
+      },
+      "failure": "RuntimeError('retry dt below 1e-12; state not advanced')",
+      "report": "output/ale/fv_solid_solid_frame5.json"
+    }
+  },
+  "failure_diagnosis": {
+    "snapshot": "output/ale/fv_state_solid_derefine.pt",
+    "time": 0.19954448125612365,
+    "diagnostics": {
+      "dt_scale": 1.3526801175332097e-11,
+      "wave_cell": 3502,
+      "rho_min": 804.671753148492,
+      "rho_max": 1067.9475137437676,
+      "pressure_max_abs": 49714669.88123428,
+      "stress_vm_max": 1553.9070362595844,
+      "cap_integrated_flux_defect": 2.710505431213761e-20,
+      "mass_rate_sum": 8.881784197001252e-16,
+      "force_sum": [
+        0.0,
+        -186.8099176718029,
+        -2.6645352591003757e-15
+      ],
+      "source_power": 12131.554226588953,
+      "energy_rate_sum": 12131.554226588954,
+      "normal_contact_power": 11244.899655770758,
+      "contact_cells": 20,
+      "penetration_max": 0.010339343361246867,
+      "ignored_cap_area": 0.0
+    },
+    "smallest_cells": [
+      {
+        "index": 320,
+        "original_id": 320,
+        "volume": 3.222808036885854e-08,
+        "mass": 3.2228081256116016e-05,
+        "rho": 1000.0000275305717,
+        "pressure": 0.004014386417111382,
+        "radius": 0.02370894036285396,
+        "radius_rate": 0.0,
+        "ground_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "penetration": 0.0,
+        "ground_acceleration": 0.0,
+        "cap_area": 0.0,
+        "surface_area": 8.9228791141597e-05,
+        "surface": false,
+        "position": [
+          0.39902455013586663,
+          0.28900713673102363,
+          0.5530358391499683
+        ],
+        "velocity": [
+          -0.40789493598423526,
+          -2.4555354227096142,
+          -0.06629877571043623
+        ],
+        "normal_wave_dt": 2.3554211660737106e-05
+      },
+      {
+        "index": 1442,
+        "original_id": 1442,
+        "volume": 3.657836118342863e-08,
+        "mass": 3.6578361302027096e-05,
+        "rho": 1000.0000032423122,
+        "pressure": 0.0004727799096144736,
+        "radius": 0.031368481753638135,
+        "radius_rate": 0.0,
+        "ground_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "penetration": 0.0,
+        "ground_acceleration": 0.0,
+        "cap_area": 0.0,
+        "surface_area": 8.15127409603945e-05,
+        "surface": false,
+        "position": [
+          0.39592284356089785,
+          0.2454785200215384,
+          0.6956146197961824
+        ],
+        "velocity": [
+          -0.4078950508187884,
+          -2.455535878489873,
+          -0.06629877819269046
+        ],
+        "normal_wave_dt": 2.9264283322503838e-05
+      },
+      {
+        "index": 2200,
+        "original_id": 2200,
+        "volume": 3.8347824577103224e-08,
+        "mass": 3.834782549831025e-05,
+        "rho": 1000.0000240224064,
+        "pressure": 0.0035028413694817573,
+        "radius": 0.025572451305809787,
+        "radius_rate": 0.0,
+        "ground_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "penetration": 0.0,
+        "ground_acceleration": 0.0,
+        "cap_area": 0.0,
+        "surface_area": 7.470016440777953e-05,
+        "surface": false,
+        "position": [
+          0.29939532663244434,
+          0.2511178944263518,
+          0.6393632728325569
+        ],
+        "velocity": [
+          -0.4078952052588148,
+          -2.455535615306572,
+          -0.06629860019246114
+        ],
+        "normal_wave_dt": 3.3477908586901786e-05
+      },
+      {
+        "index": 3502,
+        "original_id": 3502,
+        "volume": 2.7662788808381848e-17,
+        "mass": 2.2259464767417107e-14,
+        "rho": 804.671753148492,
+        "pressure": 49714669.88123428,
+        "radius": 0.024258420181080865,
+        "radius_rate": 175.55371338301606,
+        "ground_force": [
+          0.0,
+          2.9013506710560333,
+          0.0
+        ],
+        "penetration": 0.0017452501603361786,
+        "ground_acceleration": 130342337579606.31,
+        "cap_area": 1.3877075993619216e-11,
+        "surface_area": 9.750419331391762e-11,
+        "surface": true,
+        "position": [
+          0.28580137269217903,
+          -0.02748682997925532,
+          0.4951523295806098
+        ],
+        "velocity": [
+          -0.0,
+          3845.459801239389,
+          -0.0
+        ],
+        "normal_wave_dt": 8.061425583841181e-10
+      },
+      {
+        "index": 4077,
+        "original_id": 4077,
+        "volume": 3.8295092180474547e-08,
+        "mass": 3.829509225991396e-05,
+        "rho": 1000.000002074402,
+        "pressure": 0.00030248137773014605,
+        "radius": 0.02420802242807163,
+        "radius_rate": 0.0,
+        "ground_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "penetration": 0.0,
+        "ground_acceleration": 0.0,
+        "cap_area": 0.0,
+        "surface_area": 0.00010831519396878333,
+        "surface": false,
+        "position": [
+          0.5038605669616429,
+          0.2885037752203843,
+          0.40401647856993766
+        ],
+        "velocity": [
+          -0.40789504615391403,
+          -2.455535887726045,
+          -0.06629883947704346
+        ],
+        "normal_wave_dt": 2.3056473551411098e-05
+      },
+      {
+        "index": 6458,
+        "original_id": 6458,
+        "volume": 1.5239711930465633e-08,
+        "mass": 1.5239712104905324e-05,
+        "rho": 1000.0000114463903,
+        "pressure": 0.001669062301516533,
+        "radius": 0.019424923606825545,
+        "radius_rate": 0.0,
+        "ground_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "penetration": 0.0,
+        "ground_acceleration": 0.0,
+        "cap_area": 0.0,
+        "surface_area": 3.9163285398343756e-05,
+        "surface": false,
+        "position": [
+          0.48136571447290755,
+          0.11070633853093158,
+          0.2700275615856116
+        ],
+        "velocity": [
+          -0.4078949553223159,
+          -2.4555358490438532,
+          -0.06629902383738681
+        ],
+        "normal_wave_dt": 2.5376795841302617e-05
+      },
+      {
+        "index": 7105,
+        "original_id": 7105,
+        "volume": 1.4499217248081758e-08,
+        "mass": 1.4499217269402918e-05,
+        "rho": 1000.0000014705042,
+        "pressure": 0.000214423518627882,
+        "radius": 0.031191831722491507,
+        "radius_rate": 0.0,
+        "ground_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "penetration": 0.0,
+        "ground_acceleration": 0.0,
+        "cap_area": 0.0,
+        "surface_area": 8.083896979278936e-05,
+        "surface": false,
+        "position": [
+          0.36683777366144305,
+          0.313709089373315,
+          0.6319185333670878
+        ],
+        "velocity": [
+          -0.4078950595180586,
+          -2.4555358985320144,
+          -0.06629881968039568
+        ],
+        "normal_wave_dt": 1.1696688734318254e-05
+      },
+      {
+        "index": 7524,
+        "original_id": 7524,
+        "volume": 5.612424658197286e-09,
+        "mass": 5.612424663595958e-06,
+        "rho": 1000.0000009619143,
+        "pressure": 0.00014026265125721693,
+        "radius": 0.03135022114873021,
+        "radius_rate": 0.0,
+        "ground_force": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "penetration": 0.0,
+        "ground_acceleration": 0.0,
+        "cap_area": 0.0,
+        "surface_area": 2.679829512301851e-05,
+        "surface": false,
+        "position": [
+          0.409477565628755,
+          0.2839126082380463,
+          0.6805251079035126
+        ],
+        "velocity": [
+          -0.40789505590577,
+          -2.455535903774968,
+          -0.06629881754529002
+        ],
+        "normal_wave_dt": 1.3657855213303766e-05
+      }
+    ],
+    "ball_bottom_exposure": {
+      "original_id": 3502,
+      "bottom": [
+        0.28580137269217903,
+        -0.05174525016033618,
+        0.4951523295806098
+      ],
+      "other_ball_min_power": -5.27244294554922e-05,
+      "covering_original_id": 6130,
+      "bottom_exposed": false
+    }
+  },
+  "reproduction": {
+    "checks": "PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python free_surface/fv_ale_solid_check.py --foam foams/fourier8k_clean --out output/ale/check.json",
+    "failed_contact_trial": "PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python free_surface/merged_drop.py --foam foams/fourier8k_clean --save output/ale --tag repro --fv-ale --fv-legacy-ball-contact --fv-derefine --fv-resume output/ale/fv_state_solid_clean.pt --fv-steps 10000 --fv-budget 180",
+    "inspect": "PYTHONPATH=. /home/fangsuo/anaconda3/envs/om/bin/python free_surface/fv_ale_inspect.py output/ale/fv_state_solid_derefine.pt --out output/ale/inspect.json",
+    "snapshots": "Full snapshots and logs remain in output/ale (excluded from git)."
+  },
+  "source_unchanged_verification": {
+    "source_working_file_hash_changes": [],
+    "checked": 49
+  },
+  "baseline_smoke_after_solid": {
+    "steps": 2,
+    "passed": true,
+    "log": "output/ale/baseline_after_solid.log",
+    "scope": "No-contact short regression; not a landing rerun"
+  }
 }

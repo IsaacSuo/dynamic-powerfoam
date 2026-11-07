@@ -120,6 +120,16 @@ a_.add_argument('--diag2', action='store_true', help="logging only, with --omega
 a_.add_argument('--follow-check', action='store_true', help="logging only, with --omega-at: the tiny and the stiff particles following an anchor's affine motion (k1_slave.follow_omega)")
 a_.add_argument('--slave-check', action='store_true', help="logging only, with --omega-at: also the reduced operator with the stiff particles following their neighbours' fit (k1_slave.py)")
 a_.add_argument('--fv-ale-remap-check', action='store_true', help='isolated FV-ALE geometry/remap trial on the full foam; no solid-dynamics or landing claim')
+a_.add_argument('--fv-ale', action='store_true', help='experimental solid FV-ALE on the same sphere-clipped power cells')
+a_.add_argument('--fv-interior-radii', choices=['fixed','dilate'], default='fixed', help='ALE weight choice for fully buried balls; surface radii follow integrated boundary motion')
+a_.add_argument('--fv-legacy-ball-contact', action='store_true', help='diagnostic reproduction ONLY: legacy whole-ball contact is inconsistent with vanishing FV cells')
+a_.add_argument('--fv-derefine', action='store_true', help='conservatively dissolve tiny buried cells; verify unchanged material domain')
+a_.add_argument('--fv-min-volume-ratio', type=float, default=1e-3, help='derefine volume threshold relative to initial median')
+a_.add_argument('--fv-cfl', type=float, default=.2)
+a_.add_argument('--fv-steps', type=int, default=1000, help='explicit physical step limit; stopping here is NOT completed landing')
+a_.add_argument('--fv-budget', type=float, default=180., help='wall-time limit for initial FV trial in seconds')
+a_.add_argument('--fv-resume', type=Path, default=None, help='continue a saved FV state (not a k1 snapshot)')
+a_.add_argument('--fv-no-freeflight', action='store_true', help='do not analytically integrate the uniform unstressed free-flight segment')
 args = a_.parse_args()
 gt = json.loads((args.foam/'plasticine_scenes.json').read_text())['scenes'][str(args.scene)]
 E, nu, ys = gt['E']/1000, gt['nu'], gt['ys']/1000
@@ -133,6 +143,12 @@ if args.fv_ale_remap_check:
     from free_surface.fv_ale_check import run as fv_ale_check
     check = fv_ale_check(X0, r0, args)
     raise SystemExit(0 if check['passed'] else 2)
+if args.fv_ale:
+    if not args.fv_legacy_ball_contact:
+        a_.error('FV solid trial contact is unfinished: whole-ball forces can act on buried contact points as cell mass vanishes. Use --fv-legacy-ball-contact only to reproduce the documented failed experiment; no validated contact model is implemented yet.')
+    from free_surface.fv_ale_run import run as fv_ale_run
+    result = fv_ale_run(args, X0, r0, gt)
+    raise SystemExit(0 if result['status'] == 'completed' else 2)
 have_truth = (args.data/'simulation_data.zip').exists()
 Z = zipfile.ZipFile(args.data/'simulation_data.zip') if have_truth else None
 
