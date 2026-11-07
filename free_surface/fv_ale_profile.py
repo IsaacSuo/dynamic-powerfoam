@@ -38,7 +38,7 @@ class Stages:
     def __enter__(self):
         for key in ['rhs','cut','plastic_return','advance']:
             self.wrap(self.sol,key,key)
-        self.wrap(self.sol.recut,'geometry','geometry')
+        self.wrap(self.sol.ground_cutter or self.sol.recut,'geometry','geometry')
         self.wrap(core,'surface_quadrature','contact_quadrature')
         self.wrap(core,'solve_boundary','contact_boundary_solve')
         return self
@@ -52,7 +52,7 @@ def load(path):
     sol=core.SolidALE(d['p'],d['r'],m['E'],m['nu'],m['ys'],
         groups=d.get('groups'),surface_motion=d['surface_motion'],contact_model=d['contact_model'],
         contact_order=d['contact_order'],contact_scale=d['contact_scale'],
-        contact_damping=d['contact_damping'],friction=d['friction'],interior_radii=d['interior_radii'])
+        contact_damping=d['contact_damping'],friction=d['friction'],interior_radii=d['interior_radii'],ground=d.get('ground',-.05))
     sol.contact_length=d['reference_volume']**(1/3);sol.contact_k=sol.contact_scale*sol.bulk/sol.contact_length
     p=d['p'].to(sol.initial.p.device);r=d['r'].to(p.device);q=d['q'].to(p.device)
     def reset():return core.State(p,r,q,sol.cut(p,r))
@@ -123,10 +123,11 @@ def main():
     ap=argparse.ArgumentParser();ap.add_argument('snapshots',type=Path,nargs='+')
     ap.add_argument('--out',type=Path,required=True);ap.add_argument('--repeat',type=int,default=6)
     ap.add_argument('--trace',action='store_true')
+    ap.add_argument('--reuse-production-probe',action='store_true',help='time synchronized stages using the current reused selection RHS')
     ap.add_argument('--formula-control',action='store_true');a=ap.parse_args();wp.init()
     report={'torch':torch.__version__,'gpu':torch.cuda.get_device_name(),
         'method':'Frozen-state warm replay; reset cut excluded. Nested wall timing synchronizes stage boundaries; overhead measured against ordinary replay. Trace is separate from wall timing.',
-        'production_algorithm_modified':False,'snapshots':[]}
+        'production_algorithm_modified':False,'synchronized_stages_reuse_probe':a.reuse_production_probe,'snapshots':[]}
     for path in a.snapshots:
         sol,reset,d=load(path);rv=d['reference_volume']
         for _ in range(2):one_step(sol,reset(),rv)
@@ -143,7 +144,7 @@ def main():
         timed=[];per_stage=collections.defaultdict(list);counts={}
         for _ in range(a.repeat):
             s=reset();torch.cuda.synchronize();t=time.perf_counter()
-            with Stages(sol) as timer:out,stats=one_step(sol,s,rv)
+            with Stages(sol) as timer:out,stats=one_step(sol,s,rv,a.reuse_production_probe)
             torch.cuda.synchronize();timed.append((time.perf_counter()-t)*1000)
             grouped=collections.defaultdict(lambda:[0.,0.,0])
             for e in timer.events:
@@ -153,7 +154,7 @@ def main():
         s=reset();rr=sol.rhs(s);quad=s.mesh.contact_quad
         record={'snapshot':str(path),'time':d['time'],'cells':len(s.r),'grouped':sol.has_groups,
             'wall_faces':len(s.mesh.i),'contact_cells':rr[3]['contact_cells'],
-            'quadrature_points':len(quad[0]),'boundary_iterations':rr[3]['boundary_local_iterations'],
+            'quadrature_points':len(quad[0]) if quad is not None else 0,'boundary_iterations':rr[3]['boundary_local_iterations'],
             'dt':.2*rr[3]['dt_scale'],'ordinary_step_ms':summary(ordinary),
             'reuse_probe_step_ms':summary(reuse),'reuse_probe_relative_state_errors':differences,
             'synchronized_step_ms':summary(timed),'stage_sums_ms':{k:summary(v) for k,v in per_stage.items()},
@@ -185,7 +186,7 @@ def main():
             s=reset()
             activities=[torch.profiler.ProfilerActivity.CPU,torch.profiler.ProfilerActivity.CUDA]
             with torch.profiler.profile(activities=activities,record_shapes=True,profile_memory=False) as prof:
-                with Stages(sol,trace=True):one_step(sol,s,rv)
+                with Stages(sol,trace=True):one_step(sol,s,rv,a.reuse_production_probe)
                 torch.cuda.synchronize()
             trace=a.out.with_name(a.out.stem+'_'+path.stem+'_trace.json');prof.export_chrome_trace(str(trace))
             rows=[]

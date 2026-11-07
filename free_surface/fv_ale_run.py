@@ -23,10 +23,14 @@ def run(args,X0,r0,gt):
             if key in resume and resume[key]!=wanted: raise ValueError('FV resume '+key+' mismatch')
     solver=SolidALE(resume['p'] if resume else X0,resume['r'] if resume else r0,
                     gt['E'],gt['nu'],gt['ys'],friction=args.mu,interior_radii=args.fv_interior_radii,
-                    contact_model='legacy-ball' if args.fv_legacy_ball_contact else 'surface',
+                    contact_model='plane' if args.fv_ground_cut else ('legacy-ball' if args.fv_legacy_ball_contact else 'surface'),
                     contact_order=args.fv_contact_order,contact_scale=args.fv_contact_scale,contact_damping=args.fv_contact_damping,surface_motion=args.fv_surface_motion,groups=resume.get('groups') if resume else None)
     state=solver.set_velocity(solver.initial,gt['v'])
     if resume:
+        if args.fv_ground_cut and resume.get('contact_model')!='plane' and bool((state.mesh.ground_area>0).any()):
+            raise ValueError('do not reinterpret an already penetrating curved-contact state as a planar-contact trajectory')
+        if resume.get('contact_model')=='plane' and not args.fv_ground_cut:
+            raise ValueError('a ground-clipped snapshot requires --fv-ground-cut')
         state.q=resume['q'].to(state.q.device)
         if 'groups' in resume:
             solver.groups=resume['groups'].to(state.p.device)
@@ -51,6 +55,9 @@ def run(args,X0,r0,gt):
       'derefine':args.fv_derefine,'min_volume_ratio':args.fv_min_volume_ratio,
       'interior_radii':args.fv_interior_radii,'cfl':args.fv_cfl,'max_physical_dt':args.dt,'target_time':args.frames/24,
       'budget_wall_seconds':args.fv_budget,'step_limit':args.fv_steps,'tests_do_not_prove':'accuracy, robustness or speed for complete elastoplastic landing'}
+    if args.fv_ground_cut:
+        report['contact_limitations']='Real geometry is clipped at fixed ground. Compressive acoustic wall reaction and Coulomb friction; tensile/release predictions stop the experiment rather than apply adhesion. Global material and time convergence remain unvalidated.'
+        report['physics_changes'][3]='Stationary ground face, zero normal mass flux/work, compressive acoustic reaction, exact local Coulomb stick/slip; no penalty stiffness or surface quadrature.'
     ts=[]; xs=[]; rs=[]; masses=[]; vs=[]; stresses=[]; Ls=[]; eps=[]; works=[]; hist=[]
     m0=float(state.q[:,0].sum()); e0=float(state.q[:,4].sum())
     initial_velocity=solver.primitive(state)[1]
@@ -58,7 +65,7 @@ def run(args,X0,r0,gt):
     physical_time=float(resume['time']) if resume else 0.
     report['start_time']=physical_time
     report['resume_from']=str(args.fv_resume) if resume else None
-    count=0; retries=0; source_work=0.; friction_heat=0.; boundary_work_defect=0.; boundary_abs_work_defect=0.; next_frame=(math.floor(physical_time*24+1e-9)+1)/24
+    count=0; retries=0; rejection_reasons={}; rejection_examples=[]; source_work=0.; friction_heat=0.; boundary_work_defect=0.; boundary_abs_work_defect=0.; next_frame=(math.floor(physical_time*24+1e-9)+1)/24
     min_dt=math.inf; max_dt=0.; analytic_time=0.
     def save_frame(s,t):
         m,v,rho,p,stress,_,_=solver.primitive(s)
@@ -74,7 +81,8 @@ def run(args,X0,r0,gt):
         eps.append(padded(s.q[:,14]/m));works.append(padded(s.q[:,15],0.))
     def save():
         np.savez(args.save/('frames_'+args.tag+'.npz'),t=np.array(ts),x=np.array(xs),r=np.array(rs),
-            mass=np.array(masses),v=np.array(vs),stress=np.array(stresses),L=np.array(Ls),ep=np.array(eps),plastic_work=np.array(works))
+            mass=np.array(masses),v=np.array(vs),stress=np.array(stresses),L=np.array(Ls),ep=np.array(eps),plastic_work=np.array(works),
+            ground_clipped=np.array(args.fv_ground_cut),ground_height=np.array(solver.ground))
         (args.save/('fv_solid_'+args.tag+'.json')).write_text(json.dumps(report,indent=2)+'\n')
         (args.save/('fv_steps_'+args.tag+'.json')).write_text(json.dumps(hist,indent=2)+'\n')
     def snapshot(reason):
@@ -119,16 +127,18 @@ def run(args,X0,r0,gt):
         while physical_time<args.frames/24-1e-13:
             if count>=args.fv_steps or time.perf_counter()-begin>=args.fv_budget:
                 report['status']='budget_stopped_not_complete';break
+            first=None
             if args.fv_agglomerate:
                 while True:
                     gv=solver.group_sum(state.mesh.volume)[solver.groups]
                     small=gv<args.fv_min_volume_ratio*reference_volume
                     k=int(torch.where(small,gv,torch.full_like(gv,float('inf'))).argmin()) if bool(small.any()) else None
                     if k is None and args.fv_agglomerate_dt>0:
-                        probe=solver.rhs(state)[3]
+                        first=solver.rhs(state);probe=first[3]
                         if args.fv_cfl*probe['wave_dt_scale']<args.fv_agglomerate_dt:k=probe['wave_cell']
                     if k is None:break
                     tick=time.perf_counter();state,info=merge_cell(solver,state,k)
+                    first=None
                     info.update(time=physical_time,seconds=time.perf_counter()-tick,
                         original_ids=ids[info['members']].cpu().tolist())
                     merges.append(info);print('FV MERGE '+json.dumps(info),flush=True)
@@ -144,7 +154,7 @@ def run(args,X0,r0,gt):
                     removal.update(original_id=old_id,time=physical_time,seconds=time.perf_counter()-tick)
                     removals.append(removal)
                     print('FV DEREFINE '+json.dumps(removal),flush=True)
-            first=solver.rhs(state)
+            if first is None:first=solver.rhs(state)
             dt=min(args.dt,args.fv_cfl*first[3]['dt_scale'],args.frames/24-physical_time,next_frame-physical_time)
             if args.fv_stop_dt>0 and dt<args.fv_stop_dt:
                 report['status']='diagnostic_stop_small_dt';break
@@ -154,8 +164,10 @@ def run(args,X0,r0,gt):
                 try:
                     candidate,stats=solver.advance(state,dt,first,args.fv_cfl)
                     break
-                except RuntimeError:
+                except RuntimeError as exc:
                     retries+=1
+                    reason=str(exc).split(':')[0];rejection_reasons[reason]=rejection_reasons.get(reason,0)+1
+                    if len(rejection_examples)<10:rejection_examples.append({'time':physical_time,'dt':dt,'reason':str(exc)})
                     if attempt==8:raise
                     dt*=.5
             state=candidate; physical_time+=dt;count+=1
@@ -181,7 +193,7 @@ def run(args,X0,r0,gt):
     try:report['final_cap_mismatch']=solver.cap_velocity_mismatch(state)
     except Exception as exc:report['final_cap_mismatch_error']=repr(exc)
     report.update(time_reached=physical_time,analytical_freeflight_time=analytic_time,
-      physical_steps=count,rejected_attempts=retries,geometry_calls=solver.geometry_calls,
+      physical_steps=count,rejected_attempts=retries,rejection_reasons=rejection_reasons,rejection_examples=rejection_examples,geometry_calls=solver.geometry_calls,
       geometric_site_count=len(state.r),active_cell_count=int((state.mesh.volume>0).sum()),derefinements=removals,agglomerations=merges,
       control_volume_count=int(torch.unique(solver.groups).numel()),
       dt_min=min_dt if math.isfinite(min_dt) else None,dt_max=max_dt,

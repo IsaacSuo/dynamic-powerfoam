@@ -29,6 +29,12 @@ a diagnostic explicitly reports this approximation. Interior radii stay fixed by
 trial used r_dot=r div(v)/3 and drove a buried cell to zero volume.
 Internal mass exchange is retained under either choice.
 
+Optional contact_model=plane clips each control volume at the fixed ground
+half-space. The new planar face uses an impermeable acoustic wall state and
+Coulomb friction; remaining spherical patches use the analytic free-cap solve.
+No contact quadrature or penalty is used. Tensile wall predictions stop the
+trial: detachment is not yet a supported boundary transition. See GROUND_TRIAL.json.
+
 LEGACY contact_model=legacy-ball ONLY (retained for diagnostic replay):
 A nonzero cap does not imply the ball bottom is exposed. The inherited force
 can remain finite while FV mass and exposed area vanish. This code is NOT a
@@ -46,6 +52,7 @@ from free_surface.geo_pipe import GeoPipe
 from free_surface.fv_ale_geometry import PowerControlVolumes
 from free_surface.fv_ale_contact import surface_quadrature,contact_flux,project_cap_motion
 from free_surface.fv_ale_boundary import solve_boundary
+from free_surface.fv_ale_ground import GroundClip,plane_boundary
 
 
 def deviator(a):
@@ -87,6 +94,7 @@ class SolidALE:
         self.e0=self.bulk/((self.gamma-1)*rho0)
         self.g=torch.tensor(gravity,dtype=torch.float64,device=device)
         self.ground=ground; self.friction=friction; self.contact_E=E/(1-nu*nu)
+        self.ground_cutter=GroundClip(ground,device) if contact_model=='plane' else None
         self.recut=Recut(len(p),device); self.recut.pipe=GeoPipe(len(p),device)
         self.geometry_calls=0
         p=torch.as_tensor(p,dtype=torch.float64,device=device).clone()
@@ -103,10 +111,16 @@ class SolidALE:
     def cut(self,p,r):
         if not bool(torch.isfinite(p).all() and torch.isfinite(r).all() and (r>0).all()):
             raise RuntimeError('invalid site/radius; state not accepted')
-        g,_=self.recut.geometry(p.contiguous(),r.contiguous()); self.geometry_calls+=1
-        mesh=PowerControlVolumes.from_geometry(g)
+        if self.ground_cutter is not None:
+            mesh=self.ground_cutter.geometry(p,r);g=mesh.geometry;hidden=mesh.hidden
+        else:
+            g,_=self.recut.geometry(p.contiguous(),r.contiguous())
+            mesh=PowerControlVolumes.from_geometry(g);hidden=g.hidden
+            mesh.ground_area=torch.zeros_like(r)
+            mesh.ground_centroid=p.clone();mesh.ground_normal=torch.zeros_like(p)
+        self.geometry_calls+=1
         if self.has_groups:
-            mesh.volume=torch.where(g.hidden,torch.zeros_like(mesh.volume),mesh.volume)
+            mesh.volume=torch.where(hidden,torch.zeros_like(mesh.volume),mesh.volume)
         valid_volume=mesh.volume>=0 if self.has_groups else mesh.volume>0
         if not bool(torch.isfinite(mesh.volume).all() and valid_volume.all()):
             bad=torch.nonzero(~torch.isfinite(mesh.volume)|(mesh.volume<=0)).flatten()
@@ -116,14 +130,16 @@ class SolidALE:
         moment=torch.zeros((len(p),3,3),dtype=p.dtype,device=p.device)
         moment.index_add_(0,mesh.i,mesh.area[:,None,None]*outer(mesh.centroid-p[mesh.i],mesh.normal))
         moment.index_add_(0,mesh.j,-mesh.area[:,None,None]*outer(mesh.centroid-p[mesh.j],mesh.normal))
+        moment+=mesh.ground_area[:,None,None]*outer(mesh.ground_centroid-p,mesh.ground_normal)
         eye=torch.eye(3,dtype=p.dtype,device=p.device)
         mesh.cap_Q=(mesh.volume[:,None,None]*eye-moment)/r[:,None,None]
         mesh.cap_Q=.5*(mesh.cap_Q+mesh.cap_Q.transpose(1,2))
         # Only roundoff-size caps are ignored, and their area is recorded.
-        mesh.surface=mesh.cap_area>1e-12*mesh.area.max()
+        area_scale=torch.maximum(mesh.cap_area.max(),mesh.area.max()) if len(mesh.area) else mesh.cap_area.max()
+        mesh.surface=mesh.cap_area>1e-12*area_scale
         mesh.cap_Q=torch.where(mesh.surface[:,None,None],mesh.cap_Q,torch.zeros_like(mesh.cap_Q))
         mesh.ignored_cap_area=float(mesh.cap_area[~mesh.surface].abs().sum())
-        mesh.surface_area=torch.zeros_like(r).index_add(0,mesh.i,mesh.area).index_add(0,mesh.j,mesh.area)+mesh.cap_area.clamp(min=0)
+        mesh.surface_area=torch.zeros_like(r).index_add(0,mesh.i,mesh.area).index_add(0,mesh.j,mesh.area)+mesh.cap_area.clamp(min=0)+mesh.ground_area
         mesh.geometry=g
         mesh.contact_quad=surface_quadrature(g,self.ground,self.contact_order) if self.ground is not None and self.contact_model=='surface' else None
         return mesh
@@ -188,6 +204,10 @@ class SolidALE:
         return force,moment,power,heat,self.contact_k*area,delta,area
 
     def contact(self,s):
+        if self.contact_model=='plane':
+            _,v,rho,_,_,sigma,c=self.primitive(s)
+            force,_,_,_=plane_boundary(s.mesh,v,sigma,rho*c,self.friction)
+            return force,torch.zeros_like(s.r),torch.zeros_like(s.r)
         if self.contact_model=='surface':
             _,v,rho,_,_,sigma,c=self.primitive(s)
             if self.surface_motion=='coupled':
@@ -208,7 +228,16 @@ class SolidALE:
         m,v,rho,pressure,stress,sigma,sound=self.primitive(s)
         mesh=s.mesh; i,j,n,A=mesh.i,mesh.j,mesh.normal,mesh.area
         z=rho*sound
-        boundary=None;coupled=None
+        boundary=None;coupled=None;plane_info=None;plane_velocity=None
+        if self.contact_model=='plane':
+            # Free spherical patches and fixed planar contact are distinct
+            # boundary pieces. The sphere solve sees no contact quadrature.
+            coupled=solve_boundary(mesh,v,sigma,z,self.contact_k,self.friction,self.contact_damping)
+            force,plane_velocity,heat,plane_info=plane_boundary(mesh,v,sigma,z,self.friction)
+            if plane_info['wall_tensile_prediction_cells']:
+                raise RuntimeError('planar contact requires release: '+str(plane_info))
+            zero=torch.zeros_like(s.r)
+            boundary=(force,None,zero,heat,zero,zero,mesh.ground_area)
         if self.contact_model=='surface':
             if self.surface_motion=='coupled':
                 coupled=solve_boundary(mesh,v,sigma,z,self.contact_k,self.friction,self.contact_damping)
@@ -225,6 +254,8 @@ class SolidALE:
         else:
             grad-=sigma@mesh.cap_Q/z[:,None,None]
             if boundary is not None:grad+=boundary[1]
+        if plane_velocity is not None:
+            grad+=mesh.ground_area[:,None,None]*(plane_velocity-v)[:,:,None]*mesh.ground_normal[:,None,:]
         if self.has_groups:
             grad=self.group_sum(grad)[self.groups]/self.group_sum(mesh.volume)[self.groups,None,None]
         else:grad/=mesh.volume[:,None,None]
@@ -285,7 +316,7 @@ class SolidALE:
         external=self.groups[i]!=self.groups[j] if self.has_groups else torch.ones_like(i,dtype=torch.bool)
         external_relative=torch.where(external,relative,0.)
         outgoing=torch.zeros_like(m).index_add(0,i,external_relative.clamp(min=0)).index_add(0,j,(-external_relative).clamp(min=0))
-        external_area=mesh.cap_area.clamp(min=0)+torch.zeros_like(m).index_add(0,i,A*external).index_add(0,j,A*external)
+        external_area=mesh.cap_area.clamp(min=0)+mesh.ground_area+torch.zeros_like(m).index_add(0,i,A*external).index_add(0,j,A*external)
         wave=external_area*sound+outgoing
         if self.has_groups:
             group_volumes=self.group_sum(mesh.volume)[self.groups]
@@ -314,6 +345,9 @@ class SolidALE:
           'boundary_local_iterations':coupled[5]['iterations'] if coupled is not None else 0,
           'boundary_local_relative_residual':coupled[5]['relative_residual'] if coupled is not None else None,
           'mesh_material_speed_difference_max':float((mesh_velocity-v).norm(dim=1).max())}
+        if plane_info is not None:
+            diagnostics.update(plane_info)
+            diagnostics['ground_geometry']=mesh.ground_geometry_info
         return mesh_velocity,dr,dq,diagnostics
 
     def advance(self,s,dt,first=None,cfl=.2):
@@ -356,6 +390,10 @@ class SolidALE:
         """Pointwise boundary mismatch, sampled on exposed spherical caps.
         RMS is area-weighted; this is diagnostic quadrature, not the force rule.
         """
+        if self.contact_model=='plane':
+            return {'boundary_velocity':'Spherical patches use their actual motion; ground face is stationary and has zero normal material velocity.',
+                'geometric_penetration':0.,'ground_area':float(s.mesh.ground_area.sum()),
+                'geometry':s.mesh.ground_geometry_info}
         _,v,rho,_,_,sigma,c=self.primitive(s)
         z=rho*c
         mesh_velocity,dr,_,_=self.rhs(s)

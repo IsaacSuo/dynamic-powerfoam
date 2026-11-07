@@ -121,6 +121,7 @@ a_.add_argument('--follow-check', action='store_true', help="logging only, with 
 a_.add_argument('--slave-check', action='store_true', help="logging only, with --omega-at: also the reduced operator with the stiff particles following their neighbours' fit (k1_slave.py)")
 a_.add_argument('--fv-ale-remap-check', action='store_true', help='isolated FV-ALE geometry/remap trial on the full foam; no solid-dynamics or landing claim')
 a_.add_argument('--fv-ale', action='store_true', help='experimental solid FV-ALE on the same sphere-clipped power cells')
+a_.add_argument('--fv-ground-cut', action='store_true', help='clip actual material cells at the rigid ground plane; no curved-surface penalty contact')
 a_.add_argument('--fv-interior-radii', choices=['fixed','dilate'], default='fixed', help='ALE weight choice for fully buried balls; surface radii follow integrated boundary motion')
 a_.add_argument('--fv-legacy-ball-contact', action='store_true', help='diagnostic reproduction ONLY: legacy whole-ball contact is inconsistent with vanishing FV cells')
 a_.add_argument('--fv-surface-motion', choices=['radial','least-squares','coupled'], default=None, help='coupled: solve contact in sphere-motion unknowns; radial/least-squares retain diagnostic controls')
@@ -151,8 +152,12 @@ if args.fv_ale_remap_check:
     check = fv_ale_check(X0, r0, args)
     raise SystemExit(0 if check['passed'] else 2)
 if args.fv_ale:
+    if args.fv_ground_cut and args.fv_legacy_ball_contact:
+        a_.error('ground clipping and legacy ball contact are different boundary models')
     if args.fv_surface_motion is None:
         args.fv_surface_motion='radial' if args.fv_legacy_ball_contact else 'coupled'
+    if args.fv_ground_cut and args.fv_surface_motion!='coupled':
+        a_.error('ground clipping requires the coupled free-surface motion')
     if args.fv_contact_order<2 or args.fv_contact_scale<=0 or args.fv_contact_damping<0:
         a_.error('invalid FV surface contact parameters')
     if args.fv_agglomerate and (args.fv_derefine or args.fv_surface_motion!='coupled'):

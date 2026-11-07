@@ -1,0 +1,394 @@
+{
+  "date": "2026-11-08",
+  "branch": "solid-fv-ale",
+  "request": "Make the ground a real clipping boundary of the existing power-diagram intersected with balls, participating in mechanics.",
+  "switch": "--fv-ale --fv-ground-cut --fv-surface-motion coupled",
+  "geometry": {
+    "domain": "Each existing power-ball cell intersected with y >= ground_height. No replacement lattice, fictitious material, or rendering-only clip.",
+    "construction": "Re-clip internal wall disks crossing the ground against the ground half-space. Add a floor disk clipped against the owner's real power neighbours. Retain exposed circle arcs and use analytic spherical-sector integration for remaining free caps and cell volume.",
+    "moments": "The floor's area, centroid, normal and first surface moment enter volume, velocity gradient, cap second moment, traction and wave-step estimates. Shared internal faces are stored once with opposite orientations.",
+    "mass": "Existing extensive mass is conserved. Density uses actual clipped volume; clipping does not discard material mass or reset it to reference density.",
+    "kernel": "GPU disk/half-plane clipping, with no contact surface quadrature. Near-zero arc cancellation is avoided using analytic circle chords. The stable area option is enabled only for this new ground adapter; existing unflagged geometry calls retain their previous formula.",
+    "abandoned_implementation": "Auxiliary power competitors are mathematically equivalent to a plane but generate forced coincident power boundaries that the existing geometry pipeline mishandled. That implementation was removed. Its failed run logs are retained under output/ale/plane_from_start and plane_stable."
+  },
+  "mechanics": {
+    "floor": "Stationary flat face, zero normal material velocity, zero normal mass flux and zero normal work.",
+    "reaction": "P = -sigma_yy - Z*v_y, Z=rho*sound_speed, from the existing acoustic boundary relation. This replaces the curved-surface penalty/dashpot law; it is a physical boundary-model change, not merely an optimization of the old force.",
+    "friction": "Cell-constant acoustic tangential relation with Coulomb stick/slip. Tangential dissipation is retained as material heat, giving zero total-energy flux through the stationary floor.",
+    "free_surface": "Remaining spherical patches use the existing analytic translating/dilating free-cap solve. Its weak acoustic boundary approximation is retained.",
+    "integration": "Existing conservative ALE transport, group agglomeration and SSPRK2 are retained. The unchanged group-selection RHS is reused instead of recomputed."
+  },
+  "limits": [
+    "Tensile acoustic wall predictions stop the trial. Detachment/unloading is not yet a supported boundary transition; the code does not silently impose adhesive contact.",
+    "This is the experimental sphere-boundary FV adaptation, not a validated reproduction of a published complete solid ALE scheme.",
+    "Source/work balance checks do not prove constitutive accuracy, thermodynamic consistency, time convergence or robustness of full landing.",
+    "Saved frame files include ground_clipped and ground_height. Renderers that draw uncut spheres must explicitly honour these fields before interpreting below-ground sphere parts as physical penetration.",
+    "Physical substeps and elapsed cost must be reported. A first post-contact output frame is not the complete 0.625 second landing."
+  ],
+  "validation": {
+    "clean_full_foam": {
+      "foam": "foams/fourier8k_clean",
+      "test_penetration": 0.001,
+      "single_sphere_analytic_checks": [
+        {
+          "centre_height": 0.3,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": 0.0,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": -0.2,
+          "volume_error": 2.220446049250313e-16,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": 1.2,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": -1.2,
+          "volume_error": 1.743934249004316e-16,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        }
+      ],
+      "closure_error_m2": 1.2633084272768377e-16,
+      "volume_rate_relative_error": 2.5990582825319036e-09,
+      "wall_force_balance_error_N": 5.721958498152797e-17,
+      "step_energy_error_J": -2.1358782797964437e-16,
+      "step_mass_error": 0.0,
+      "tangent_translation_density_error": 5.695444116327053e-14,
+      "plane_boundary": {
+        "contact_cells": 1,
+        "contact_area": 0.00013922014786273154,
+        "wall_pressure_min": 1533.4190487593833,
+        "wall_pressure_max": 1533.4190487593833,
+        "wall_tensile_prediction_cells": 0,
+        "wall_tensile_prediction_area": 0.0,
+        "wall_sliding_cells": 0,
+        "wall_normal_velocity_max": 0.0
+      },
+      "geometry": {
+        "method": "direct_halfspace",
+        "floor_faces": 1,
+        "recut_wall_disks": 0,
+        "stable_sphere_area": true,
+        "max_volume_increase_m3": 1.3552527156068805e-20,
+        "max_cap_area_increase_m2": 1.3010426069826053e-18
+      },
+      "friction_checks": {
+        "stick_velocity_error_m_s": 0.0,
+        "sliding_coulomb_force_error_N": 0.0,
+        "sliding_cells": 1,
+        "minimum_friction_heat_rate_W": -0.0
+      },
+      "checks": {
+        "single_sphere": true,
+        "closure": true,
+        "geometric_flux": true,
+        "force_balance": true,
+        "energy_balance": true,
+        "mass_balance": true,
+        "tangent_translation": true,
+        "impermeable_ground": true,
+        "compressive_contact": true,
+        "friction_stick_slip": true,
+        "deep_clipping": true,
+        "clipping_cannot_increase_volume": true,
+        "regression_closure": true,
+        "regression_volume_rate": true
+      },
+      "deep_geometry": [
+        {
+          "height": 0.03,
+          "floor_cells": 52,
+          "hidden_cells": 1,
+          "closure_m2": 1.2632870549312759e-16,
+          "volume_rate_relative_error": 2.588738076321693e-09,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.08,
+          "floor_cells": 371,
+          "hidden_cells": 196,
+          "closure_m2": 2.817901529299124e-16,
+          "volume_rate_relative_error": 2.0617871948863505e-09,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.15,
+          "floor_cells": 523,
+          "hidden_cells": 1409,
+          "closure_m2": 3.5846390775230796e-17,
+          "volume_rate_relative_error": 1.6980041739647928e-09,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.3,
+          "floor_cells": 556,
+          "hidden_cells": 4233,
+          "closure_m2": 3.583552868084707e-17,
+          "volume_rate_relative_error": 2.545756922451924e-09,
+          "min_volume": 0.0
+        }
+      ],
+      "degenerate_arc_regression": {
+        "snapshot": "output/ale/fv_state_plane_stable.pt",
+        "previously_corrupted_cell": 6623,
+        "direct_clipped_volume": 3.6056186035127345e-06,
+        "uncut_volume": 3.858682960546647e-06,
+        "max_clipping_volume_increase_m3": 1.3552527156068805e-20,
+        "closure_error_m2": 4.7883075823934705e-17,
+        "volume_rate_relative_error": 1.5258611364056557e-09
+      },
+      "passed": true
+    },
+    "split_keep_full_foam": {
+      "foam": "foams/plasticine0_split_keep_clean",
+      "test_penetration": 0.01,
+      "single_sphere_analytic_checks": [
+        {
+          "centre_height": 0.3,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": 0.0,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": -0.2,
+          "volume_error": 2.220446049250313e-16,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": 1.2,
+          "volume_error": 0.0,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        },
+        {
+          "centre_height": -1.2,
+          "volume_error": 1.743934249004316e-16,
+          "ground_area_error": 0.0,
+          "cap_area_error": 0.0
+        }
+      ],
+      "closure_error_m2": 1.22237183780112e-17,
+      "volume_rate_relative_error": 8.842574856934501e-10,
+      "wall_force_balance_error_N": 4.440892098500626e-16,
+      "step_energy_error_J": -1.012211148232467e-15,
+      "step_mass_error": -2.092270653583086e-16,
+      "tangent_translation_density_error": 6.661338147750939e-16,
+      "plane_boundary": {
+        "contact_cells": 10,
+        "contact_area": 0.00371371558035123,
+        "wall_pressure_min": 1533.4190487593246,
+        "wall_pressure_max": 1533.4190487594128,
+        "wall_tensile_prediction_cells": 0,
+        "wall_tensile_prediction_area": 0.0,
+        "wall_sliding_cells": 0,
+        "wall_normal_velocity_max": 0.0
+      },
+      "geometry": {
+        "method": "direct_halfspace",
+        "floor_faces": 10,
+        "recut_wall_disks": 28,
+        "stable_sphere_area": true,
+        "max_volume_increase_m3": 2.710505431213761e-20,
+        "max_cap_area_increase_m2": 4.336808689942018e-19
+      },
+      "friction_checks": {
+        "stick_velocity_error_m_s": 0.0,
+        "sliding_coulomb_force_error_N": 1.734723475976807e-18,
+        "sliding_cells": 10,
+        "minimum_friction_heat_rate_W": -0.0
+      },
+      "checks": {
+        "single_sphere": true,
+        "closure": true,
+        "geometric_flux": true,
+        "force_balance": true,
+        "energy_balance": true,
+        "mass_balance": true,
+        "tangent_translation": true,
+        "impermeable_ground": true,
+        "compressive_contact": true,
+        "friction_stick_slip": true,
+        "deep_clipping": true
+      },
+      "deep_geometry": [
+        {
+          "height": 0.03,
+          "floor_cells": 117,
+          "hidden_cells": 12,
+          "closure_m2": 1.22237183780112e-17,
+          "volume_rate_relative_error": 8.601418984413076e-10,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.08,
+          "floor_cells": 436,
+          "hidden_cells": 467,
+          "closure_m2": 1.225565154237936e-17,
+          "volume_rate_relative_error": 8.695036548817277e-10,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.15,
+          "floor_cells": 562,
+          "hidden_cells": 2196,
+          "closure_m2": 8.174158691961145e-18,
+          "volume_rate_relative_error": 7.874904918491335e-10,
+          "min_volume": 0.0
+        },
+        {
+          "height": 0.3,
+          "floor_cells": 581,
+          "hidden_cells": 5518,
+          "closure_m2": 8.445226420015236e-18,
+          "volume_rate_relative_error": 9.944438550844e-10,
+          "min_volume": 0.0
+        }
+      ],
+      "passed": true
+    },
+    "original_k1_worktree": {
+      "source_working_file_hash_changes": [],
+      "checked": 49
+    },
+    "switch_off_smoke": {
+      "k1": "Two original implicit steps completed, Newton median 0; output/ale/ground_off_k1_smoke.log. This is a startup smoke test, not a full regression of the seven landing scenes.",
+      "fv": "Two explicit FV steps without --fv-ground-cut completed then stopped at the requested step limit; output/ale/fv_solid_ground_off_fv_smoke.json."
+    }
+  },
+  "run": {
+    "foam": "foams/fourier8k_clean",
+    "scene": 0,
+    "cells": 7690,
+    "target_time": 0.20833333333333334,
+    "initial_segment": {
+      "status": "budget_stopped_not_complete",
+      "time_reached": 0.20553183879966908,
+      "physical_steps": 7004,
+      "dt_min": 1.0008346758648424e-06,
+      "dt_max": 2.3393377574078432e-06,
+      "wall_seconds": 480.0180715009992,
+      "rejected_attempts": 0,
+      "mass_relative_error": -3.8336690217258784e-16,
+      "energy_source_balance_error": -5.554908174337496e-15,
+      "control_volume_count": 7670,
+      "active_cell_count": 7673
+    },
+    "resumed_segment": {
+      "status": "completed",
+      "time_reached": 0.20833333333333334,
+      "physical_steps": 1739,
+      "dt_min": 1.00670537612557e-06,
+      "dt_max": 1.969099101577036e-06,
+      "wall_seconds": 138.63711653299833,
+      "rejected_attempts": 0,
+      "mass_relative_error": 0.0,
+      "energy_source_balance_error": 4.589156092971605e-15,
+      "control_volume_count": 7655,
+      "active_cell_count": 7656
+    },
+    "status": "completed",
+    "total_physical_steps": 8743,
+    "total_wall_seconds": 618.6551880339975,
+    "first_contact_time": 0.1903946212273963,
+    "dt_range_seconds": [
+      1.0008346758648424e-06,
+      2.3393377574078432e-06
+    ],
+    "total_rejected_attempts": 0,
+    "final_contact_cells": 84,
+    "final_contact_area_m2": 0.0235169649268116,
+    "final_contact_pressure_range_Pa": [
+      22403.235212093776,
+      37751.13365737882
+    ],
+    "final_density_range": [
+      996.7791195150728,
+      1079.4281051232713
+    ],
+    "geometry": {
+      "method": "direct_halfspace",
+      "floor_faces": 84,
+      "recut_wall_disks": 310,
+      "stable_sphere_area": true,
+      "max_volume_increase_m3": 3.8963515573697816e-20,
+      "max_cap_area_increase_m2": 1.3010426069826053e-18
+    },
+    "snapshots": [
+      "output/ale/fv_state_plane_direct.pt",
+      "output/ale/fv_state_plane_direct_b.pt"
+    ],
+    "frames": "output/ale/frames_plane_direct_b.npz",
+    "reproduce_initial": "PYTHONPATH=. python -u free_surface/merged_drop.py --foam foams/fourier8k_clean --scene 0 --save output/ale --tag plane_direct --frames 5 --fv-ale --fv-ground-cut --fv-surface-motion coupled --fv-agglomerate --fv-agglomerate-dt 1e-6 --fv-steps 20000 --fv-budget 480",
+    "reproduce_resume": "Same options, --tag plane_direct_b --fv-resume output/ale/fv_state_plane_direct.pt --fv-steps 10000 --fv-budget 240",
+    "scope": "Reached the first post-contact output frame at 0.2083333 s, not full 0.625 s landing. The intermediate stop was the wall-time budget; resumed from the last accepted state."
+  },
+  "performance": {
+    "snapshot": "output/ale/fv_state_plane_direct_b.pt",
+    "repeat": 6,
+    "current_production_step_ms": {
+      "median": 72.72446250135545,
+      "min": 68.00930300232721,
+      "max": 79.5945979989483,
+      "samples": [
+        68.00930300232721,
+        69.80145900161006,
+        71.44037900070543,
+        74.00854600200546,
+        76.15872799942736,
+        79.5945979989483
+      ]
+    },
+    "historical_duplicate_rhs_control_ms": {
+      "median": 83.50655550020747,
+      "min": 80.23565900293761,
+      "max": 86.92787200197927,
+      "samples": [
+        80.23565900293761,
+        81.42520099863759,
+        83.33715299886535,
+        83.67595800154959,
+        84.31652400031453,
+        86.92787200197927
+      ]
+    },
+    "synchronized_stage_exclusive_median_ms": {
+      "contact_boundary_solve.exclusive_ms": 1.9069179998041363,
+      "rhs.exclusive_ms": 18.039953998595593,
+      "geometry.exclusive_ms": 47.311680998973316,
+      "cut.exclusive_ms": 3.755558502234635,
+      "plastic_return.exclusive_ms": 2.1628784998029005,
+      "advance.exclusive_ms": 1.1562305044208188
+    },
+    "calls_per_step": {
+      "contact_boundary_solve": 2,
+      "rhs": 2,
+      "geometry": 2,
+      "cut": 2,
+      "plastic_return": 2,
+      "advance": 1
+    },
+    "contact_quadrature_points": 0,
+    "contact_boundary_iterations": 0,
+    "scope": "Frozen final-state full-step replay. Reset/loading excluded. Current production reuses group selection RHS. This new boundary model is not physically identical to the earlier curved penalty model, so these timings do not establish an equal-model speedup or full-landing runtime."
+  }
+}
