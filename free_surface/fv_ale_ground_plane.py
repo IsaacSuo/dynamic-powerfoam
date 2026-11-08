@@ -23,7 +23,7 @@ import warp as wp
 
 from free_surface.alpha_complex import LMAX, AlphaComplex, k_alpha
 from free_surface.geo_pipe import (BIG, GeoPipe, PipeGeometry, f64, i32, k_cand, k_cand_full, k_ent_i, k_ent_j, k_hval, k_nbrs,
-                                   k_pair_compact, k_pair_count, k_pair_fill, pair_kernel)
+                                   k_pair_compact, k_pair_count, k_pair_fill, pair_kernel, site_launch)
 from free_surface.geometry_warp import TWO_PI, k_geo_pair, k_geo_site
 
 
@@ -212,7 +212,7 @@ class GroundPipe(GeoPipe):
         if getattr(self, 'direct_sphere', False):
             from free_surface.geometry_sphere_direct import k_geo_site_direct
             site_kernel = k_geo_site_direct
-        wp.launch(site_kernel, n, inputs=[paw, raw_, W_(soff, wp.int32), W_(ent, wp.int32), np_, V3(nn), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1),
+        site_launch(site_kernel, n, inputs=[paw, raw_, W_(soff, wp.int32), W_(ent, wp.int32), np_, V3(nn), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1),
                                           W_(narc, wp.int32), GeoPipe._fib[(str(dev), self.npole)], self.npole, float(self.piece), BIG, 4*math.pi,
                                           W_(nbrs, wp.int32), W_(hidden.to(i32), wp.int32), int(getattr(self, 'stable_area', False)), 0, 0.0, W_(ent, wp.int32), 0, F_(Vw)],
                   outputs=[V3(pn), F_(pA), F_(V), V3(pole)], device=dev)
