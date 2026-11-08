@@ -5,7 +5,7 @@ cut as Recut.geometry's AlphaComplex -> structure_gpu -> geometry_warp.GeometryW
               from call to call: a heap sort when the overlaps are found again, else h again in the last order and an
               insertion sort (h moves little between calls: nearly sorted); the kept, h < r_i, are the sorted prefix
               (AlphaComplex.candidates: the same order by two global stable sorts), copied compact with j, n, h
-  clip        alpha_complex.k_alpha, unchanged
+  clip        alpha_coop.clip (11-08: alpha_complex.k_alpha's outputs, one warp a cell; A.coop = False: k_alpha)
   structure   each cell's walls to larger sites, sorted by the site (structure_gpu's key order i n + j), their links
               (-1 padded), the circle's existence (GeometryWarp's keep: L > 0, r_i^2 - h^2 > 0), the kept pairs
               compacted; each site's entries (side i: its own kept pairs in order; side j: atomic cursors) and its
@@ -334,7 +334,12 @@ class GeoPipe:
                       outputs=[W_(self.cj, wp.int32), W_(self.cn, wp.vec3d), W_(self.ch, wp.float64)], device=dev)
         self._mark('candidates')
         # clip
-        wp.launch(k_alpha, n, inputs=[pw, rw, W_(self.coff, wp.int32), W_(self.cj, wp.int32), W_(self.cn, wp.vec3d), W_(self.ch, wp.float64),
+        if getattr(A, 'coop', True):
+            from free_surface.alpha_coop import clip
+            clip(rw, W_(self.coff, wp.int32), W_(self.cj, wp.int32), W_(self.cn, wp.vec3d), W_(self.ch, wp.float64),
+                 A.walls, A.links, A.nwall, A.nlink, A.status, n, device=dev)
+        else:
+          wp.launch(k_alpha, n, inputs=[pw, rw, W_(self.coff, wp.int32), W_(self.cj, wp.int32), W_(self.cn, wp.vec3d), W_(self.ch, wp.float64),
                                       A.P, A.Pid, A.T, A.V, A.rem, A.ea, A.eb, A.nxt, A.V32, A.ed2],
                   outputs=[A.walls, A.links, A.nwall, A.nlink, A.status], device=dev)
         self._mark('clip')

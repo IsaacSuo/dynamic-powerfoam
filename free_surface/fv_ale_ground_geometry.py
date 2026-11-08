@@ -97,8 +97,13 @@ class GroundClip:
     def __init__(self,ground,device,local=True):
         self.ground=ground;self.device=device;self.recut=None;self.size=0
         self.local=local  # False retains the full-field reference for replay checks.
+        import os
+        self.plane_cut=os.environ.get('FV_GROUND_PLANE','1')!='0'  # 11-08: the ground as a clip plane of the cut (fv_ale_ground_plane); FV_GROUND_PLANE=0: the local re-clip
 
     def geometry(self,p,r):
+        if self.plane_cut and self.local:
+            from free_surface.fv_ale_ground_plane import plane_geometry
+            return plane_geometry(self,p,r)
         n=len(r);dev=p.device;dtype=p.dtype
         if n!=self.size:
             self.size=n;self.recut=Recut(n,self.device);self.recut.pipe=GeoPipe(n,self.device)

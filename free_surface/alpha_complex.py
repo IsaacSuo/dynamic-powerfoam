@@ -131,22 +131,45 @@ def k_alpha(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), coff: wp
         P[i, q] = wp.vec4d(n[0], n[1], n[2], h); Pid[i, q] = cj[c]
         nplane += 1
         # the removed region's boundary: edges of removed triangles whose reverse is not in a removed triangle
+        # (11-08: the reverse is looked for among the removed triangles only, their indices listed in nxt, free until
+        # the walls phase; the same edges in the same order. More removed than nxt holds: the search over all.)
         nb = int(0)
-        for t in range(nt):
-            if rem[i, t] == 1:
-                tr = T[i, t]
+        if nrem <= nxt.shape[1]:
+            nr = int(0)
+            for t in range(nt):
+                if rem[i, t] == 1:
+                    nxt[i, nr] = t
+                    nr += 1
+            for ra in range(nr):
+                tr = T[i, nxt[i, ra]]
                 for e in range(3):
                     x = tr[e]; y = tr[(e+1) % 3]
                     inner = int(0)
-                    for t2 in range(nt):
-                        if t2 != t and rem[i, t2] == 1:
-                            u = T[i, t2]
+                    for ra2 in range(nr):
+                        if ra2 != ra:
+                            u = T[i, nxt[i, ra2]]
                             for e2 in range(3):
                                 if u[e2] == y and u[(e2+1) % 3] == x:
                                     inner = 1
                     if inner == 0:
                         ea[i, nb] = x; eb[i, nb] = y
                         nb += 1
+        else:
+            for t in range(nt):
+                if rem[i, t] == 1:
+                    tr = T[i, t]
+                    for e in range(3):
+                        x = tr[e]; y = tr[(e+1) % 3]
+                        inner = int(0)
+                        for t2 in range(nt):
+                            if t2 != t and rem[i, t2] == 1:
+                                u = T[i, t2]
+                                for e2 in range(3):
+                                    if u[e2] == y and u[(e2+1) % 3] == x:
+                                        inner = 1
+                        if inner == 0:
+                            ea[i, nb] = x; eb[i, nb] = y
+                            nb += 1
         # compact the kept triangles, then close the hole
         m = int(0)
         for t in range(nt):
@@ -262,6 +285,8 @@ class AlphaComplex:
         self.tree = AABBTree(device)
         self.f32, self.f32_falls = False, 0                                        # (the clipping in single precision, alpha_complex32; a cell that closes badly: the double kernel)
         self.ov_p, self.ov_margin, self.n_overlaps = None, 0., 0
+        import os
+        self.coop = os.environ.get('ALPHA_COOP', '1') != '0'                           # (11-08: the clip by alpha_coop, one warp a cell, the same outputs; False / ALPHA_COOP=0: k_alpha)
 
     def overlaps(self, p, r, margin=0.):
         """the overlapping pairs (Power Foam's BVH) with the radii raised by margin: a superset of the overlaps at any
@@ -317,7 +342,11 @@ class AlphaComplex:
                       outputs=[self.walls, self.links, self.nwall, self.nlink, self.status])
             done = not bool((wp.to_torch(self.status) > 1).any())
             self.f32_falls += not done
-        if not done:
+        if not done and self.coop:
+            from free_surface.alpha_coop import clip
+            clip(wf(r, wp.float64), wf(coff.int(), wp.int32), wf(j.int(), wp.int32), wf(nn, wp.vec3d), wf(h, wp.float64),
+                 self.walls, self.links, self.nwall, self.nlink, self.status, self.n)
+        elif not done:
             wp.launch(k_alpha, self.n, inputs=[wf(p, wp.vec3d), wf(r, wp.float64), wf(coff.int(), wp.int32), wf(j.int(), wp.int32), wf(nn, wp.vec3d), wf(h, wp.float64),
                                                self.P, self.Pid, self.T, self.V, self.rem, self.ea, self.eb, self.nxt, self.V32, self.ed2],
                       outputs=[self.walls, self.links, self.nwall, self.nlink, self.status])

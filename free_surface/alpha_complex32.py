@@ -85,22 +85,45 @@ def k_alpha32(p: wp.array(dtype=wp.vec3f), r: wp.array(dtype=wp.float32), coff: 
         P[i, q] = wp.vec4f(n[0], n[1], n[2], h); Pid[i, q] = cj[c]
         nplane += 1
         # the removed region's boundary: edges of removed triangles whose reverse is not in a removed triangle
+        # (11-08: the reverse is looked for among the removed triangles only, their indices listed in nxt, free until
+        # the walls phase; the same edges in the same order. More removed than nxt holds: the search over all.)
         nb = int(0)
-        for t in range(nt):
-            if rem[i, t] == 1:
-                tr = T[i, t]
+        if nrem <= nxt.shape[1]:
+            nr = int(0)
+            for t in range(nt):
+                if rem[i, t] == 1:
+                    nxt[i, nr] = t
+                    nr += 1
+            for ra in range(nr):
+                tr = T[i, nxt[i, ra]]
                 for e in range(3):
                     x = tr[e]; y = tr[(e+1) % 3]
                     inner = int(0)
-                    for t2 in range(nt):
-                        if t2 != t and rem[i, t2] == 1:
-                            u = T[i, t2]
+                    for ra2 in range(nr):
+                        if ra2 != ra:
+                            u = T[i, nxt[i, ra2]]
                             for e2 in range(3):
                                 if u[e2] == y and u[(e2+1) % 3] == x:
                                     inner = 1
                     if inner == 0:
                         ea[i, nb] = x; eb[i, nb] = y
                         nb += 1
+        else:
+            for t in range(nt):
+                if rem[i, t] == 1:
+                    tr = T[i, t]
+                    for e in range(3):
+                        x = tr[e]; y = tr[(e+1) % 3]
+                        inner = int(0)
+                        for t2 in range(nt):
+                            if t2 != t and rem[i, t2] == 1:
+                                u = T[i, t2]
+                                for e2 in range(3):
+                                    if u[e2] == y and u[(e2+1) % 3] == x:
+                                        inner = 1
+                        if inner == 0:
+                            ea[i, nb] = x; eb[i, nb] = y
+                            nb += 1
         # compact the kept triangles, then close the hole
         m = int(0)
         for t in range(nt):
