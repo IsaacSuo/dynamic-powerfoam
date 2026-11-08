@@ -49,6 +49,8 @@ class Stages:
 
 def load(path):
     d=torch.load(path,map_location='cpu',weights_only=False);m=d['material']
+    if d.get('constitutive','wilkins')!='wilkins':
+        raise ValueError('This Wilkins replay loader cannot interpret hyperelastic log-shape snapshots as stress')
     sol=core.SolidALE(d['p'],d['r'],m['E'],m['nu'],m['ys'],
         groups=d.get('groups'),surface_motion=d['surface_motion'],contact_model=d['contact_model'],
         contact_order=d['contact_order'],contact_scale=d['contact_scale'],

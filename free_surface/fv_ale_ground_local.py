@@ -101,7 +101,11 @@ def local_geometry(p,r,base,h,plane_ids,touched,ground,device,pipe):
     wp.launch(wall_volume,total,inputs=[W(g.i,wp.int64),W(g.j,wp.int64),W(g.wall_A,wp.float64),W(g.hi,wp.float64),W(g.hj,wp.float64)],outputs=[W(Vw,wp.float64)],device=device)
     pn=base.patch_n.clone();capA=base.patch_A.clone();volume=base.V.clone();pole=base.pole.clone()
     hidden=base.hidden|(h<=-r)
-    wp.launch(k_geo_site,len(targets),inputs=[W(p,wp.vec3d),W(r,wp.float64),W(off,wp.int32),W(ent,wp.int32),total,
+    site_kernel=k_geo_site
+    if pipe.direct_sphere:
+        from free_surface.geometry_sphere_direct import k_geo_site_direct
+        site_kernel=k_geo_site_direct
+    wp.launch(site_kernel,len(targets),inputs=[W(p,wp.vec3d),W(r,wp.float64),W(off,wp.int32),W(ent,wp.int32),total,
         W(g.nn,wp.vec3d),W(g.u,wp.vec3d),W(g.v,wp.vec3d),W(g.rho,wp.float64),W(g.hi,wp.float64),W(g.hj,wp.float64),
         W(g.arc_t0,wp.float64),W(g.arc_t1,wp.float64),W(g.narc,wp.int32),GeoPipe._fib[(str(device),pipe.npole)],
         pipe.npole,float(pipe.piece),BIG,4*math.pi,W(base.nbrs,wp.int32),W(hidden.to(torch.int32),wp.int32),

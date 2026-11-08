@@ -1,71 +1,52 @@
-"""Independent balance checks for coupled sphere motion/contact on a full foam."""
-import argparse,json,time
+"""Real full-step replay for the optional local clipping-boundary experiment."""
+import json,time,statistics
 from pathlib import Path
 import torch,warp as wp
-from free_surface.fv_ale_solid import SolidALE
-from free_surface.fv_ale_contact import surface_quadrature,reference_surface_quadrature
-from free_surface.fv_ale_boundary import solve_boundary,surface_traction
+from free_surface.fv_ale_profile import load,physical_difference
+from free_surface.fv_ale_agglomerate import merge_cell
 
 
 @torch.no_grad()
 def main():
-    p=argparse.ArgumentParser();p.add_argument('snapshot',type=Path);p.add_argument('--out',type=Path,required=True);args=p.parse_args()
-    wp.init();d=torch.load(args.snapshot,weights_only=False,map_location='cpu');g=d['material']
-    sol=SolidALE(d['p'],d['r'],g['E'],g['nu'],g['ys'],surface_motion='coupled',groups=d.get('groups'))
-    if 'reference_volume' in d:sol.contact_length=d['reference_volume']**(1/3);sol.contact_k=sol.bulk/sol.contact_length
-    s=sol.initial;s.q=d['q'].to(s.q.device);mesh=s.mesh
-    m,v,rho,_,_,sigma,c=sol.primitive(s);Z=rho*c
-    timings={};quads={}
-    for name,fn in [('reference',reference_surface_quadrature),('batched',surface_quadrature)]:
-        fn(mesh.geometry,sol.ground,8)
-        torch.cuda.synchronize();tick=time.perf_counter()
-        for _ in range(3):quad=fn(mesh.geometry,sol.ground,8)
-        torch.cuda.synchronize();timings[name]=(time.perf_counter()-tick)/3;quads[name]=quad
-    qa,qb=quads['reference'],quads['batched']
-    same_owner=bool(torch.equal(qa[0],qb[0]))
-    quadrature_difference=[float((x-y).abs().max()) if x.numel() else 0. for x,y in zip(qa[1:],qb[1:])] if same_owner else None
-    reports=[];forces=[]
-    for order in [8,12,16]:
-        mesh.contact_quad=surface_quadrature(mesh.geometry,sol.ground,order)
-        w,dr,grad,rate,b,info=solve_boundary(mesh,v,sigma,Z,sol.contact_k,sol.friction,sol.contact_damping)
-        owner,n,weight,delta=mesh.contact_quad
-        actual=w[owner]+dr[owner,None]*n
-        t,P,drag=surface_traction(actual,Z[owner],delta,sol.contact_k,sol.friction,sol.contact_damping)
-        F=torch.zeros_like(v).index_add(0,owner,weight[:,None]*t)
-        Tn=torch.zeros_like(s.r).index_add(0,owner,weight*(t*n).sum(1))
-        A=mesh.cap_area;N=mesh.cap_normal_integral;Q=mesh.cap_Q
-        Rw=Z[:,None]*(A[:,None]*(w-v)+N*dr[:,None])+(sigma@N[:,:,None])[:,:,0]-F
-        Rr=Z*((N*(w-v)).sum(1)+A*dr)+(sigma*Q).sum((1,2))-Tn
-        var=1-(N/A.clamp(min=1e-300)[:,None]).square().sum(1)
-        active=mesh.surface;radial=active&(var>1e-3)
-        scale=(Z*A*(v.norm(dim=1)+1e-3)+F.norm(dim=1)+(sigma@N[:,:,None])[:,:,0].norm(dim=1)).clamp(min=1e-100)
-        force_res=float((Rw.norm(dim=1)[active]/scale[active]).max())
-        radial_res=float((Rr.abs()[radial]/scale[radial]).max()) if bool(radial.any()) else 0.
-        boundary_power=float((weight*(t*actual).sum(1)).sum())
-        heat=float((-weight*(t[:,[0,2]]*actual[:,[0,2]]).sum(1)).sum())
-        work_error=abs(float(b[1].sum())-boundary_power-heat)
-        point_equality=float((actual-info['point_velocity']).abs().max()) if len(owner) else 0.
-        reports.append({'order':order,'iterations':info['iterations'],'solver_residual':info['relative_residual'],
-          'independent_force_residual':force_res,'independent_radial_residual':radial_res,
-          'traction_work_plus_heat_error':work_error,'point_velocity_difference':point_equality,
-          'force':F.sum(0).cpu().tolist(),'normal_work_rate':float(b[1].sum()),'friction_heat_rate':heat})
-        forces.append(F)
-    mesh.contact_quad=surface_quadrature(mesh.geometry,sol.ground,8)
-    rhs=sol.rhs(s);dt=.1*rhs[3]['dt_scale'];end,stats=sol.advance(s,dt,rhs)
-    total_energy_error=abs(float((end.q[:,4]-s.q[:,4]).sum())-stats['source_work'])
-    force_errors=[float((f-forces[-1]).norm()/forces[-1].norm().clamp(min=1e-100)) for f in forces[:-1]]
-    result={'snapshot':str(args.snapshot),'time':d['time'],'orders':reports,'force_error_to_order16':force_errors,
-      'quadrature_seconds':timings,'batched_same_point_owners':same_owner,'batched_max_difference_normal_weight_gap':quadrature_difference,
-      'step_dt':dt,'step_mass_error':float((end.q[:,0].sum()-s.q[:,0].sum())/s.q[:,0].sum()),
-      'step_energy_source_error_joule':total_energy_error,'boundary_motion_work_defect':stats['boundary_work_defect'],
-      'regularization':'Coulomb friction regularized with viscous impedance; not exact static sticking',
-      'checks':{'batched_quadrature_equivalence':same_owner and max(quadrature_difference)<1e-12,
-                'local_equations':max(max(x['independent_force_residual'],x['independent_radial_residual']) for x in reports)<1e-7,
-                'same_boundary_velocity':all(x['point_velocity_difference']<1e-14 for x in reports),
-                'work_heat_balance':all(x['traction_work_plus_heat_error']<1e-8 for x in reports),
-                'quadrature':force_errors[0]<2e-3,
-                'accepted_step_balance':total_energy_error<1e-8 and abs(float(end.q[:,0].sum()-s.q[:,0].sum()))<1e-10}}
-    result['passed']=all(result['checks'].values());args.out.write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result,indent=2))
-    if not result['passed']:raise SystemExit(2)
+    out=Path('output/ale');records=[]
+    for tag in ['dt8us','cfl20_long']:
+        sol,reset,data=load(out/f'fv_state_{tag}.pt');labels=sol.groups.clone()
+        def fresh(mode):
+            sol.groups=labels.clone();sol.has_groups=True
+            sol.ground_cutter.recut.pipe.local_boundary=mode
+            return reset()
+        def step(s):
+            while True:
+                gv=sol.group_sum(s.mesh.volume)[sol.groups]
+                small=gv<.001*data['reference_volume']
+                first=None
+                if bool(small.any()):
+                    k=int(torch.where(small,gv,torch.full_like(gv,float('inf'))).argmin())
+                else:
+                    first=sol.rhs(s)
+                    k=first[3]['wave_cell'] if 2*first[3]['wave_dt_scale']<80e-6 else None
+                if k is None:break
+                s,_=merge_cell(sol,s,k)
+            return sol.advance(s,min(1/1200,2*first[3]['dt_scale']),first,2.)[0]
+        for mode in [False,True]*2:step(fresh(mode))
+        times={False:[],True:[]};errors=[]
+        for rep in range(8):
+            states={};raw={}
+            for mode in ([False,True] if rep%2==0 else [True,False]):
+                s=fresh(mode);torch.cuda.synchronize();tick=time.perf_counter();states[mode]=step(s);torch.cuda.synchronize()
+                times[mode].append(1000*(time.perf_counter()-tick))
+                a=sol.ground_cutter.recut.A
+                nw=wp.to_torch(a.nwall).clone()
+                walls=wp.to_torch(a.walls).clone()
+                raw[mode]=(nw,torch.where(torch.arange(walls.shape[1],device=walls.device)[None]<nw[:,None],walls,-1))
+            assert all(torch.equal(a,b) for a,b in zip(raw[False],raw[True]))
+            d=physical_difference(sol,states[False],states[True]);errors.append(d)
+            assert d['max_position_difference_m']<1e-10 and d['max_velocity_difference_m_s']<1e-7 and d['max_pressure_difference_Pa']<1e-3,d
+        record={'snapshot':tag,'reference_median_ms':statistics.median(times[False]),'local_boundary_median_ms':statistics.median(times[True]),
+            'paired_saved_median_ms':statistics.median([a-b for a,b in zip(times[False],times[True])]),'faster_pairs':sum(a>b for a,b in zip(times[False],times[True])),
+            'physical_differences':errors,'timings':times,'passed':True}
+        records.append(record);print(json.dumps(record),flush=True)
+    (out/'recut_local_boundary_step.json').write_text(json.dumps(records,indent=2)+'\n')
+
 
 if __name__=='__main__':main()

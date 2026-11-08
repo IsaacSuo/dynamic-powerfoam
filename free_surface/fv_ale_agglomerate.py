@@ -14,7 +14,7 @@ from free_surface.fv_ale_solid import State
 
 
 @torch.no_grad()
-def merge_cell(solver,s,k,max_members=32):
+def merge_cell(solver,s,k,max_members=32,allow_unavailable=False):
     labels=solver.groups
     target=int(labels[k]);V=solver.group_sum(s.mesh.volume)
     i,j=s.mesh.i,s.mesh.j
@@ -23,10 +23,23 @@ def merge_cell(solver,s,k,max_members=32):
     neighbours=torch.where(li==target,lj,li)[incident]
     area=torch.zeros_like(s.r).index_add(0,neighbours,s.mesh.area[incident])
     counts=torch.bincount(labels,minlength=len(labels))
+    raw_area=area.clone()
     area=torch.where((V>0)&(counts+counts[target]<=max_members),area,0.)
     area[target]=0
     anchor=int(area.argmax())
     if float(area[anchor])<=0:
+        if allow_unavailable:
+            candidates=torch.nonzero((raw_area>0)&(V>0)).flatten()
+            # No topology or state change: the caller must use the actual
+            # unmerged CFL step instead of insisting on its optional target.
+            return s,{'cell':int(k),'group':target,'skipped':True,
+                'reason':'no adjacent group within member-count cap',
+                'target_members':int(counts[target]),'max_members':max_members,
+                'target_active_members':int(((labels==target)&(s.mesh.volume>0)).sum()),
+                'candidate_groups':candidates.cpu().tolist(),
+                'candidate_member_counts':counts[candidates].cpu().tolist(),
+                'candidate_shared_areas':raw_area[candidates].cpu().tolist(),
+                'volume_before':float(V[target]),'geometry_changed':False}
         raise RuntimeError('no adjacent admissible FV group for small cell %d'%k)
     updated=labels.clone();updated[updated==target]=anchor
     before=s.q.sum(0)

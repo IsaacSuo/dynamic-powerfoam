@@ -379,7 +379,7 @@ class GeometryWarp:
     """the values of gpu_geometry.Geometry(p, r, S) that k1's run reads (see the module docstring)"""
     _fib = {}
 
-    def __init__(self, p, r, S, piece=math.pi/6, npole=32):
+    def __init__(self, p, r, S, piece=math.pi/6, npole=32, integrate_sites=True):
         dev = p.device
         self.p, self.r, self.n = p, r, len(p)
         with torch.no_grad():
@@ -411,8 +411,9 @@ class GeometryWarp:
             ph = torch.acos(1-2*k_/npole); th = math.pi*(1+5**.5)*k_
             GeometryWarp._fib[key] = wp.from_torch(torch.stack((torch.cos(th)*torch.sin(ph), torch.sin(th)*torch.sin(ph), torch.cos(ph)), 1).contiguous(), dtype=wp.vec3d)
         pn, pA, V, pole = V3(n), F(n), F(n), V3(n)
-        wp.launch(k_geo_site, n, inputs=[pw, rw, I32(off), I32(o), npr, nn, u, v, rho, hi, hj, at0, at1, narc, GeometryWarp._fib[key], npole, float(piece), BIG, 4*math.pi,
-                                         I32(self.nbrs), I32(self.hidden), 0, 0, 0.0, I32(o), 0], outputs=[Vw, pn, pA, V, pole], device=str(dev))
+        if integrate_sites:
+            wp.launch(k_geo_site, n, inputs=[pw, rw, I32(off), I32(o), npr, nn, u, v, rho, hi, hj, at0, at1, narc, GeometryWarp._fib[key], npole, float(piece), BIG, 4*math.pi,
+                                             I32(self.nbrs), I32(self.hidden), 0, 0, 0.0, I32(o), 0], outputs=[Vw, pn, pA, V, pole], device=str(dev))
         T = lambda a_: wp.to_torch(a_, requires_grad=False)
         self.nn, self.c, self.u, self.v, self.rho, self.hi, self.hj = T(nn), T(c), T(u), T(v), T(rho), T(hi), T(hj)
         self.wall_A, self.wall_c, self.patch_n, self.patch_A, self.V, self.pole = T(wA), T(wc), T(pn), T(pA), T(V), T(pole)

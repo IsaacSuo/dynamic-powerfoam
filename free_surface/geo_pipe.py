@@ -304,6 +304,8 @@ class GeoPipe:
         self.cnt = Z(8)
         self.ncap = 0
         self.timer = None
+        self.local_boundary = False  # Experimental kernel; reference stays default.
+        self.direct_sphere = False  # Exact complete-arc area experiment, with reference fallback.
         self.sorted_key = None
         assert npole+2 == NCAND
         key = (str(dev), npole)
@@ -324,7 +326,7 @@ class GeoPipe:
             self.hk, self.ek, self.cj, self.ch = Z(f64), Z(i32), Z(i32), Z(f64)
             self.cn = torch.zeros(self.ncap, 3, dtype=f64, device=self.dev)
 
-    def __call__(self, A, p, r):
+    def __call__(self, A, p, r, topology_only=False):
         n, dev = self.n, self.dev
         W_ = lambda t_, d_: wp.from_torch(t_, dtype=d_)
         p = p.contiguous(); r = r.contiguous()
@@ -355,12 +357,15 @@ class GeoPipe:
                       outputs=[W_(self.cj, wp.int32), W_(self.cn, wp.vec3d), W_(self.ch, wp.float64)], device=dev)
         self._mark('candidates')
         # clip
-        if getattr(A, 'coop', True):
+        clip_kernel = k_alpha
+        if self.local_boundary:
+            from free_surface.alpha_local_cut import k_alpha as clip_kernel
+        if getattr(A, 'coop', True) and not self.local_boundary:
             from free_surface.alpha_coop import clip
             clip(rw, W_(self.coff, wp.int32), W_(self.cj, wp.int32), W_(self.cn, wp.vec3d), W_(self.ch, wp.float64),
                  A.walls, A.links, A.nwall, A.nlink, A.status, n, device=dev)
         else:
-          wp.launch(k_alpha, n, inputs=[pw, rw, W_(self.coff, wp.int32), W_(self.cj, wp.int32), W_(self.cn, wp.vec3d), W_(self.ch, wp.float64),
+          wp.launch(clip_kernel, n, inputs=[pw, rw, W_(self.coff, wp.int32), W_(self.cj, wp.int32), W_(self.cn, wp.vec3d), W_(self.ch, wp.float64),
                                       A.P, A.Pid, A.T, A.V, A.rem, A.ea, A.eb, A.nxt, A.V32, A.ed2],
                   outputs=[A.walls, A.links, A.nwall, A.nlink, A.status], device=dev)
         self._mark('clip')
@@ -404,6 +409,10 @@ class GeoPipe:
             curn = torch.zeros(n, dtype=i32, device=dev)
             wp.launch(k_nbrs, m, inputs=[W_(pairs, wp.int32), W_(self.poff, wp.int32), n], outputs=[W_(curn, wp.int32), W_(nbrs, wp.int32)], device=dev)
         hidden = wp.to_torch(A.status) == 1
+        if topology_only:
+            # Appending vacuum half-spaces needs these exact real-cell
+            # constraints, not volumes of the subsequently changed cells.
+            return None,dict(pairs=pairs[:m],links=plinks[:m,:K],nbrs=nbrs,hidden=hidden)
         # values
         E = lambda *s_: torch.empty(*s_, dtype=f64, device=dev)
         np_ = max(npr, 1)
@@ -419,7 +428,11 @@ class GeoPipe:
             wp.launch(pair_kernel(), npr, inputs=[pw, rw, W_(Pk, wp.int32), W_(Ck, wp.int32), K, TWO_PI, BIG, 1e299, .9, F_(ea), F_(ed), W_(el, wp.int32)],
                       outputs=[V3(nn), V3(c), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1), W_(narc, wp.int32), F_(wA), V3(wc), F_(Vw)], device=dev)
         pn, pA, V, pole = E(n, 3), E(n), E(n), E(n, 3)
-        site_launch(k_geo_site, n, inputs=[pw, rw, W_(soff, wp.int32), W_(ent, wp.int32), np_, V3(nn), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1),
+        site_kernel = k_geo_site
+        if self.direct_sphere:
+            from free_surface.geometry_sphere_direct import k_geo_site_direct
+            site_kernel = k_geo_site_direct
+        site_launch(site_kernel, n, inputs=[pw, rw, W_(soff, wp.int32), W_(ent, wp.int32), np_, V3(nn), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1),
                                          W_(narc, wp.int32), GeoPipe._fib[(str(dev), self.npole)], self.npole, float(self.piece), BIG, 4*math.pi,
                                          W_(nbrs, wp.int32), W_(hidden.to(i32), wp.int32), int(getattr(self,'stable_area',False)), 0, 0.0, W_(ent, wp.int32), 0, F_(Vw)], outputs=[V3(pn), F_(pA), F_(V), V3(pole)], device=dev)
         self._mark('values')

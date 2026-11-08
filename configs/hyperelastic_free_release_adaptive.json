@@ -1,0 +1,21 @@
+{
+  "schema": "fv_hyperelastic_run_v1",
+  "solver": {
+    "mechanical_reconstruction": "compatible",
+    "affine_stencil": "smooth",
+    "affine_cap_motion": "balanced",
+    "transport_reconstruction": "entropy",
+    "transport_dissipation": 0.1,
+    "interface_dissipation": 0.01,
+    "cap_dissipation": 0.0,
+    "precision_geometry": true,
+    "ground": -10.0,
+    "gravity": [0.0, 0.0, 0.0],
+    "cap_motion_regularization": 0.0
+  },
+  "initial_stretch": 1.5,
+  "initial_velocity": [0.0, 0.0, 0.0],
+  "work_retry_fraction": 0.000001,
+  "local_energy_tolerance": 0.000001,
+  "step_control": "remember"
+}

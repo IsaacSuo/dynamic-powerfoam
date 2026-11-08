@@ -100,8 +100,8 @@ class GroundClip:
         import os
         self.plane_cut=os.environ.get('FV_GROUND_PLANE','1')!='0'  # 11-08: the ground as a clip plane of the cut (fv_ale_ground_plane); FV_GROUND_PLANE=0: the local re-clip
 
-    def geometry(self,p,r):
-        if self.plane_cut and self.local:
+    def geometry(self,p,r,floor_redundant=None,floor_owner_count=None):
+        if self.plane_cut and self.local and floor_redundant is None and floor_owner_count is None:
             from free_surface.fv_ale_ground_plane import plane_geometry
             return plane_geometry(self,p,r)
         n=len(r);dev=p.device;dtype=p.dtype
@@ -112,6 +112,22 @@ class GroundClip:
         h=p[:,1]-self.ground
         plane_ids=torch.nonzero((h.abs()<r)&~g.hidden).flatten()
         touched=torch.nonzero(g.c[:,1]-g.rho*torch.sqrt(g.u[:,1]**2+g.v[:,1]**2)<self.ground).flatten()
+        if floor_owner_count is not None:
+            # Appended geometric vacuum generators have no material volume
+            # to clip or validate. Ordered real/vacuum faces are still cut
+            # once from their real owner and retained for its geometry.
+            if not 0<floor_owner_count<=n:raise ValueError('invalid material owner count')
+            plane_ids=plane_ids[plane_ids<floor_owner_count]
+            touched=touched[g.i[touched]<floor_owner_count]
+        if floor_redundant is not None:
+            # An explicitly certified existing power plane can already bound
+            # this cell above the floor. Do not count the coincident floor
+            # disk or add its duplicate half-plane to a shared disk clip.
+            # The caller must provide the geometric proof, not a size cutoff.
+            if floor_redundant.shape!=r.shape or floor_redundant.dtype!=torch.bool:
+                raise ValueError('redundant floor mask must be a boolean per cell')
+            plane_ids=plane_ids[~floor_redundant[plane_ids]]
+            touched=touched[~(floor_redundant[g.i[touched]]|floor_redundant[g.j[touched]])]
         m=len(g.i);nf=len(plane_ids);total=m+nf
         if nf==0 and len(touched)==0:
             mesh=PowerControlVolumes.from_geometry(g)
@@ -124,11 +140,14 @@ class GroundClip:
             mesh.hidden=g.hidden|below;mesh.geometry=g
             mesh.ground_geometry_info={'method':'direct_halfspace','floor_faces':0,'recut_wall_disks':0,'stable_sphere_area':True}
             return mesh
-        if self.local:
+        if self.local and floor_redundant is None and floor_owner_count is None:
             from free_surface.fv_ale_ground_local import local_geometry
             return local_geometry(p,r,g,h,plane_ids,touched,self.ground,self.device,self.recut.pipe)
         base=g
-        K=g.nbrs.shape[1]+1
+        neighbour_width=g.nbrs.shape[1]
+        if floor_owner_count is not None:
+            neighbour_width=int((g.nbrs[:floor_owner_count]>=0).sum(1).max())
+        K=neighbour_width+1
         if K>MAX_CONSTRAINTS:raise RuntimeError('ground disk constraint capacity exceeded')
         axis=torch.zeros((nf,3),dtype=dtype,device=dev);axis[:,1]=-1
         fu=torch.zeros_like(axis);fu[:,0]=1
@@ -143,20 +162,43 @@ class GroundClip:
         width=max(2*K+1,g.arc_t0.shape[1]);t0=torch.zeros((total,width),dtype=dtype,device=dev);t1=torch.zeros_like(t0)
         t0[:m,:g.arc_t0.shape[1]]=g.arc_t0;t1[:m,:g.arc_t1.shape[1]]=g.arc_t1
         work=torch.cat((touched,torch.arange(m,total,device=dev)))
-        owners=i[work];nb=g.nbrs[owners].long();valid=(nb>=0)&(nb!=j[work,None]);safe=nb.clamp(min=0)
+        owners=i[work];nb=g.nbrs[owners,:neighbour_width].long();valid=(nb>=0)&(nb!=j[work,None]);safe=nb.clamp(min=0)
         delta=p[safe]-p[owners,None]
         aa=2*torch.stack(((delta*u[work,None]).sum(2),(delta*v[work,None]).sum(2)),2)
         bb=(delta*delta).sum(2)+r[owners,None]**2-r[safe]**2-2*(delta*(centres[work]-p[owners])[:,None]).sum(2)
         ground_axes=-torch.stack((u[work,1],v[work,1]),1)[:,None]
         axes=torch.cat((aa,ground_axes),1).contiguous()
         bounds=torch.cat((bb,(centres[work,1]-self.ground)[:,None]),1).contiguous()
-        enabled=torch.cat((valid,(j[work]>=0)[:,None]),1).to(torch.int32).contiguous()
+        add_ground=j[work]>=0
+        if floor_redundant is not None:add_ground=add_ground&~floor_redundant[owners]
+        enabled=torch.cat((valid,add_ground[:,None]),1).to(torch.int32).contiguous()
         bad=torch.zeros(len(work),dtype=torch.int32,device=dev)
         W=lambda a,t:wp.from_torch(a.contiguous(),dtype=t)
         wp.launch(disk_clip,len(work),inputs=[W(axes,wp.vec2d),W(bounds,wp.float64),W(enabled,wp.int32),W(bad,wp.int32),0,W(rho,wp.float64),
             W(work,wp.int64),W(centres,wp.vec3d),W(u,wp.vec3d),W(v,wp.vec3d),2*math.pi],
             outputs=[W(A,wp.float64),W(C,wp.vec3d),W(t0,wp.float64),W(t1,wp.float64),W(count,wp.int32),W(bad,wp.int32)],device=self.device)
         if bool(bad.any()):raise RuntimeError('negative ground-clipped disk area')
+        precise_disks=[]
+        if floor_owner_count is not None:
+            # Vacuum/material faces can be vanishing slivers at insertion.
+            # Reevaluate their actual domain, including moments and arcs,
+            # rather than dividing a cancelled first moment by a tiny area.
+            small=(i<floor_owner_count)&(j>=floor_owner_count)&(A>0)&(A<1e-10*math.pi*r[i].square())
+            ids=torch.nonzero(small).flatten().tolist()
+            if ids:
+                from free_surface.fv_ale_precise_disk import disk_face
+                pc,rc=p.cpu().numpy(),r.cpu().numpy()
+                for face in ids:
+                    owner,other=int(i[face]),int(j[face]);nb=g.nbrs[owner].cpu().tolist()
+                    exact=disk_face(pc,rc,owner,other,nb,self.ground)
+                    old=float(A[face]);A[face]=exact['area'];count[face]=len(exact['arcs'])
+                    t0[face].zero_();t1[face].zero_()
+                    if exact['area']>0:
+                        for name,array in [('centroid',C),('center',centres),('normal',normals),('u',u),('v',v)]:
+                            array[face]=p.new_tensor(exact[name])
+                        rho[face]=exact['rho'];hi[face]=exact['hi'];hj[face]=exact['hj']
+                        for arc,(start,end) in enumerate(exact['arcs']):t0[face,arc]=start;t1[face,arc]=end
+                    precise_disks.append({'face':face,'owner':owner,'vacuum':other,'old_area_m2':old,'area_m2':exact['area'],'digits':70})
         # Rebuild oriented face lists for the existing exact sphere-patch kernel.
         sites=torch.cat((i,g.j));entries=torch.cat((torch.arange(total,device=dev),torch.arange(m,device=dev)+total))
         order=torch.argsort(sites,stable=True);ent=entries[order].to(torch.int32)
@@ -166,7 +208,11 @@ class GroundClip:
         pn=torch.empty_like(p);capA=torch.empty_like(r);volume=torch.empty_like(r);pole=torch.empty_like(p)
         hidden=g.hidden|(h<=-r)
         pipe=self.recut.pipe
-        wp.launch(k_geo_site,n,inputs=[W(p,wp.vec3d),W(r,wp.float64),W(off,wp.int32),W(ent,wp.int32),total,
+        site_kernel=k_geo_site
+        if self.recut.pipe.direct_sphere:
+            from free_surface.geometry_sphere_direct import k_geo_site_direct
+            site_kernel=k_geo_site_direct
+        wp.launch(site_kernel,n,inputs=[W(p,wp.vec3d),W(r,wp.float64),W(off,wp.int32),W(ent,wp.int32),total,
             W(normals,wp.vec3d),W(u,wp.vec3d),W(v,wp.vec3d),W(rho,wp.float64),W(hi,wp.float64),W(hj,wp.float64),
             W(t0,wp.float64),W(t1,wp.float64),W(count,wp.int32),GeoPipe._fib[(str(self.device),pipe.npole)],
             pipe.npole,float(pipe.piece),BIG,4*math.pi,W(g.nbrs.to(torch.int32),wp.int32),W(hidden.to(torch.int32),wp.int32),
@@ -179,10 +225,11 @@ class GroundClip:
         wall_area=A[:m];wall_centroid=C[:m]
         internal=wall_area>0
         mesh=PowerControlVolumes(p.clone(),r.clone(),volume,base.i[internal].clone(),base.j[internal].clone(),
-            wall_area[internal],base.nn[internal].clone(),wall_centroid[internal],capA,pn)
+            wall_area[internal],normals[:m][internal].clone(),wall_centroid[internal],capA,pn)
         mesh.ground_area=torch.zeros_like(r).index_add(0,plane_ids,A[m:])
         mesh.ground_centroid=p.clone();mesh.ground_centroid[plane_ids]=C[m:]
         mesh.ground_normal=torch.zeros_like(p);mesh.ground_normal[:,1]=-1
+        mesh.precise_disks=precise_disks
         mesh.hidden=hidden;mesh.geometry=base
         mesh.ground_geometry_info={'method':'direct_halfspace','floor_faces':int((A[m:]>0).sum()),
             'recut_wall_disks':len(touched),'stable_sphere_area':True,

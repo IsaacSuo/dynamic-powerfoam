@@ -83,7 +83,8 @@ class State:
 class SolidALE:
     def __init__(self,p,r,E,nu,yield_stress,rho0=1000.,gravity=(0.,-9.8,0.),
                  ground=-.05,friction=10.,device='cuda',interior_radii='fixed',
-                 contact_model='surface',contact_order=8,contact_scale=1.,contact_damping=1.,surface_motion='coupled',groups=None):
+                 contact_model='surface',contact_order=8,contact_scale=1.,contact_damping=1.,surface_motion='coupled',groups=None,device_step=True):
+        self.device_step=device_step;self._device_ops=None
         self.surface_motion=surface_motion
         self.contact_model=contact_model; self.contact_order=contact_order
         self.contact_damping=contact_damping; self.contact_scale=contact_scale
@@ -108,8 +109,11 @@ class SolidALE:
         q[:,0]=rho0*mesh.volume; q[:,4]=q[:,0]*self.e0
         self.initial=State(p,r,q,mesh)
 
+    def reevaluate_invalid_geometry(self,mesh):
+        return False
+
     def cut(self,p,r):
-        if not bool(torch.isfinite(p).all() and torch.isfinite(r).all() and (r>0).all()):
+        if not bool(torch.isfinite(p).all() & torch.isfinite(r).all() & (r>0).all()):
             raise RuntimeError('invalid site/radius; state not accepted')
         if self.ground_cutter is not None:
             mesh=self.ground_cutter.geometry(p,r);g=mesh.geometry;hidden=mesh.hidden
@@ -121,10 +125,18 @@ class SolidALE:
         self.geometry_calls+=1
         if self.has_groups:
             mesh.volume=torch.where(hidden,torch.zeros_like(mesh.volume),mesh.volume)
+        self.normalize_volume_roundoff(mesh)
         valid_volume=mesh.volume>=0 if self.has_groups else mesh.volume>0
-        if not bool(torch.isfinite(mesh.volume).all() and valid_volume.all()):
-            bad=torch.nonzero(~torch.isfinite(mesh.volume)|(mesh.volume<=0)).flatten()
-            raise RuntimeError('hidden/nonpositive cells, not silently removed: '+str(bad[:20].tolist()))
+        if not bool(torch.isfinite(mesh.volume).all() & valid_volume.all()):
+            repaired=self.reevaluate_invalid_geometry(mesh)
+            valid_volume=mesh.volume>=0 if self.has_groups else mesh.volume>0
+            if not repaired or not bool(torch.isfinite(mesh.volume).all() & valid_volume.all()):
+                bad=torch.nonzero(~torch.isfinite(mesh.volume)|~valid_volume).flatten()
+                raise RuntimeError('hidden/nonpositive cells, not silently removed: '+str(bad[:20].tolist()))
+        if self.device_step and self.contact_model=='plane':
+            self.device_ops().moments(mesh)
+            mesh.geometry=g;mesh.contact_quad=None
+            return mesh
         # Reconstruct the cap's exact second moment from the first divergence moment.
         outer=lambda a,b:a[:,:,None]*b[:,None,:]
         moment=torch.zeros((len(p),3,3),dtype=p.dtype,device=p.device)
@@ -144,8 +156,19 @@ class SolidALE:
         mesh.contact_quad=surface_quadrature(g,self.ground,self.contact_order) if self.ground is not None and self.contact_model=='surface' else None
         return mesh
 
+    def device_ops(self):
+        if self._device_ops is None:
+            from free_surface.fv_ale_device import PlaneDeviceOps
+            self._device_ops=PlaneDeviceOps(self)
+        return self._device_ops
+
     def group_sum(self,x):
         return torch.zeros_like(x).index_add(0,self.groups,x)
+
+    def normalize_volume_roundoff(self,mesh):
+        # Default Wilkins geometry acceptance remains unchanged. Constitutive
+        # subclasses may supply an explicitly audited roundoff-only policy.
+        pass
 
     def distribute_groups(self,q,volume):
         if not self.has_groups:return q.clone()
@@ -176,6 +199,7 @@ class SolidALE:
         return m,v,rho,pressure,stress,sigma,torch.sqrt(csq)
 
     def plastic_return(self,q,mesh):
+        if self.device_step and self.contact_model=='plane':return self.device_ops().plastic(q,mesh)
         q=self.distribute_groups(q,mesh.volume);m=q[:,0]
         effective=self.group_sum(q)[self.groups] if self.has_groups else q
         stress=deviator(effective[:,5:14].reshape(-1,3,3)/effective[:,0,None,None])
@@ -225,6 +249,7 @@ class SolidALE:
         return force,kn,delta
 
     def rhs(self,s):
+        if self.device_step and self.contact_model=='plane':return self.device_ops().rhs(s)
         m,v,rho,pressure,stress,sigma,sound=self.primitive(s)
         mesh=s.mesh; i,j,n,A=mesh.i,mesh.j,mesh.normal,mesh.area
         z=rho*sound
@@ -350,21 +375,24 @@ class SolidALE:
             diagnostics['ground_geometry']=mesh.ground_geometry_info
         return mesh_velocity,dr,dq,diagnostics
 
-    def advance(self,s,dt,first=None,cfl=.2):
+    def advance(self,s,dt,first=None,cfl=2.):
         first=self.rhs(s) if first is None else first
         vp,vr,dq,d0=first
         if dt>cfl*d0['dt_scale']*(1+1e-12):
             raise RuntimeError('requested step exceeds FV CFL; no hidden substep')
-        p1=s.p+dt*vp; r1=s.r+dt*vr
+        use_device=self.device_step and self.contact_model=='plane'
+        if use_device:p1,r1,qtrial=self.device_ops().update(s,dt,first)
+        else:p1=s.p+dt*vp; r1=s.r+dt*vr;qtrial=s.q+dt*dq
         mesh1=self.cut(p1,r1)
-        q1=self.plastic_return(s.q+dt*dq,mesh1)
+        q1=self.plastic_return(qtrial,mesh1)
         stage=State(p1,r1,q1,mesh1)
         vp1,vr1,dq1,d1=self.rhs(stage)
         if dt>cfl*d1['dt_scale']*1.25:
             raise RuntimeError('stage CFL changed too much; retry from unchanged state')
-        p2=s.p+.5*dt*(vp+vp1); r2=s.r+.5*dt*(vr+vr1)
+        if use_device:p2,r2,qtrial=self.device_ops().update(s,dt,first,(vp1,vr1,dq1,d1))
+        else:p2=s.p+.5*dt*(vp+vp1); r2=s.r+.5*dt*(vr+vr1);qtrial=s.q+.5*dt*(dq+dq1)
         mesh2=self.cut(p2,r2)
-        q2=self.plastic_return(s.q+.5*dt*(dq+dq1),mesh2)
+        q2=self.plastic_return(qtrial,mesh2)
         if self.contact_model=='legacy-ball':
             # Coulomb sliding impulse limited by the time-integrated normal force.
             cf0,_,_=self.contact(s); cf1,_,_=self.contact(stage)
@@ -377,12 +405,14 @@ class SolidALE:
         else:
             friction_heat=.5*dt*(d0['friction_heat_rate']+d1['friction_heat_rate'])
         result=State(p2,r2,q2,mesh2)
-        self.primitive(result)
+        if use_device:end_totals=self.device_ops().validate(result)
+        else:self.primitive(result)
         stats=d1.copy(); stats.update(dt=dt,friction_heat=friction_heat,
             source_work=.5*dt*(d0['source_power']+d1['source_power']),
             boundary_work_defect=.5*dt*(d0['contact_boundary_motion_power_defect']+d1['contact_boundary_motion_power_defect']),
             boundary_abs_work_defect=.5*dt*(d0['contact_boundary_motion_abs_power_defect']+d1['contact_boundary_motion_abs_power_defect']),
             normal_contact_work=.5*dt*(d0['normal_contact_power']+d1['normal_contact_power']))
+        if use_device:stats.update(total_mass=end_totals[0],total_energy=end_totals[1])
         return result,stats
 
     @torch.no_grad()

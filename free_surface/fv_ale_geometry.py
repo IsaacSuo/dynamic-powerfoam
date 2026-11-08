@@ -42,7 +42,7 @@ class PowerControlVolumes:
         return torch.zeros(shape, dtype=wall.dtype, device=wall.device).index_add(
             0, self.i, wall).index_add(0, self.j, -wall)
 
-    def mesh_flux(self, site_velocity, radius_velocity):
+    def mesh_flux(self, site_velocity, radius_velocity, plane_rates=None):
         if site_velocity.shape != self.p.shape or radius_velocity.shape != self.r.shape:
             raise ValueError("mesh velocities must have shapes (cells, 3) and (cells,)")
         i, j, c = self.i, self.j, self.centroid
@@ -52,10 +52,16 @@ class PowerControlVolumes:
             - ((c-self.p[j])*site_velocity[j]).sum(1)
             + self.r[i]*radius_velocity[i]-self.r[j]*radius_velocity[j])
         cap = (self.cap_normal_integral*site_velocity).sum(1) + self.cap_area*radius_velocity
+        if hasattr(self,'planes'):
+            if plane_rates is None:raise ValueError('moving-boundary volume flux requires explicit plane rates')
+            from free_surface.fv_ale_planar_boundary import values,geometric_rate
+            b={'p':self.p,'r':self.r,**values(self)}
+            speed=geometric_rate(b,site_velocity,radius_velocity,*plane_rates)
+            cap=cap.index_add(0,self.plane_i,self.plane_area*speed)
         return wall, cap
 
-    def volume_rate(self, site_velocity, radius_velocity):
-        wall, cap = self.mesh_flux(site_velocity, radius_velocity)
+    def volume_rate(self, site_velocity, radius_velocity, plane_rates=None):
+        wall, cap = self.mesh_flux(site_velocity, radius_velocity,plane_rates)
         return self.incidence(wall)+cap
 
     def affine_material_flux(self, gradient, offset):

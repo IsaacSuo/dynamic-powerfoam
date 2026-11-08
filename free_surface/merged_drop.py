@@ -121,7 +121,10 @@ a_.add_argument('--follow-check', action='store_true', help="logging only, with 
 a_.add_argument('--slave-check', action='store_true', help="logging only, with --omega-at: also the reduced operator with the stiff particles following their neighbours' fit (k1_slave.py)")
 a_.add_argument('--fv-ale-remap-check', action='store_true', help='isolated FV-ALE geometry/remap trial on the full foam; no solid-dynamics or landing claim')
 a_.add_argument('--fv-ale', action='store_true', help='experimental solid FV-ALE on the same sphere-clipped power cells')
+a_.add_argument('--fv-constitutive', choices=['wilkins','neo_hookean'], default='wilkins', help='neo_hookean: opt-in pure hyperelastic log-shape state; incompatible with old stress snapshots')
+a_.add_argument('--fv-hyperelastic-config', type=Path, default=None, help='explicit experimental hyperelastic mechanics/initialization configuration; saved and checked on resume')
 a_.add_argument('--fv-ground-cut', action='store_true', help='clip actual material cells at the rigid ground plane; no curved-surface penalty contact')
+a_.add_argument('--fv-reference-step', action='store_true', help='use the reference tensor implementation instead of GPU replay segments for plane-contact FV')
 a_.add_argument('--fv-interior-radii', choices=['fixed','dilate'], default='fixed', help='ALE weight choice for fully buried balls; surface radii follow integrated boundary motion')
 a_.add_argument('--fv-legacy-ball-contact', action='store_true', help='diagnostic reproduction ONLY: legacy whole-ball contact is inconsistent with vanishing FV cells')
 a_.add_argument('--fv-surface-motion', choices=['radial','least-squares','coupled'], default=None, help='coupled: solve contact in sphere-motion unknowns; radial/least-squares retain diagnostic controls')
@@ -133,9 +136,10 @@ a_.add_argument('--fv-agglomerate-dt', type=float, default=0., help='optional ph
 a_.add_argument('--fv-stop-dt', type=float, default=0., help='save a diagnostic stop if physical dt falls below this, without accepting a step')
 a_.add_argument('--fv-derefine', action='store_true', help='conservatively dissolve tiny buried cells; verify unchanged material domain')
 a_.add_argument('--fv-min-volume-ratio', type=float, default=1e-3, help='deletion/grouping volume threshold relative to initial median')
-a_.add_argument('--fv-cfl', type=float, default=.2)
+a_.add_argument('--fv-cfl', type=float, default=None, help='FV timestep multiplier; default 2 for Wilkins, provisional 0.5 for neo-Hookean')
 a_.add_argument('--fv-steps', type=int, default=1000, help='explicit physical step limit; stopping here is NOT completed landing')
 a_.add_argument('--fv-budget', type=float, default=180., help='wall-time limit for initial FV trial in seconds')
+a_.add_argument('--fv-until', type=float, default=None, help='optional absolute physical end time, capped by --frames; allows equal-duration FV comparisons')
 a_.add_argument('--fv-resume', type=Path, default=None, help='continue a saved FV state (not a k1 snapshot)')
 a_.add_argument('--fv-no-freeflight', action='store_true', help='do not analytically integrate the uniform unstressed free-flight segment')
 args = a_.parse_args()
@@ -152,6 +156,11 @@ if args.fv_ale_remap_check:
     check = fv_ale_check(X0, r0, args)
     raise SystemExit(0 if check['passed'] else 2)
 if args.fv_ale:
+    if args.fv_hyperelastic_config is not None and args.fv_constitutive!='neo_hookean':
+        a_.error('--fv-hyperelastic-config requires --fv-constitutive neo_hookean')
+    if args.fv_cfl is None: args.fv_cfl=0.5 if args.fv_constitutive=='neo_hookean' else 2.
+    if args.fv_constitutive=='neo_hookean' and (not args.fv_ground_cut or args.fv_reference_step):
+        a_.error('neo_hookean currently requires --fv-ground-cut and the default device step')
     if args.fv_ground_cut and args.fv_legacy_ball_contact:
         a_.error('ground clipping and legacy ball contact are different boundary models')
     if args.fv_surface_motion is None:

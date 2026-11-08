@@ -73,6 +73,18 @@ class Recut:
         self.geom_cls = Geometry                                                     # (geometry_warp.GeometryWarp: the same values for the run, in Warp; no patch_nn, no gradient)
         self.pipe = None                                                             # (geo_pipe.GeoPipe: the whole call in Warp with one host read, 11-06)
 
+    def structure(self, p, r):
+        """Same checked topology as geometry, without unused value integration."""
+        if self.pipe is None or self.A.f32:
+            return self.geometry(p,r)[1]
+        n0=self.A.n_overlaps
+        try:
+            _,structure=self.pipe(self.A,p,r,topology_only=True)
+        finally:
+            self.stats['overlaps']+=self.A.n_overlaps-n0
+        self.stats['geometry']+=1
+        return structure
+
     def geometry(self, p, r, reuse=False):
         """the cut at (p, r). The overlap candidates (the BVH's pairs, radii raised by margin) are kept across the calls
         and the cuts while they cover (AlphaComplex.covers: each site's motion since within the margin), else found again
