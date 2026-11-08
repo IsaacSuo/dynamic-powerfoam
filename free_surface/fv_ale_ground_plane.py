@@ -23,7 +23,7 @@ import warp as wp
 
 from free_surface.alpha_complex import LMAX, AlphaComplex, k_alpha
 from free_surface.geo_pipe import (BIG, GeoPipe, PipeGeometry, f64, i32, k_cand, k_cand_full, k_ent_i, k_ent_j, k_hval, k_nbrs,
-                                   k_pair_compact, k_pair_count, k_pair_fill)
+                                   k_pair_compact, k_pair_count, k_pair_fill, pair_kernel)
 from free_surface.geometry_warp import TWO_PI, k_geo_pair, k_geo_site
 
 
@@ -205,7 +205,7 @@ class GroundPipe(GeoPipe):
         V3 = lambda t_: W_(t_, wp.vec3d)
         F_ = lambda t_: W_(t_, wp.float64)
         if npr:
-            wp.launch(k_geo_pair, npr, inputs=[paw, raw_, W_(Pk, wp.int32), W_(Ck, wp.int32), K, TWO_PI, BIG, 1e299, .9, F_(ea), F_(ed), W_(el, wp.int32)],
+            wp.launch(pair_kernel(), npr, inputs=[paw, raw_, W_(Pk, wp.int32), W_(Ck, wp.int32), K, TWO_PI, BIG, 1e299, .9, F_(ea), F_(ed), W_(el, wp.int32)],
                       outputs=[V3(nn), V3(c), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1), W_(narc, wp.int32), F_(wA), V3(wc), F_(Vw)], device=dev)
         pn, pA, V, pole = E(n, 3), E(n), E(n), E(n, 3)
         site_kernel = k_geo_site

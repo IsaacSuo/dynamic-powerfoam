@@ -11,7 +11,7 @@ cut as Recut.geometry's AlphaComplex -> structure_gpu -> geometry_warp.GeometryW
               compacted; each site's entries (side i: its own kept pairs in order; side j: atomic cursors) and its
               neighbours (atomic cursors; the exposure test reads them as a set)
   one read    the pair counts, the links' width, the largest degree, the status flags, the overflow flag
-  values      geometry_warp.k_geo_pair, k_geo_site, unchanged; outputs on torch's caching allocator (each call owns
+  values      geometry_warp.k_geo_pair (geometry_pair_fast's same-output form, 11-08), k_geo_site, unchanged; outputs on torch's caching allocator (each call owns
               its arrays: the solve keeps the start's geometry beside its trials)
 Summation orders differ (atomic cursors, as k_geo_pair's volumes already do): values agree to rounding.
 GeoPipe(n)(A, p, r) -> (G, S) as Recut.geometry returns them; A: the AlphaComplex holding the overlaps and the clip's
@@ -25,6 +25,15 @@ from free_surface.alpha_complex import LMAX, WMAX, k_alpha
 from free_surface.geometry_warp import BIG, NCAND, TWO_PI, k_geo_pair, k_geo_site
 
 f64, i32 = torch.float64, torch.int32
+
+
+def pair_kernel():
+    """k_geo_pair, or its faster same-output form (geometry_pair_fast, 11-08; FAST_PAIR=0: k_geo_pair)"""
+    import os
+    if os.environ.get('FAST_PAIR', '1') == '0':
+        return k_geo_pair
+    from free_surface.geometry_pair_fast import k_geo_pair_fast
+    return k_geo_pair_fast
 
 
 @wp.func
@@ -395,7 +404,7 @@ class GeoPipe:
         V3 = lambda t_: W_(t_, wp.vec3d)
         F_ = lambda t_: W_(t_, wp.float64)
         if npr:
-            wp.launch(k_geo_pair, npr, inputs=[pw, rw, W_(Pk, wp.int32), W_(Ck, wp.int32), K, TWO_PI, BIG, 1e299, .9, F_(ea), F_(ed), W_(el, wp.int32)],
+            wp.launch(pair_kernel(), npr, inputs=[pw, rw, W_(Pk, wp.int32), W_(Ck, wp.int32), K, TWO_PI, BIG, 1e299, .9, F_(ea), F_(ed), W_(el, wp.int32)],
                       outputs=[V3(nn), V3(c), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1), W_(narc, wp.int32), F_(wA), V3(wc), F_(Vw)], device=dev)
         pn, pA, V, pole = E(n, 3), E(n), E(n), E(n, 3)
         wp.launch(k_geo_site, n, inputs=[pw, rw, W_(soff, wp.int32), W_(ent, wp.int32), np_, V3(nn), V3(u), V3(v), F_(rho), F_(hi), F_(hj), F_(at0), F_(at1),
