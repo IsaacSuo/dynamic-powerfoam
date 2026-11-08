@@ -143,11 +143,18 @@ class HyperelasticDeviceOps(PlaneDeviceOps):
                 b={'p':mesh.p,'r':mesh.r,'V':mesh.volume,'groups':self.s.groups,
                     'i':mesh.i,'j':mesh.j,'A':mesh.area,'n':mesh.normal,'c':mesh.centroid,
                     'N':mesh.cap_normal_integral,'floor':mesh.ground_area,**values}
-                extra,self.stencil_summary=build(b,transition_ratio=.01 if self.s.affine_stencil=='smooth' else None)
-                if self.s.affine_stencil=='smooth':
-                    from free_surface.fv_ale_affine_stencil import compact
-                    extra,self._affine_edge_capacity,edge_count=compact(extra,getattr(self,'_affine_edge_capacity',0))
+                import os
+                if self.s.affine_stencil=='smooth' and os.environ.get('FAST_STENCIL','1')!='0':
+                    # 11-08: build + compact in Warp kernels, the reference when a root would grow (FAST_STENCIL=0: always the reference)
+                    from free_surface.fv_ale_affine_stencil_fast import build_compact
+                    extra,self.stencil_summary,self._affine_edge_capacity,edge_count=build_compact(b,getattr(self,'_affine_edge_capacity',0))
                     self.stencil_summary.update(directed_supports=edge_count,edge_capacity=self._affine_edge_capacity)
+                else:
+                    extra,self.stencil_summary=build(b,transition_ratio=.01 if self.s.affine_stencil=='smooth' else None)
+                    if self.s.affine_stencil=='smooth':
+                        from free_surface.fv_ale_affine_stencil import compact
+                        extra,self._affine_edge_capacity,edge_count=compact(extra,getattr(self,'_affine_edge_capacity',0))
+                        self.stencil_summary.update(directed_supports=edge_count,edge_capacity=self._affine_edge_capacity)
                 stats=getattr(self,'stencil_statistics',{'builds':0,'bad_root_events':0,'fallback_root_events':0,'maximum_bad_roots':0,'maximum_width':0})
                 stats['builds']+=1;stats['bad_root_events']+=self.stencil_summary['initial_bad_roots']
                 stats['fallback_root_events']+=self.stencil_summary['fallback_roots']
