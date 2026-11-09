@@ -148,7 +148,33 @@ def cell_update(q, h, h_next, face_total, dt):
     return mean, conserved, budget
 
 
-def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None, outcomes=None):
+def acceptable(candidate):
+    return candidate is not None and np.min(candidate[2]) >= -1e-13
+
+
+def limit_face_correction(q, h, h_next, face_total, faces, predicted, dt):
+    # Conserved state and energy exchange are affine in the shared weight.
+    # Convex mechanical energy makes admissible weights an interval from zero.
+    trial = face_total.copy()
+    base = face_total[faces]
+    delta = predicted-base
+    low, high = 0., 1.
+    accepted = None
+    for _ in range(14):
+        weight = .5*(low+high)
+        trial[faces] = base+weight*delta
+        candidate = cell_update(q, h, h_next, trial, dt)
+        if acceptable(candidate):
+            low, accepted = weight, candidate
+        else:
+            high = weight
+    if low < 1e-3:
+        return 0., None
+    return low, accepted
+
+
+def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None,
+           outcomes=None, prediction_weights=None):
     _, _, a, b, speed, weight0, weight1, mu0, mu1 = data
     weight, mu = weight0+beta*weight1, mu0+beta*mu1
     mechanical, total = flux(a, b, speed, weight, mu)
@@ -162,17 +188,28 @@ def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None, outcom
     if predictor is not None:
         faces = slice(cut, cut+2)
         status, predicted_mech, predicted_total = predictor(q[cut-1:cut+2], h[cut], w[faces], dt)
+        weight = 0.
         if predicted_total is not None:
             trial = face_total.copy()
             trial[faces] = predicted_total
             candidate = cell_update(q, h, h_next, trial, dt)
-            if candidate is not None and np.min(candidate[2]) >= -1e-13:
+            if acceptable(candidate):
+                weight = 1.
                 face_total = trial
                 face_mech[faces] = predicted_mech
             else:
                 candidate = None
-                status = "failed_energy_or_stretch_check"
+                if prediction_weights is not None:
+                    weight, candidate = limit_face_correction(q, h, h_next, face_total, faces, predicted_total, dt)
+                if candidate is None:
+                    status = "failed_energy_or_stretch_check"
+                else:
+                    face_total[faces] += weight*(predicted_total-face_total[faces])
+                    face_mech[faces] += weight*(predicted_mech-face_mech[faces])
+                    status += "_limited"
         outcomes.append(status)
+        if prediction_weights is not None:
+            prediction_weights.append(weight)
     if candidate is None:
         candidate = cell_update(q, h, h_next, face_total, dt)
     assert candidate is not None
@@ -190,7 +227,8 @@ def initial_state(h, cut, states):
     return q
 
 
-def run(width, motion, states, use_dod, horizon=DT, single=False, variant="original", predictor=None):
+def run(width, motion, states, use_dod, horizon=DT, single=False, variant="original",
+        predictor=None, blend_prediction=False):
     x0, cut, w = grid(width, motion)
     h = np.diff(x0)
     state = initial_state(h, cut, states)
@@ -198,6 +236,7 @@ def run(width, motion, states, use_dod, horizon=DT, single=False, variant="origi
     flux_rule = godunov_flux if variant == "godunov" else split_flux
     time, betas, steps = 0., [], []
     outcomes = []
+    prediction_weights = [] if blend_prediction else None
     flux = np.zeros((2, 3))
     mech = np.zeros_like(flux)
     balance, energy_defect, energy_loss = 0., 0., 0.
@@ -215,7 +254,7 @@ def run(width, motion, states, use_dod, horizon=DT, single=False, variant="origi
         beta = beta_interval(lines, dt)[1] if use_dod else 1.
         assert max((lines[0]+beta*lines[1])*dt) <= 1+2e-14
         state, h, f_mech, f_total, entropy_budget, b = update(
-            state, h, w, data, cut, dt, beta, flux_rule, predictor, outcomes)
+            state, h, w, data, cut, dt, beta, flux_rule, predictor, outcomes, prediction_weights)
         min_tau = min(min_tau, state[:, 0].min())
         flux += f_total[cut:cut+2]
         mech += f_mech[cut:cut+2]
@@ -232,7 +271,8 @@ def run(width, motion, states, use_dod, horizon=DT, single=False, variant="origi
                 face_flux=flux.tolist(), physical_flux=mech.tolist(),
                 edges=(x0+time*w).tolist(), initial_edges=x0.tolist(),
                 state=state.tolist(), final_h=h.tolist(),
-                **({"predictions": outcomes} if predictor is not None else {}))
+                **({"predictions": outcomes} if predictor is not None else {}),
+                **({"prediction_weights": prediction_weights} if blend_prediction else {}))
 
 
 def relative(actual, reference):

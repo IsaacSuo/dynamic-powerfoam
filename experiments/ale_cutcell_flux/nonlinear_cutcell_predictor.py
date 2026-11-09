@@ -15,7 +15,7 @@ from scipy.optimize import brentq
 from nonlinear_cutcell_impact import DT, Impact, fields
 
 
-def riemann(left, right, fan_step):
+def riemann(left, right, fan_step, fan_limit=None):
     """Resolve one p-system discontinuity into ordered (speed, left, right) fronts."""
     a, ul = left
     b, ur = right
@@ -36,6 +36,8 @@ def riemann(left, right, fan_step):
     ls = solve(0, 0)
     nl = max(1, math.ceil((ls-la)/fan_step))
     nr = max(1, math.ceil((ls-lb)/fan_step))
+    if fan_limit is not None:
+        nl, nr = min(nl, fan_limit), min(nr, fan_limit)
     if ls > min(la, lb) + 1e-13:
         ls = solve(nl, nr)
     us = ul + curve(ls-la, nl)
@@ -67,9 +69,9 @@ def intervals(begin, end, events):
     return zip(times[:-1], times[1:])
 
 
-def face_interval(left, fronts, starts, speeds, time, stop):
+def face_interval(left, fronts, starts, speeds, time, stop, faces_only=False):
     # fronts store their position at 'time'. Face paths are linear in X.
-    accum = np.zeros((2, 5))
+    accum = np.zeros((2, 6 if faces_only else 5))
     entropy = np.zeros(2)
     net_gain = 0.
     for i, (x0, w) in enumerate(zip(starts, speeds)):
@@ -82,7 +84,11 @@ def face_interval(left, fronts, starts, speeds, time, stop):
                 if x+s*(mid-time) > x0+w*mid:
                     break
                 q = r
-            accum[i] += (b-a)*fluxes(q,w)
+            accum[i, :5] += (b-a)*fluxes(q,w)
+            if faces_only:
+                accum[i, 5] -= (b-a)*q[1]
+    if faces_only:
+        return accum, entropy, net_gain
     for x,s,l,r in fronts:
         ql, fl = fields(l)
         qr, fr = fields(r)
@@ -113,22 +119,23 @@ def mean_in_cell(left, fronts, start, end):
     return mass_integral/(end-start)
 
 
-def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24):
+def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *, fan_limit=None, faces_only=False):
     end = starts+dt*speeds
     assert end[1] > end[0]
-    initial = [riemann(l,r,fan_step) for l,r in zip(states[:-1], states[1:])]
+    initial = [riemann(l,r,fan_step,fan_limit) for l,r in zip(states[:-1], states[1:])]
     fronts = [(x,s,l,r) for x, fan in zip(starts,initial) for s,l,r in fan]
-    frozen = []
-    for w, fan, q in zip(speeds, initial, states):
-        for s, _, r in fan:
-            if s > w:
-                break
-            q = r
-        frozen.append(dt*fluxes(q,w))
-    q0 = fields(states[1])[0]
-    old_integral = (starts[1]-starts[0])*q0
-    frozen_end = (old_integral - np.diff(frozen,axis=0)[0,:3])/(end[1]-end[0])
-    accum = np.zeros((2,5))
+    if not faces_only:
+        frozen = []
+        for w, fan, q in zip(speeds, initial, states):
+            for s, _, r in fan:
+                if s > w:
+                    break
+                q = r
+            frozen.append(dt*fluxes(q,w))
+        q0 = fields(states[1])[0]
+        old_integral = (starts[1]-starts[0])*q0
+        frozen_end = (old_integral - np.diff(frozen,axis=0)[0,:3])/(end[1]-end[0])
+    accum = np.zeros((2, 6 if faces_only else 5))
     entropy = np.zeros(2)
     whole_patch_gain = 0.
     time = 0.
@@ -144,7 +151,7 @@ def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24):
         if collision is not None and events >= event_budget:
             return {"status": "budget", "events": events, "riemann_solves": 2+events,
                     "max_fronts": max_fronts, "covered_fraction": time/dt}
-        f, d, gain = face_interval(states[0],fronts,starts,speeds,time,stop)
+        f, d, gain = face_interval(states[0],fronts,starts,speeds,time,stop,faces_only)
         whole_patch_gain += gain
         accum += f
         entropy += d
@@ -153,10 +160,12 @@ def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24):
         if collision is not None:
             a,b = fronts[collision:collision+2]
             x = (a[0]+b[0])/2
-            fan = riemann(a[2],b[3],fan_step)
+            fan = riemann(a[2],b[3],fan_step,fan_limit)
             fronts[collision:collision+2] = [(x,s,l,r) for s,l,r in fan]
             events += 1
             max_fronts = max(max_fronts,len(fronts))
+    if faces_only:
+        return dict(status='ok', face_fluxes=accum, events=events)
     mean = mean_in_cell(states[0],fronts,*end)
     balance = old_integral - np.diff(accum,axis=0)[0,:3]
     balance[2] += entropy.sum()

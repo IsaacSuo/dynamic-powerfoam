@@ -1,0 +1,2508 @@
+{
+  "sample_comparisons": [
+    {
+      "cap": null,
+      "blend": false,
+      "coverage": [
+        {
+          "kind": "compression",
+          "status": "independent",
+          "count": 1
+        },
+        {
+          "kind": "compression",
+          "status": "interacting_fans",
+          "count": 11
+        },
+        {
+          "kind": "compression",
+          "status": "one_shock_collision",
+          "count": 16
+        },
+        {
+          "kind": "compression",
+          "status": "second_interaction",
+          "count": 9
+        },
+        {
+          "kind": "expansion",
+          "status": "independent",
+          "count": 3
+        },
+        {
+          "kind": "expansion",
+          "status": "interacting_fans",
+          "count": 29
+        },
+        {
+          "kind": "mixed",
+          "status": "independent",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "interacting_fans",
+          "count": 24
+        },
+        {
+          "kind": "mixed",
+          "status": "one_shock_collision",
+          "count": 8
+        }
+      ],
+      "fine_reference": [
+        {
+          "kind": "compression",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "interacting_fans"
+          ],
+          "thin_stretch": 0.7857927546103428,
+          "thin_stretch_error": 0.004216304204760046,
+          "ale_flux_error": [
+            0.00842815965498282,
+            0.007529694284878444,
+            0.005595795458424175
+          ],
+          "pressure_work_error": 0.005595795458424175,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "compression",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "interacting_fans",
+            "interacting_fans"
+          ],
+          "thin_stretch": 0.5851383130559341,
+          "thin_stretch_error": 0.007550485613159519,
+          "ale_flux_error": [
+            0.007915362963237672,
+            0.017448338113171556,
+            0.005770736439672587
+          ],
+          "pressure_work_error": 0.026473599744752586,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "mixed",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "interacting_fans",
+            "interacting_fans"
+          ],
+          "thin_stretch": 0.7721008936243604,
+          "thin_stretch_error": 0.005841736082951798,
+          "ale_flux_error": [
+            0.03715946095580595,
+            0.01880885849967127,
+            0.040796154679076664
+          ],
+          "pressure_work_error": 0.040796154679076664,
+          "max_balance": 2.482822974991805e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "mixed",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "interacting_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.898824883174832,
+          "thin_stretch_error": 0.03215686628786374,
+          "ale_flux_error": [
+            0.010831907036416068,
+            0.021104385219561733,
+            0.0071848504888610675
+          ],
+          "pressure_work_error": 0.1300531870555273,
+          "max_balance": 7.28583859910259e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "expansion",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "interacting_fans",
+            "interacting_fans"
+          ],
+          "thin_stretch": 0.9641875502326014,
+          "thin_stretch_error": 0.11537316314350843,
+          "ale_flux_error": [
+            0.35747608719422885,
+            0.4264697647097923,
+            0.44531098043760003
+          ],
+          "pressure_work_error": 0.44531098043760003,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18
+        },
+        {
+          "kind": "expansion",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013720027618001297,
+            0.010489883689154725,
+            0.0007900886928439779
+          ],
+          "predictions": [
+            "interacting_fans",
+            "interacting_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.9926360359181907,
+          "thin_stretch_error": 0.06715016266922436,
+          "ale_flux_error": [
+            0.012243692482155797,
+            0.2493305621371702,
+            0.07077096349459017
+          ],
+          "pressure_work_error": 0.7625022619630463,
+          "max_balance": 1.960237527853792e-16,
+          "max_entropy_defect": 8.673617379884035e-19
+        }
+      ],
+      "partial_weights": []
+    },
+    {
+      "cap": [
+        1,
+        4
+      ],
+      "blend": false,
+      "coverage": [
+        {
+          "kind": "compression",
+          "status": "bounded_fans",
+          "count": 12
+        },
+        {
+          "kind": "compression",
+          "status": "failed_energy_or_stretch_check",
+          "count": 17
+        },
+        {
+          "kind": "compression",
+          "status": "independent",
+          "count": 1
+        },
+        {
+          "kind": "compression",
+          "status": "one_shock_collision",
+          "count": 7
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans",
+          "count": 4
+        },
+        {
+          "kind": "expansion",
+          "status": "failed_energy_or_stretch_check",
+          "count": 25
+        },
+        {
+          "kind": "expansion",
+          "status": "independent",
+          "count": 3
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans",
+          "count": 8
+        },
+        {
+          "kind": "mixed",
+          "status": "failed_energy_or_stretch_check",
+          "count": 16
+        },
+        {
+          "kind": "mixed",
+          "status": "independent",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "one_shock_collision",
+          "count": 8
+        }
+      ],
+      "fine_reference": [
+        {
+          "kind": "compression",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check"
+          ],
+          "thin_stretch": 0.7857927546103428,
+          "thin_stretch_error": 0.004216304204760046,
+          "ale_flux_error": [
+            0.00842815965498282,
+            0.007529694284878444,
+            0.005595795458424175
+          ],
+          "pressure_work_error": 0.005595795458424175,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "compression",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5897869496982822,
+          "thin_stretch_error": 0.012199122255507566,
+          "ale_flux_error": [
+            0.008195143848860118,
+            0.017242493613609487,
+            0.0072210315484594655
+          ],
+          "pressure_work_error": 0.027066377757619227,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "mixed",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "failed_energy_or_stretch_check",
+            "failed_energy_or_stretch_check"
+          ],
+          "thin_stretch": 0.7721008936243604,
+          "thin_stretch_error": 0.005841736082951798,
+          "ale_flux_error": [
+            0.03715946095580595,
+            0.01880885849967127,
+            0.040796154679076664
+          ],
+          "pressure_work_error": 0.040796154679076664,
+          "max_balance": 2.482822974991805e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "mixed",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.884303050990857,
+          "thin_stretch_error": 0.01763503410388878,
+          "ale_flux_error": [
+            0.006222083191939665,
+            0.007495960492770735,
+            0.006478582486428919
+          ],
+          "pressure_work_error": 0.10392390822494002,
+          "max_balance": 7.28583859910259e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "expansion",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "failed_energy_or_stretch_check",
+            "failed_energy_or_stretch_check"
+          ],
+          "thin_stretch": 0.9641875502326014,
+          "thin_stretch_error": 0.11537316314350843,
+          "ale_flux_error": [
+            0.35747608719422885,
+            0.4264697647097923,
+            0.44531098043760003
+          ],
+          "pressure_work_error": 0.44531098043760003,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18
+        },
+        {
+          "kind": "expansion",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013720027618001297,
+            0.010466031593915294,
+            0.0008139407880834101
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.0456221580889051,
+          "thin_stretch_error": 0.014164040498509944,
+          "ale_flux_error": [
+            0.0024605061845545985,
+            0.06475013114647211,
+            0.18965715017746476
+          ],
+          "pressure_work_error": 0.1388388465963225,
+          "max_balance": 1.0581813203458523e-16,
+          "max_entropy_defect": 8.673617379884035e-19
+        }
+      ],
+      "partial_weights": []
+    },
+    {
+      "cap": [
+        2,
+        4
+      ],
+      "blend": false,
+      "coverage": [
+        {
+          "kind": "compression",
+          "status": "bounded_fans",
+          "count": 12
+        },
+        {
+          "kind": "compression",
+          "status": "failed_energy_or_stretch_check",
+          "count": 17
+        },
+        {
+          "kind": "compression",
+          "status": "independent",
+          "count": 1
+        },
+        {
+          "kind": "compression",
+          "status": "one_shock_collision",
+          "count": 7
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans",
+          "count": 3
+        },
+        {
+          "kind": "expansion",
+          "status": "failed_energy_or_stretch_check",
+          "count": 2
+        },
+        {
+          "kind": "expansion",
+          "status": "fan_budget",
+          "count": 24
+        },
+        {
+          "kind": "expansion",
+          "status": "independent",
+          "count": 3
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans",
+          "count": 8
+        },
+        {
+          "kind": "mixed",
+          "status": "failed_energy_or_stretch_check",
+          "count": 12
+        },
+        {
+          "kind": "mixed",
+          "status": "fan_budget",
+          "count": 3
+        },
+        {
+          "kind": "mixed",
+          "status": "independent",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "one_shock_collision",
+          "count": 9
+        }
+      ],
+      "fine_reference": [
+        {
+          "kind": "compression",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check"
+          ],
+          "thin_stretch": 0.7857927546103428,
+          "thin_stretch_error": 0.004216304204760046,
+          "ale_flux_error": [
+            0.00842815965498282,
+            0.007529694284878444,
+            0.005595795458424175
+          ],
+          "pressure_work_error": 0.005595795458424175,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "compression",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5897869496982822,
+          "thin_stretch_error": 0.012199122255507566,
+          "ale_flux_error": [
+            0.008195143848860118,
+            0.017242493613609487,
+            0.0072210315484594655
+          ],
+          "pressure_work_error": 0.027066377757619227,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "mixed",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.7781964970941806,
+          "thin_stretch_error": 0.0002538673868683894,
+          "ale_flux_error": [
+            0.0004642026682767884,
+            0.0002724789465164511,
+            0.0012664417370321984
+          ],
+          "pressure_work_error": 0.0012664417370321984,
+          "max_balance": 2.482822974991805e-17,
+          "max_entropy_defect": 1.0982886692115224e-14
+        },
+        {
+          "kind": "mixed",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.8843044997929049,
+          "thin_stretch_error": 0.017636482905936668,
+          "ale_flux_error": [
+            0.006288784314466262,
+            0.0072981896515254404,
+            0.006860987022753683
+          ],
+          "pressure_work_error": 0.10352253171252043,
+          "max_balance": 4.270672357420402e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "expansion",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "fan_budget",
+            "fan_budget"
+          ],
+          "thin_stretch": 0.9641875502326014,
+          "thin_stretch_error": 0.11537316314350843,
+          "ale_flux_error": [
+            0.35747608719422885,
+            0.4264697647097923,
+            0.44531098043760003
+          ],
+          "pressure_work_error": 0.44531098043760003,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18
+        },
+        {
+          "kind": "expansion",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013720027618001297,
+            0.010489883689154725,
+            0.0007900886928439779
+          ],
+          "predictions": [
+            "fan_budget",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.0212163162319643,
+          "thin_stretch_error": 0.03856988235545078,
+          "ale_flux_error": [
+            0.007022775944769578,
+            0.16571260569088575,
+            0.03579193800778988
+          ],
+          "pressure_work_error": 0.3905424076098926,
+          "max_balance": 1.960237527853792e-16,
+          "max_entropy_defect": 8.673617379884035e-19
+        }
+      ],
+      "partial_weights": []
+    },
+    {
+      "cap": [
+        2,
+        8
+      ],
+      "blend": false,
+      "coverage": [
+        {
+          "kind": "compression",
+          "status": "bounded_fans",
+          "count": 12
+        },
+        {
+          "kind": "compression",
+          "status": "failed_energy_or_stretch_check",
+          "count": 17
+        },
+        {
+          "kind": "compression",
+          "status": "independent",
+          "count": 1
+        },
+        {
+          "kind": "compression",
+          "status": "one_shock_collision",
+          "count": 7
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans",
+          "count": 4
+        },
+        {
+          "kind": "expansion",
+          "status": "failed_energy_or_stretch_check",
+          "count": 2
+        },
+        {
+          "kind": "expansion",
+          "status": "fan_budget",
+          "count": 23
+        },
+        {
+          "kind": "expansion",
+          "status": "independent",
+          "count": 3
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans",
+          "count": 9
+        },
+        {
+          "kind": "mixed",
+          "status": "failed_energy_or_stretch_check",
+          "count": 12
+        },
+        {
+          "kind": "mixed",
+          "status": "fan_budget",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "independent",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "one_shock_collision",
+          "count": 9
+        }
+      ],
+      "fine_reference": [
+        {
+          "kind": "compression",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check"
+          ],
+          "thin_stretch": 0.7857927546103428,
+          "thin_stretch_error": 0.004216304204760046,
+          "ale_flux_error": [
+            0.00842815965498282,
+            0.007529694284878444,
+            0.005595795458424175
+          ],
+          "pressure_work_error": 0.005595795458424175,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "compression",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5897869496982822,
+          "thin_stretch_error": 0.012199122255507566,
+          "ale_flux_error": [
+            0.008195143848860118,
+            0.017242493613609487,
+            0.0072210315484594655
+          ],
+          "pressure_work_error": 0.027066377757619227,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "mixed",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.7781964970941806,
+          "thin_stretch_error": 0.0002538673868683894,
+          "ale_flux_error": [
+            0.0004642026682767884,
+            0.0002724789465164511,
+            0.0012664417370321984
+          ],
+          "pressure_work_error": 0.0012664417370321984,
+          "max_balance": 2.482822974991805e-17,
+          "max_entropy_defect": 1.0982886692115224e-14
+        },
+        {
+          "kind": "mixed",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.8843044997929049,
+          "thin_stretch_error": 0.017636482905936668,
+          "ale_flux_error": [
+            0.006288784314466262,
+            0.0072981896515254404,
+            0.006860987022753683
+          ],
+          "pressure_work_error": 0.10352253171252043,
+          "max_balance": 4.270672357420402e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "expansion",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "fan_budget",
+            "fan_budget"
+          ],
+          "thin_stretch": 0.9641875502326014,
+          "thin_stretch_error": 0.11537316314350843,
+          "ale_flux_error": [
+            0.35747608719422885,
+            0.4264697647097923,
+            0.44531098043760003
+          ],
+          "pressure_work_error": 0.44531098043760003,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18
+        },
+        {
+          "kind": "expansion",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013720027618001297,
+            0.01046534757616272,
+            0.0008146248058359847
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.04545212251566,
+          "thin_stretch_error": 0.014334076071754964,
+          "ale_flux_error": [
+            0.0021805645615615957,
+            0.06920592844904543,
+            0.20186258736893783
+          ],
+          "pressure_work_error": 0.13972735028721894,
+          "max_balance": 1.196959198423997e-16,
+          "max_entropy_defect": 8.673617379884035e-19
+        }
+      ],
+      "partial_weights": []
+    },
+    {
+      "cap": [
+        2,
+        16
+      ],
+      "blend": false,
+      "coverage": [
+        {
+          "kind": "compression",
+          "status": "bounded_fans",
+          "count": 12
+        },
+        {
+          "kind": "compression",
+          "status": "failed_energy_or_stretch_check",
+          "count": 17
+        },
+        {
+          "kind": "compression",
+          "status": "independent",
+          "count": 1
+        },
+        {
+          "kind": "compression",
+          "status": "one_shock_collision",
+          "count": 7
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans",
+          "count": 4
+        },
+        {
+          "kind": "expansion",
+          "status": "failed_energy_or_stretch_check",
+          "count": 3
+        },
+        {
+          "kind": "expansion",
+          "status": "fan_budget",
+          "count": 22
+        },
+        {
+          "kind": "expansion",
+          "status": "independent",
+          "count": 3
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans",
+          "count": 10
+        },
+        {
+          "kind": "mixed",
+          "status": "failed_energy_or_stretch_check",
+          "count": 12
+        },
+        {
+          "kind": "mixed",
+          "status": "fan_budget",
+          "count": 1
+        },
+        {
+          "kind": "mixed",
+          "status": "independent",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "one_shock_collision",
+          "count": 9
+        }
+      ],
+      "fine_reference": [
+        {
+          "kind": "compression",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check"
+          ],
+          "thin_stretch": 0.7857927546103428,
+          "thin_stretch_error": 0.004216304204760046,
+          "ale_flux_error": [
+            0.00842815965498282,
+            0.007529694284878444,
+            0.005595795458424175
+          ],
+          "pressure_work_error": 0.005595795458424175,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "compression",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5897869496982822,
+          "thin_stretch_error": 0.012199122255507566,
+          "ale_flux_error": [
+            0.008195143848860118,
+            0.017242493613609487,
+            0.0072210315484594655
+          ],
+          "pressure_work_error": 0.027066377757619227,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "mixed",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.7781964970941806,
+          "thin_stretch_error": 0.0002538673868683894,
+          "ale_flux_error": [
+            0.0004642026682767884,
+            0.0002724789465164511,
+            0.0012664417370321984
+          ],
+          "pressure_work_error": 0.0012664417370321984,
+          "max_balance": 2.482822974991805e-17,
+          "max_entropy_defect": 1.0982886692115224e-14
+        },
+        {
+          "kind": "mixed",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.8843044997929049,
+          "thin_stretch_error": 0.017636482905936668,
+          "ale_flux_error": [
+            0.006288784314466262,
+            0.0072981896515254404,
+            0.006860987022753683
+          ],
+          "pressure_work_error": 0.10352253171252043,
+          "max_balance": 4.270672357420402e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "expansion",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "fan_budget",
+            "failed_energy_or_stretch_check"
+          ],
+          "thin_stretch": 0.9641875502326014,
+          "thin_stretch_error": 0.11537316314350843,
+          "ale_flux_error": [
+            0.35747608719422885,
+            0.4264697647097923,
+            0.44531098043760003
+          ],
+          "pressure_work_error": 0.44531098043760003,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18
+        },
+        {
+          "kind": "expansion",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013720027618001297,
+            0.01046534757616272,
+            0.0008146248058359847
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.04545212251566,
+          "thin_stretch_error": 0.014334076071754964,
+          "ale_flux_error": [
+            0.0021805645615615957,
+            0.06920592844904543,
+            0.20186258736893783
+          ],
+          "pressure_work_error": 0.13972735028721894,
+          "max_balance": 1.196959198423997e-16,
+          "max_entropy_defect": 8.673617379884035e-19
+        }
+      ],
+      "partial_weights": []
+    },
+    {
+      "cap": [
+        3,
+        12
+      ],
+      "blend": false,
+      "coverage": [
+        {
+          "kind": "compression",
+          "status": "bounded_fans",
+          "count": 12
+        },
+        {
+          "kind": "compression",
+          "status": "failed_energy_or_stretch_check",
+          "count": 17
+        },
+        {
+          "kind": "compression",
+          "status": "independent",
+          "count": 1
+        },
+        {
+          "kind": "compression",
+          "status": "one_shock_collision",
+          "count": 7
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans",
+          "count": 4
+        },
+        {
+          "kind": "expansion",
+          "status": "failed_energy_or_stretch_check",
+          "count": 2
+        },
+        {
+          "kind": "expansion",
+          "status": "fan_budget",
+          "count": 23
+        },
+        {
+          "kind": "expansion",
+          "status": "independent",
+          "count": 3
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans",
+          "count": 10
+        },
+        {
+          "kind": "mixed",
+          "status": "failed_energy_or_stretch_check",
+          "count": 11
+        },
+        {
+          "kind": "mixed",
+          "status": "fan_budget",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "independent",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "one_shock_collision",
+          "count": 9
+        }
+      ],
+      "fine_reference": [
+        {
+          "kind": "compression",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check"
+          ],
+          "thin_stretch": 0.7857927546103428,
+          "thin_stretch_error": 0.004216304204760046,
+          "ale_flux_error": [
+            0.00842815965498282,
+            0.007529694284878444,
+            0.005595795458424175
+          ],
+          "pressure_work_error": 0.005595795458424175,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "compression",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "failed_energy_or_stretch_check",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5897869496982822,
+          "thin_stretch_error": 0.012199122255507566,
+          "ale_flux_error": [
+            0.008195143848860118,
+            0.017242493613609487,
+            0.0072210315484594655
+          ],
+          "pressure_work_error": 0.027066377757619227,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "mixed",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.7781956817284101,
+          "thin_stretch_error": 0.00025305202109793257,
+          "ale_flux_error": [
+            0.00046656971708688847,
+            0.0002778753825347249,
+            0.001178752893689346
+          ],
+          "pressure_work_error": 0.001178752893689346,
+          "max_balance": 9.606031248221569e-17,
+          "max_entropy_defect": 1.0767753876039787e-14
+        },
+        {
+          "kind": "mixed",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.8843047687430529,
+          "thin_stretch_error": 0.017636751856084598,
+          "ale_flux_error": [
+            0.006301151118601984,
+            0.007261523476289044,
+            0.006931863396576679
+          ],
+          "pressure_work_error": 0.103448145499754,
+          "max_balance": 2.949029909160572e-16,
+          "max_entropy_defect": 0.0
+        },
+        {
+          "kind": "expansion",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "fan_budget",
+            "fan_budget"
+          ],
+          "thin_stretch": 0.9641875502326014,
+          "thin_stretch_error": 0.11537316314350843,
+          "ale_flux_error": [
+            0.35747608719422885,
+            0.4264697647097923,
+            0.44531098043760003
+          ],
+          "pressure_work_error": 0.44531098043760003,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18
+        },
+        {
+          "kind": "expansion",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013720027618001297,
+            0.010465220537297272,
+            0.0008147518447014328
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.0454286908084893,
+          "thin_stretch_error": 0.014357507778925749,
+          "ale_flux_error": [
+            0.0021287888970666475,
+            0.07003522766901396,
+            0.2041365396395411
+          ],
+          "pressure_work_error": 0.13989358042400948,
+          "max_balance": 1.4533730122168187e-16,
+          "max_entropy_defect": 8.673617379884035e-19
+        }
+      ],
+      "partial_weights": []
+    },
+    {
+      "cap": [
+        1,
+        4
+      ],
+      "blend": true,
+      "coverage": [
+        {
+          "kind": "compression",
+          "status": "bounded_fans",
+          "count": 12
+        },
+        {
+          "kind": "compression",
+          "status": "bounded_fans_limited",
+          "count": 17
+        },
+        {
+          "kind": "compression",
+          "status": "independent",
+          "count": 1
+        },
+        {
+          "kind": "compression",
+          "status": "one_shock_collision",
+          "count": 7
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans",
+          "count": 5
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans_limited",
+          "count": 24
+        },
+        {
+          "kind": "expansion",
+          "status": "independent",
+          "count": 3
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans",
+          "count": 8
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans_limited",
+          "count": 16
+        },
+        {
+          "kind": "mixed",
+          "status": "independent",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "one_shock_collision",
+          "count": 8
+        }
+      ],
+      "fine_reference": [
+        {
+          "kind": "compression",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7900450417933664,
+          "thin_stretch_error": 0.008468591387783664,
+          "ale_flux_error": [
+            0.010815860272832831,
+            0.006258451706331179,
+            0.009307563718000386
+          ],
+          "pressure_work_error": 0.009307563718000386,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99774169921875
+          ]
+        },
+        {
+          "kind": "compression",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5949810973490897,
+          "thin_stretch_error": 0.017393269906315068,
+          "ale_flux_error": [
+            0.008042756755466831,
+            0.017380065805061032,
+            0.009430111341272689
+          ],
+          "pressure_work_error": 0.02676014521371357,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99066162109375,
+            1.0
+          ]
+        },
+        {
+          "kind": "mixed",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7782054325481781,
+          "thin_stretch_error": 0.00026280284086588335,
+          "ale_flux_error": [
+            0.0003814507150910791,
+            0.00022174950799649899,
+            0.001597521310857049
+          ],
+          "pressure_work_error": 0.001597521310857049,
+          "max_balance": 8.61940727125976e-17,
+          "max_entropy_defect": 9.99763694140704e-14,
+          "prediction_weights": [
+            0.986572265625,
+            0.99981689453125
+          ]
+        },
+        {
+          "kind": "mixed",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.884303050990857,
+          "thin_stretch_error": 0.01763503410388878,
+          "ale_flux_error": [
+            0.006222083191939665,
+            0.007495960492770735,
+            0.006478582486428919
+          ],
+          "pressure_work_error": 0.10392390822494002,
+          "max_balance": 7.28583859910259e-17,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "kind": "expansion",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 1.0947470856023462,
+          "thin_stretch_error": 0.015186372226236422,
+          "ale_flux_error": [
+            0.053520466808683734,
+            0.05617959382781948,
+            0.019055026702436643
+          ],
+          "pressure_work_error": 0.019055026702436643,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18,
+          "prediction_weights": [
+            0.916015625,
+            0.993408203125
+          ]
+        },
+        {
+          "kind": "expansion",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013720027618001297,
+            0.010466031593915294,
+            0.0008139407880834101
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.0456221580889051,
+          "thin_stretch_error": 0.014164040498509944,
+          "ale_flux_error": [
+            0.0024605061845545985,
+            0.06475013114647211,
+            0.18965715017746476
+          ],
+          "pressure_work_error": 0.1388388465963225,
+          "max_balance": 1.0581813203458523e-16,
+          "max_entropy_defect": 8.673617379884035e-19,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "partial_weights": [
+        0.99774169921875,
+        0.99066162109375,
+        0.99786376953125,
+        0.99566650390625,
+        0.9930419921875,
+        0.99505615234375,
+        0.9957275390625,
+        0.99700927734375,
+        0.99267578125,
+        0.992919921875,
+        0.99554443359375,
+        0.99822998046875,
+        0.9952392578125,
+        0.99505615234375,
+        0.99737548828125,
+        0.99298095703125,
+        0.9918212890625,
+        0.986572265625,
+        0.99981689453125,
+        0.9998779296875,
+        0.93975830078125,
+        0.9979248046875,
+        0.97589111328125,
+        0.9989013671875,
+        0.93621826171875,
+        0.9971923828125,
+        0.9835205078125,
+        0.99920654296875,
+        0.99932861328125,
+        0.94244384765625,
+        0.929931640625,
+        0.94287109375,
+        0.99945068359375,
+        0.916015625,
+        0.993408203125,
+        0.8616943359375,
+        0.910888671875,
+        0.99346923828125,
+        0.8541259765625,
+        0.994140625,
+        0.900390625,
+        0.99041748046875,
+        0.9801025390625,
+        0.99609375,
+        0.3182373046875,
+        0.291259765625,
+        0.828369140625,
+        0.90234375,
+        0.89569091796875,
+        0.8436279296875,
+        0.896240234375,
+        0.9931640625,
+        0.5889892578125,
+        0.9959716796875,
+        0.9117431640625,
+        0.9942626953125,
+        0.92279052734375
+      ]
+    },
+    {
+      "cap": [
+        2,
+        8
+      ],
+      "blend": true,
+      "coverage": [
+        {
+          "kind": "compression",
+          "status": "bounded_fans",
+          "count": 12
+        },
+        {
+          "kind": "compression",
+          "status": "bounded_fans_limited",
+          "count": 17
+        },
+        {
+          "kind": "compression",
+          "status": "independent",
+          "count": 1
+        },
+        {
+          "kind": "compression",
+          "status": "one_shock_collision",
+          "count": 7
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans",
+          "count": 4
+        },
+        {
+          "kind": "expansion",
+          "status": "bounded_fans_limited",
+          "count": 2
+        },
+        {
+          "kind": "expansion",
+          "status": "fan_budget",
+          "count": 23
+        },
+        {
+          "kind": "expansion",
+          "status": "independent",
+          "count": 3
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans",
+          "count": 9
+        },
+        {
+          "kind": "mixed",
+          "status": "bounded_fans_limited",
+          "count": 12
+        },
+        {
+          "kind": "mixed",
+          "status": "fan_budget",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "independent",
+          "count": 2
+        },
+        {
+          "kind": "mixed",
+          "status": "one_shock_collision",
+          "count": 9
+        }
+      ],
+      "fine_reference": [
+        {
+          "kind": "compression",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7900450417933664,
+          "thin_stretch_error": 0.008468591387783664,
+          "ale_flux_error": [
+            0.010815860272832831,
+            0.006258451706331179,
+            0.009307563718000386
+          ],
+          "pressure_work_error": 0.009307563718000386,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99774169921875
+          ]
+        },
+        {
+          "kind": "compression",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5949810973490897,
+          "thin_stretch_error": 0.017393269906315068,
+          "ale_flux_error": [
+            0.008042756755466831,
+            0.017380065805061032,
+            0.009430111341272689
+          ],
+          "pressure_work_error": 0.02676014521371357,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99066162109375,
+            1.0
+          ]
+        },
+        {
+          "kind": "mixed",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.7781964970941806,
+          "thin_stretch_error": 0.0002538673868683894,
+          "ale_flux_error": [
+            0.0004642026682767884,
+            0.0002724789465164511,
+            0.0012664417370321984
+          ],
+          "pressure_work_error": 0.0012664417370321984,
+          "max_balance": 2.482822974991805e-17,
+          "max_entropy_defect": 1.0982886692115224e-14,
+          "prediction_weights": [
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "kind": "mixed",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.8843044997929049,
+          "thin_stretch_error": 0.017636482905936668,
+          "ale_flux_error": [
+            0.006288784314466262,
+            0.0072981896515254404,
+            0.006860987022753683
+          ],
+          "pressure_work_error": 0.10352253171252043,
+          "max_balance": 4.270672357420402e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        {
+          "kind": "expansion",
+          "index": 0,
+          "motion": "fixed",
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "fan_budget",
+            "fan_budget"
+          ],
+          "thin_stretch": 0.9641875502326014,
+          "thin_stretch_error": 0.11537316314350843,
+          "ale_flux_error": [
+            0.35747608719422885,
+            0.4264697647097923,
+            0.44531098043760003
+          ],
+          "pressure_work_error": 0.44531098043760003,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18,
+          "prediction_weights": [
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "kind": "expansion",
+          "index": 1,
+          "motion": "drift",
+          "steps": [
+            0.013720027618001297,
+            0.01046534757616272,
+            0.0008146248058359847
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.04545212251566,
+          "thin_stretch_error": 0.014334076071754964,
+          "ale_flux_error": [
+            0.0021805645615615957,
+            0.06920592844904543,
+            0.20186258736893783
+          ],
+          "pressure_work_error": 0.13972735028721894,
+          "max_balance": 1.196959198423997e-16,
+          "max_entropy_defect": 8.673617379884035e-19,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "partial_weights": [
+        0.99774169921875,
+        0.99066162109375,
+        0.99786376953125,
+        0.99566650390625,
+        0.9930419921875,
+        0.99505615234375,
+        0.9957275390625,
+        0.99700927734375,
+        0.99267578125,
+        0.992919921875,
+        0.99554443359375,
+        0.99822998046875,
+        0.9952392578125,
+        0.99505615234375,
+        0.99737548828125,
+        0.99298095703125,
+        0.997802734375,
+        0.9998779296875,
+        0.9906005859375,
+        0.99957275390625,
+        0.998779296875,
+        0.99853515625,
+        0.98992919921875,
+        0.99908447265625,
+        0.999267578125,
+        0.99932861328125,
+        0.99285888671875,
+        0.99078369140625,
+        0.99945068359375,
+        0.99688720703125,
+        0.98883056640625
+      ]
+    }
+  ],
+  "impact": [
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "fixed",
+      "one_interaction": {
+        "steps": [
+          0.012359079462703449,
+          0.011454652525981147,
+          0.0011862680113154042
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.4285054354374753,
+        "thin_stretch_error": 0.006005435437475282,
+        "ale_flux_error": [
+          0.01039902240255538,
+          0.01698828079449999,
+          0.025893352925451803
+        ],
+        "pressure_work_error": 0.025893352925451803,
+        "max_balance": 2.0122792321330962e-16,
+        "max_entropy_defect": 0.0
+      },
+      "bounded_fans": {
+        "steps": [
+          0.012359079462703449,
+          0.011454652525981147,
+          0.0011862680113154042
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "one_shock_collision"
+        ],
+        "thin_stretch": 0.4305766038802515,
+        "thin_stretch_error": 0.008076603880251443,
+        "ale_flux_error": [
+          0.013985461264506626,
+          0.016676085997908013,
+          0.03492117266572737
+        ],
+        "pressure_work_error": 0.03492117266572737,
+        "max_balance": 9.194034422677078e-17,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99676513671875,
+          1.0
+        ]
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "drift",
+      "one_interaction": {
+        "steps": [
+          0.010092831908879076,
+          0.0080340436524237,
+          0.00642802407079443,
+          0.0004451003679027954
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans",
+          "independent"
+        ],
+        "thin_stretch": 0.42763462082340936,
+        "thin_stretch_error": 0.005134620823409486,
+        "ale_flux_error": [
+          0.0028681653407564437,
+          0.015422654731493271,
+          0.0059786099968136205
+        ],
+        "pressure_work_error": 0.07667137502516291,
+        "max_balance": 1.93421667571414e-16,
+        "max_entropy_defect": 0.0
+      },
+      "bounded_fans": {
+        "steps": [
+          0.010092831908879076,
+          0.0080340436524237,
+          0.006426058945034936,
+          0.0004470654936622881
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "independent"
+        ],
+        "thin_stretch": 0.4308038396460385,
+        "thin_stretch_error": 0.008303839646038647,
+        "ale_flux_error": [
+          0.004138020333101876,
+          0.015158720779794544,
+          0.008560496873498382
+        ],
+        "pressure_work_error": 0.07862202479707575,
+        "max_balance": 2.2811613709095013e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99658203125,
+          0.998779296875,
+          1.0
+        ]
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "squeeze",
+      "one_interaction": {
+        "steps": [
+          0.01227422971897977,
+          0.011593658499686644,
+          0.0011321117813335863
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.4274740216532816,
+        "thin_stretch_error": 0.004974021653281646,
+        "ale_flux_error": [
+          0.003153104059132739,
+          0.017491051665135624,
+          0.019840482285512728
+        ],
+        "pressure_work_error": 0.015769302445485453,
+        "max_balance": 1.196959198423997e-16,
+        "max_entropy_defect": 0.0
+      },
+      "bounded_fans": {
+        "steps": [
+          0.01227422971897977,
+          0.011593658499686644,
+          0.0011321117813335863
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "one_shock_collision"
+        ],
+        "thin_stretch": 0.43045522692288696,
+        "thin_stretch_error": 0.007955226922887026,
+        "ale_flux_error": [
+          0.005042933073146265,
+          0.017289517159412654,
+          0.03183037600757326
+        ],
+        "pressure_work_error": 0.02641623171897,
+        "max_balance": 1.196959198423997e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99676513671875,
+          1.0
+        ]
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "fixed",
+      "one_interaction": {
+        "steps": [
+          0.016935895197420905,
+          0.008064104802579096
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6417858701608299,
+        "thin_stretch_error": 0.0017858701608297611,
+        "ale_flux_error": [
+          0.004960750446757721,
+          0.0049285216076913685,
+          0.011075292927520351
+        ],
+        "pressure_work_error": 0.011075292927520351,
+        "max_balance": 6.678685382510707e-17,
+        "max_entropy_defect": 8.673617379884035e-19
+      },
+      "bounded_fans": {
+        "steps": [
+          0.016935895197420905,
+          0.008064104802579096
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.6435799712052006,
+        "thin_stretch_error": 0.003579971205200483,
+        "ale_flux_error": [
+          0.009944364458898475,
+          0.004388834808530681,
+          0.02220163071723112
+        ],
+        "pressure_work_error": 0.02220163071723112,
+        "max_balance": 6.678685382510707e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.9990234375
+        ]
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "drift",
+      "one_interaction": {
+        "steps": [
+          0.012963257461575972,
+          0.009844944865799388,
+          0.002191797672624639
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6414247909338467,
+        "thin_stretch_error": 0.0014247909338469533,
+        "ale_flux_error": [
+          0.0004968630038827693,
+          0.003116808145774032,
+          0.001923466292521851
+        ],
+        "pressure_work_error": 0.028644428161249697,
+        "max_balance": 4.336808689942018e-17,
+        "max_entropy_defect": 8.673617379884035e-19
+      },
+      "bounded_fans": {
+        "steps": [
+          0.012963257461575972,
+          0.009844944865799388,
+          0.002191797672624639
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans"
+        ],
+        "thin_stretch": 0.6431086688028956,
+        "thin_stretch_error": 0.003108668802895842,
+        "ale_flux_error": [
+          0.0006272663875892412,
+          0.002799201907180079,
+          0.002433099140457826
+        ],
+        "pressure_work_error": 0.029839029323729484,
+        "max_balance": 1.0907073855204175e-16,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.99871826171875,
+          1.0
+        ]
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "squeeze",
+      "one_interaction": {
+        "steps": [
+          0.016860890418808144,
+          0.008139109581191857
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6412156025964271,
+        "thin_stretch_error": 0.0012156025964269457,
+        "ale_flux_error": [
+          0.0008938254385535971,
+          0.00521265806676323,
+          0.007261838286905848
+        ],
+        "pressure_work_error": 0.005792351515288432,
+        "max_balance": 5.4643789493269423e-17,
+        "max_entropy_defect": 8.673617379884035e-19
+      },
+      "bounded_fans": {
+        "steps": [
+          0.016860890418808144,
+          0.008139109581191857
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.6436152409032395,
+        "thin_stretch_error": 0.0036152409032393917,
+        "ale_flux_error": [
+          0.0026582653700329335,
+          0.004854140160570049,
+          0.021596922833433865
+        ],
+        "pressure_work_error": 0.014911800819816096,
+        "max_balance": 5.4643789493269423e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.99908447265625
+        ]
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "fixed",
+      "one_interaction": {
+        "steps": [
+          0.012649361580733966,
+          0.011809917816999586,
+          0.00054072060226645
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.42830574693639056,
+        "thin_stretch_error": 0.005805746936390521,
+        "ale_flux_error": [
+          0.010053241509839756,
+          0.018110577922147875,
+          0.025017245127845904
+        ],
+        "pressure_work_error": 0.025017245127845904,
+        "max_balance": 1.49890950346121e-16,
+        "max_entropy_defect": 0.0
+      },
+      "bounded_fans": {
+        "steps": [
+          0.012649361580733966,
+          0.011809917816999586,
+          0.00054072060226645
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.42830574693639056,
+        "thin_stretch_error": 0.005805746936390521,
+        "ale_flux_error": [
+          0.010053241509839756,
+          0.018110577922147875,
+          0.025017245127845904
+        ],
+        "pressure_work_error": 0.025017245127845904,
+        "max_balance": 1.49890950346121e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "drift",
+      "one_interaction": {
+        "steps": [
+          0.010392083733326835,
+          0.008338912029589715,
+          0.006269004237083452
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.4275497939047429,
+        "thin_stretch_error": 0.005049793833959926,
+        "ale_flux_error": [
+          0.006915676819583695,
+          0.018025205881914086,
+          0.013961370112361995
+        ],
+        "pressure_work_error": 18006.745618348417,
+        "max_balance": 1.3877787807814457e-16,
+        "max_entropy_defect": 0.0
+      },
+      "bounded_fans": {
+        "steps": [
+          0.010392083733326835,
+          0.008338912029589715,
+          0.006269004237083452
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.4275497939047429,
+        "thin_stretch_error": 0.005049793833959926,
+        "ale_flux_error": [
+          0.006915676819583695,
+          0.018025205881914086,
+          0.013961370112361995
+        ],
+        "pressure_work_error": 18006.745618348417,
+        "max_balance": 1.3877787807814457e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "squeeze",
+      "one_interaction": {
+        "steps": [
+          0.012649361406236495,
+          0.011809918101880465,
+          0.0005407204918830427
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.427183264710872,
+        "thin_stretch_error": 0.004683264710871937,
+        "ale_flux_error": [
+          0.0029687891778639383,
+          0.018110578679322996,
+          0.01858568780128405
+        ],
+        "pressure_work_error": 0.015013508336653617,
+        "max_balance": 1.700029006457271e-16,
+        "max_entropy_defect": 0.0
+      },
+      "bounded_fans": {
+        "steps": [
+          0.012649361406236495,
+          0.011809918101880465,
+          0.0005407204918830427
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.427183264710872,
+        "thin_stretch_error": 0.004683264710871937,
+        "ale_flux_error": [
+          0.0029687891778639383,
+          0.018110578679322996,
+          0.01858568780128405
+        ],
+        "pressure_work_error": 0.015013508336653617,
+        "max_balance": 1.700029006457271e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "fixed",
+      "one_interaction": {
+        "steps": [
+          0.017595469276056975,
+          0.0074045307239430265
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6419304569141965,
+        "thin_stretch_error": 0.0019304569141963546,
+        "ale_flux_error": [
+          0.005362384715985677,
+          0.004944219764493192,
+          0.011964425732472242
+        ],
+        "pressure_work_error": 0.011964425732472242,
+        "max_balance": 4.163336342344337e-17,
+        "max_entropy_defect": 4.336808689942018e-19
+      },
+      "bounded_fans": {
+        "steps": [
+          0.017595469276056975,
+          0.0074045307239430265
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6419304569141965,
+        "thin_stretch_error": 0.0019304569141963546,
+        "ale_flux_error": [
+          0.005362384715985677,
+          0.004944219764493192,
+          0.011964425732472242
+        ],
+        "pressure_work_error": 0.011964425732472242,
+        "max_balance": 4.163336342344337e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "drift",
+      "one_interaction": {
+        "steps": [
+          0.013512686121985275,
+          0.01028384717874907,
+          0.001203466699265656
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6417286732303156,
+        "thin_stretch_error": 0.0017286731230939933,
+        "ale_flux_error": [
+          0.001204251109784712,
+          0.005314097593517955,
+          0.005015033202346148
+        ],
+        "pressure_work_error": 6716.048650514554,
+        "max_balance": 7.19910242530375e-17,
+        "max_entropy_defect": 8.673617379884035e-19
+      },
+      "bounded_fans": {
+        "steps": [
+          0.013512686121985275,
+          0.01028384717874907,
+          0.001203466699265656
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6417286732303156,
+        "thin_stretch_error": 0.0017286731230939933,
+        "ale_flux_error": [
+          0.001204251109784712,
+          0.005314097593517955,
+          0.005015033202346148
+        ],
+        "pressure_work_error": 6716.048650514554,
+        "max_balance": 7.19910242530375e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ]
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "squeeze",
+      "one_interaction": {
+        "steps": [
+          0.0175954691202428,
+          0.0074045308797572006
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6413578286188056,
+        "thin_stretch_error": 0.0013578286188055122,
+        "ale_flux_error": [
+          0.0009984056644968195,
+          0.0049442202584496385,
+          0.008082045013841363
+        ],
+        "pressure_work_error": 0.00598221802835916,
+        "max_balance": 5.724587470723463e-17,
+        "max_entropy_defect": 4.336808689942018e-19
+      },
+      "bounded_fans": {
+        "steps": [
+          0.0175954691202428,
+          0.0074045308797572006
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6413578286188056,
+        "thin_stretch_error": 0.0013578286188055122,
+        "ale_flux_error": [
+          0.0009984056644968195,
+          0.0049442202584496385,
+          0.008082045013841363
+        ],
+        "pressure_work_error": 0.00598221802835916,
+        "max_balance": 5.724587470723463e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0
+        ]
+      }
+    }
+  ]
+}
