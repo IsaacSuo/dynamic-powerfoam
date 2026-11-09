@@ -182,6 +182,11 @@ def energy_rhs(ops,b,dq,total,groupV,pressure,relative,donor,mw,mc,cache):
     mechanical_rate=(chi*dq).sum(1)-pressure*volume_rate
     dq[:,4]=mechanical_rate+heat+thermal_transport
     cache['mechanical_rate_chain_W']=mechanical_rate.sum()
+    if getattr(ops.s, 'moving_face_gauss', False) and cache['planar'] is not None:
+        if not ops.s.moving_face_endpoints:
+            from free_surface.fv_ale_planar_mechanics import moving_face_rhs
+            cache['moving_face_rhs'] = moving_face_rhs(ops, b, cache['planar'], total, groupV, pressure, v, T)
+        cache['volume_rate'] = volume_rate
     cache['mechanical_energy_joule']=(b['q'][:,0]*(elastic+.5*v.square().sum(1))).sum()
     cache['mixing_heat']=mixing
     cache['internal_acoustic_W']=-(cache['stress_heat']+cache['velocity_heat']).sum()

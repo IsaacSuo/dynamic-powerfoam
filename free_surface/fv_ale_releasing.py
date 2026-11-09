@@ -4,6 +4,7 @@ Boundary activation is an explicit unchanged-material-state operation handled
 by the driver. A trial requesting release is discarded; no hidden time step,
 adhesive reaction, energy reset or clamped material update is accepted.
 """
+import os
 import torch
 from free_surface.fv_ale_hyperelastic import HyperelasticALE,HyperelasticDeviceOps
 from free_surface.fv_ale_solid import State
@@ -14,6 +15,15 @@ class ReleaseRequired(RuntimeError):
     def __init__(self,cells):
         self.cells=cells
         super().__init__('material floor faces require moving-boundary activation: '+str(cells))
+
+
+class MovingFaceRHS(tuple):
+    """Keep device samples separate from the existing JSON diagnostics."""
+
+    def __new__(cls, values, boundary):
+        result = super().__new__(cls, values)
+        result.boundary = boundary
+        return result
 
 
 class ReleasingDeviceOps(HyperelasticDeviceOps):
@@ -28,15 +38,47 @@ class ReleasingDeviceOps(HyperelasticDeviceOps):
             boundary=self._compatible['planar'];adot=boundary['adot'];bdot=boundary['bdot']
         else:
             adot=b['p'].new_zeros((0,3));bdot=b['r'].new_zeros((0,))
-        return (*original,adot,bdot,self._release_mask)
+        result = (*original,adot,bdot,self._release_mask)
+        if self.s.moving_face_gauss and 'plane_i' in b:
+            if self.s.moving_face_endpoints:
+                return (*result, boundary['normal_speed'], boundary['plane_heat'], self._compatible['volume_rate'])
+            return (*result, *self._compatible['moving_face_rhs'], self._compatible['volume_rate'])
+        return result
 
-    def rhs(self,state):
+    def rhs_values(self,state):
         m=state.mesh
         b={'q':state.q,'V':m.volume,'groups':self.s.groups,'p':state.p,'r':state.r,
             'i':m.i,'j':m.j,'A':m.area,'n':m.normal,'c':m.centroid,'Q':m.cap_Q,'N':m.cap_normal_integral,
             'cap':m.cap_area,'surface':m.surface,'floor':m.ground_area}
         b.update(self.extra_rhs_values(m))
-        w,dr,dq,pack,adot,bdot,release=self.call('rhs_releasing',self.rhs_gpu,b,('i','j','A','n','c'))
+        return b
+
+    def moving_face_sample_gpu(self, b):
+        from free_surface.fv_ale_affine_stencil import gradient
+        from free_surface.fv_ale_planar_mechanics import motion, moving_face_rhs
+
+        total, volume, v, rho, pressure, shear, sigma, sound, valid = self.primitive(b['q'], b['V'], b['groups'])
+        planar = motion(b, v, gradient(b, v), sigma, rho * sound, b['affine_centers'], self.s.ground,
+                        regularization=self.s.cap_motion_regularization)
+        shape_conjugate = (0.5 / rho)[:, None, None] * shear
+        rates = moving_face_rhs(self, b, planar, total, volume, pressure, v, shape_conjugate)
+        return *rates, planar['adot'], planar['bdot'], valid
+
+    def moving_face_sample(self, state):
+        b = self.rhs_values(state)
+        # The affine stencil above already contains the internal mesh data.
+        for key in ('i', 'j', 'A', 'n', 'c'):
+            del b[key]
+        q, volume, work, adot, bdot, valid = self.call('moving_face_sample', self.moving_face_sample_gpu, b)
+        if not bool(valid):
+            raise RuntimeError('moving-face quadrature encountered an invalid material state')
+        n = len(state.mesh.planes.owner)
+        return q.clone(), volume.clone(), work.clone(), adot[:n].clone(), bdot[:n].clone()
+
+    def rhs(self,state):
+        m=state.mesh
+        b=self.rhs_values(state)
+        w,dr,dq,pack,adot,bdot,release,*boundary=self.call('rhs_releasing',self.rhs_gpu,b,('i','j','A','n','c'))
         d=dict(zip(self.rhs_keys,pack.tolist()))
         if not d.pop('valid'):raise RuntimeError('nonpositive mass/sound-speed or nonfinite state; no floor applied')
         if d['wall_tensile_prediction_cells']:raise ReleaseRequired(torch.nonzero(release).flatten().tolist())
@@ -50,13 +92,23 @@ class ReleasingDeviceOps(HyperelasticDeviceOps):
         # No reference to a later overwritten CUDA replay buffer is retained.
         count=len(m.planes.owner) if hasattr(m,'planes') else 0
         d['plane_rates']={'a':adot[:count].tolist(),'b':bdot[:count].tolist()}
-        return w.clone(),dr.clone(),dq.clone(),d
+        result = w.clone(),dr.clone(),dq.clone(),d
+        if boundary:
+            if self.s.moving_face_endpoints:
+                boundary = (boundary[0][:len(m.plane_i)], boundary[1][:count], boundary[2])
+            return MovingFaceRHS(result, tuple(x.clone() for x in boundary))
+        return result
 
 
 class ReleasingHyperelasticALE(HyperelasticALE):
     boundary_mode='releasing_planes'
+    moving_face_gauss = False
 
     def __init__(self,*args,**kwargs):
+        quadrature = os.environ.get('FV_MOVING_FACE_GAUSS', '0')
+        self.moving_face_gauss = quadrature in ('1', 'midpoint', 'endpoint')
+        self.moving_face_midpoint = quadrature == 'midpoint'
+        self.moving_face_endpoints = quadrature == 'endpoint'
         required={'wall_mode':'compatible_slip_acoustic','mechanical_reconstruction':'compatible',
             'affine_stencil':'smooth','affine_cap_motion':'balanced','cap_dissipation':0.,'friction':0.}
         for key,value in required.items():
@@ -160,10 +212,23 @@ class ReleasingHyperelasticALE(HyperelasticALE):
         pa1,pb1=self.plane_rates(stage,second)
         p2,r2,qtrial=self.device_ops().update(s,dt,first,second)
         pl2=planes.clone();pl2.a+=.5*dt*(pa+pa1);pl2.b+=.5*dt*(pb+pb1)
-        mesh2=self.cut(p2,r2,pl2);q2=self.plastic_return(qtrial,mesh2)
+        sweep = None
+        if self.moving_face_gauss and not self.moving_face_endpoints:
+            from free_surface.fv_ale_moving_face_step import correct
+            qtrial, pl2, sweep = correct(self, s, dt, first, second, p2, r2, qtrial, pl2)
+        mesh2=self.cut(p2,r2,pl2)
+        if self.moving_face_gauss and self.moving_face_endpoints:
+            from free_surface.fv_ale_moving_face_step import correct_endpoints
+            qtrial, sweep = correct_endpoints(self, s, stage, State(p2,r2,qtrial,mesh2), dt, first, second)
+        q2=self.plastic_return(qtrial,mesh2)
         result=State(p2,r2,q2,mesh2);totals=self.device_ops().validate(result)
         stats=d1.copy();stats.update(dt=dt,friction_heat=.5*dt*(d0['friction_heat_rate']+d1['friction_heat_rate']),
             source_work=.5*dt*(d0['source_power']+d1['source_power']),boundary_work_defect=0.,
             boundary_abs_work_defect=0.,normal_contact_work=0.,total_mass=totals[0],total_energy=totals[1],
             moving_plane_count=len(planes.owner))
+        if sweep is not None:
+            work, integrated_volume, diagnostics = sweep
+            result.integrated_mechanical_work = work
+            residual = self.group_sum(mesh2.volume - integrated_volume)[self.groups]
+            stats.update(diagnostics, moving_face_volume_residual_m3=float(residual.abs().max()))
         return result,stats

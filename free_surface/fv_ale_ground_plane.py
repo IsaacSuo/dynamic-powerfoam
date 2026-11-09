@@ -22,13 +22,13 @@ import torch
 import warp as wp
 
 from free_surface.alpha_complex import LMAX, AlphaComplex, k_alpha
-from free_surface.geo_pipe import (BIG, GeoPipe, PipeGeometry, f64, i32, k_cand, k_cand_full, k_ent_i, k_ent_j, k_hval, k_nbrs,
+from free_surface.geo_pipe import (BIG, GeoPipe, PipeGeometry, f64, i32, hval, k_cand, k_cand_full, k_ent_i, k_ent_j, k_hval, k_nbrs,
                                    k_pair_compact, k_pair_count, k_pair_fill, pair_kernel, site_launch)
 from free_surface.geometry_warp import TWO_PI, k_geo_pair, k_geo_site
 
 
 @wp.kernel(enable_backward=False)
-def k_aug(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), H: wp.float64, n: int,
+def k_aug(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), H: wp.float64, floor_start: int,
           pa: wp.array(dtype=wp.vec3d), ra: wp.array(dtype=wp.float64), gh: wp.array(dtype=wp.float64), need: wp.array(dtype=wp.int32)):
     """the cells' ground heights, which reach below it, the 2 n sites (the virtual site of i at n + i)"""
     i = wp.tid()
@@ -45,8 +45,8 @@ def k_aug(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), H: wp.floa
     ra[i] = ri
     q = p[i]
     q[1] = q[1]-wp.float64(2.0)*ri
-    pa[n+i] = q
-    ra[n+i] = wp.sqrt(rv2)
+    pa[floor_start+i] = q
+    ra[floor_start+i] = wp.sqrt(rv2)
 
 
 @wp.kernel(enable_backward=False)
@@ -72,7 +72,7 @@ def k_cand_out_g(p: wp.array(dtype=wp.vec3d), cell: wp.array(dtype=wp.int32), of
 
 @wp.kernel(enable_backward=False)
 def k_ground_put(off: wp.array(dtype=wp.int32), hk: wp.array(dtype=wp.float64), kc: wp.array(dtype=wp.int32), coff2: wp.array(dtype=wp.int32),
-                 need: wp.array(dtype=wp.int32), gh: wp.array(dtype=wp.float64), n: int,
+                 need: wp.array(dtype=wp.int32), gh: wp.array(dtype=wp.float64), floor_start: int,
                  cj: wp.array(dtype=wp.int32), cn: wp.array(dtype=wp.vec3d), ch: wp.array(dtype=wp.float64)):
     """the ground plane (n + i, (0, -1, 0), h_i) after the kept planes with h <= h_i (a binary search: the kept are sorted)"""
     i = wp.tid()
@@ -89,28 +89,83 @@ def k_ground_put(off: wp.array(dtype=wp.int32), hk: wp.array(dtype=wp.float64), 
         else:
             hi = mid
     o = coff2[i]+lo
-    cj[o] = n+i
+    cj[o] = floor_start+i
     cn[o] = wp.vec3d(wp.float64(0.0), wp.float64(-1.0), wp.float64(0.0))
     ch[o] = h
 
 
-class GroundPipe(GeoPipe):
-    """GeoPipe with the ground plane in each reaching cell's cut (module docstring); n cells, 2 n sites"""
+@wp.kernel(enable_backward=False)
+def k_vacuum_count(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), start: int, end: int,
+                   big: wp.float64, count: wp.array(dtype=wp.int32)):
+    """Test every moving generator against each real ball, as in augmented_structure."""
+    i = wp.tid()
+    hits = int(0)
+    for j in range(start, end):
+        h = hval(p, r, i, j, big)
+        if h == big or not wp.isfinite(h):
+            count[i] = -1
+            return
+        if h < r[i]:
+            hits += 1
+    count[i] = hits
 
-    def __call__(self, A, p, r, H, topology_only=False):
+
+@wp.kernel(enable_backward=False)
+def k_vacuum_put(p: wp.array(dtype=wp.vec3d), r: wp.array(dtype=wp.float64), start: int, end: int,
+                 big: wp.float64, kc: wp.array(dtype=wp.int32), need: wp.array(dtype=wp.int32),
+                 count: wp.array(dtype=wp.int32), off: wp.array(dtype=wp.int32),
+                 cj: wp.array(dtype=wp.int32), cn: wp.array(dtype=wp.vec3d), ch: wp.array(dtype=wp.float64)):
+    """Insert moving constraints into the existing sorted real/floor segment."""
+    i = wp.tid()
+    if count[i] <= 0:
+        return
+    begin = off[i]
+    stop = begin+kc[i]+need[i]
+    for j in range(start, end):
+        h = hval(p, r, i, j, big)
+        if h < r[i]:
+            pos = stop
+            while pos > begin:
+                if ch[pos-1] <= h:
+                    break
+                cj[pos] = cj[pos-1]
+                cn[pos] = cn[pos-1]
+                ch[pos] = ch[pos-1]
+                pos -= 1
+            d = p[j]-p[i]
+            cj[pos] = j
+            cn[pos] = d/wp.length(d)
+            ch[pos] = h
+            stop += 1
+
+
+class UnifiedCutFallback(RuntimeError):
+    """Use the complete-constraint reference for a difficult moving-plane cut."""
+
+
+class GroundPipe(GeoPipe):
+    """Clip real cells against their neighbors, fixed ground and optional moving generators."""
+
+    def __call__(self, A, p, r, H, vacuum=None):
         n, dev = self.n, self.dev
-        N = 2*n
+        floor_start = n if vacuum is None else len(vacuum[1])
+        N = floor_start+n
         W_ = lambda t_, d_: wp.from_torch(t_, dtype=d_)
         p = p.contiguous(); r = r.contiguous()
         pw, rw = W_(p, wp.vec3d), W_(r, wp.float64)
-        # the virtual sites (n + i) and the cells that get the plane
-        if getattr(self, '_an', 0) != n:
-            self._an = n
+        # IDs are real sites, moving generators, then each cell's private floor site.
+        if getattr(self, '_an', 0) != N:
+            self._an = N
             self.pa, self.ra = torch.empty(N, 3, dtype=f64, device=dev), torch.empty(N, dtype=f64, device=dev)
             self.gh, self.need = torch.empty(n, dtype=f64, device=dev), torch.empty(n, dtype=i32, device=dev)
             self.coff2 = torch.zeros(n+1, dtype=i32, device=dev)
         pa, ra, gh, need = self.pa, self.ra, self.gh, self.need
-        wp.launch(k_aug, n, inputs=[pw, rw, float(H), n], outputs=[W_(pa, wp.vec3d), W_(ra, wp.float64), W_(gh, wp.float64), W_(need, wp.int32)], device=dev)
+        wp.launch(k_aug, n, inputs=[pw, rw, float(H), floor_start], outputs=[W_(pa, wp.vec3d), W_(ra, wp.float64), W_(gh, wp.float64), W_(need, wp.int32)], device=dev)
+        if vacuum is not None:
+            pp, rr, redundant = vacuum
+            pa[n:floor_start].copy_(pp[n:])
+            ra[n:floor_start].copy_(rr[n:])
+            need.masked_fill_(redundant[:n], 0)
         paw, raw_ = W_(pa, wp.vec3d), W_(ra, wp.float64)
         self._mark('start')
         # the overlaps of the real sites only, kept while they cover
@@ -133,8 +188,14 @@ class GroundPipe(GeoPipe):
             wp.launch(k_hval, len(adj_), inputs=[pw, rw, W_(cell_, wp.int32), adjw, BIG, ekw], outputs=[hkw], device=dev)
         wp.launch(k_cand, n, inputs=[rw, offw, hkw, ekw], outputs=[W_(self.kc, wp.int32)], device=dev)
         coff2 = self.coff2
-        torch.cumsum(self.kc+need, 0, dtype=i32, out=coff2[1:])
-        cap2 = self.ncap+n
+        counts = self.kc+need
+        if vacuum is not None:
+            vacuum_count = torch.empty_like(need)
+            wp.launch(k_vacuum_count, n, inputs=[paw, raw_, n, floor_start, BIG],
+                      outputs=[W_(vacuum_count, wp.int32)], device=dev)
+            counts += vacuum_count.clamp_min(0)
+        torch.cumsum(counts, 0, dtype=i32, out=coff2[1:])
+        cap2 = self.ncap+n*(1+floor_start-n)
         if getattr(self, '_gcap', 0) < cap2:
             self._gcap = cap2
             self.cj2, self.ch2 = torch.zeros(cap2, dtype=i32, device=dev), torch.zeros(cap2, dtype=f64, device=dev)
@@ -143,7 +204,10 @@ class GroundPipe(GeoPipe):
         out2 = [W_(self.cj2, wp.int32), W_(self.cn2, wp.vec3d), W_(self.ch2, wp.float64)]
         if len(adj_):
             wp.launch(k_cand_out_g, len(adj_), inputs=[pw, W_(cell_, wp.int32), offw, adjw, hkw, ekw, W_(self.kc, wp.int32)]+gw, outputs=out2, device=dev)
-        wp.launch(k_ground_put, n, inputs=[offw, hkw, W_(self.kc, wp.int32), gw[0], gw[1], gw[2], n], outputs=out2, device=dev)
+        wp.launch(k_ground_put, n, inputs=[offw, hkw, W_(self.kc, wp.int32), *gw, floor_start], outputs=out2, device=dev)
+        if vacuum is not None:
+            wp.launch(k_vacuum_put, n, inputs=[paw, raw_, n, floor_start, BIG, W_(self.kc, wp.int32),
+                      gw[1], W_(vacuum_count, wp.int32), gw[0]], outputs=out2, device=dev)
         self._mark('candidates')
         # clip (n cells; the virtual sites are ids only)
         cand = [W_(coff2, wp.int32), W_(self.cj2, wp.int32), W_(self.cn2, wp.vec3d), W_(self.ch2, wp.float64)]
@@ -158,6 +222,8 @@ class GroundPipe(GeoPipe):
         while True:
             cap = self.cap
             self.cnt.zero_()
+            if vacuum is not None:
+                self.cnt[4] = (vacuum_count.min() < 0).to(i32)*8
             wp.launch(k_pair_count, n, inputs=[A.walls, A.nwall, A.nlink, A.status], outputs=[W_(self.pc, wp.int32), W_(self.cnt, wp.int32)], device=dev)
             torch.cumsum(self.pc, 0, dtype=i32, out=self.poff[1:])
             pairs = torch.empty(cap, 2, dtype=i32, device=dev); plinks = torch.empty(cap, LMAX, dtype=i32, device=dev)
@@ -178,8 +244,11 @@ class GroundPipe(GeoPipe):
                 self.cap = int(1.5*max(cap, m))+1024
                 continue
             break
+        if bits == 8 and vacuum is not None:
+            raise UnifiedCutFallback('singular real/vacuum plane')
         if bits:
-            raise RuntimeError('alpha complex: per-cell storage overflow or an open cut (status up to %d)' % bits)
+            error = UnifiedCutFallback if vacuum is not None else RuntimeError
+            raise error('alpha complex: per-cell storage overflow or an open cut (status up to %d)' % bits)
         if m > 0.9*self.cap:
             self.cap = int(1.3*m)+1024
         K = max(K, 1); Dmax = max(Dmax, 1)
@@ -192,8 +261,8 @@ class GroundPipe(GeoPipe):
         if m:
             curn = torch.zeros(N, dtype=i32, device=dev)
             wp.launch(k_nbrs, m, inputs=[W_(pairs, wp.int32), W_(self.poff, wp.int32), n], outputs=[W_(curn, wp.int32), W_(nbrs, wp.int32)], device=dev)
-        hidden = torch.cat((wp.to_torch(A.status) == 1, torch.ones(n, dtype=torch.bool, device=dev)))
-        # values: the pairs over the 2 n sites, the spheres of the n cells
+        hidden = torch.cat((wp.to_torch(A.status) == 1, torch.ones(N-n, dtype=torch.bool, device=dev)))
+        # Integrate faces at all site types, and spherical surfaces of the real cells.
         E = lambda *s_: torch.empty(*s_, dtype=f64, device=dev)
         np_ = max(npr, 1)
         ea, ed, el = E(np_, 2*K), E(np_, 2*K), torch.empty(np_, 2*K, dtype=i32, device=dev)
@@ -257,8 +326,8 @@ def real_view(G, p, r):
     return g
 
 
-def plane_geometry(clip, p, r):
-    """GroundClip.geometry(p, r) by the ground plane in the cut: the fields of fv_ale_ground_local.local_geometry"""
+def plane_geometry(clip, p, r, planes=None):
+    """Build material geometry from one cut, including any moving vacuum faces."""
     from free_surface.fv_ale_geometry import PowerControlVolumes
     n = len(r); dev = p.device; H = float(clip.ground)
     if getattr(clip, 'plane_size', 0) != n:
@@ -267,7 +336,9 @@ def plane_geometry(clip, p, r):
         clip.plane_pipe = GroundPipe(n, clip.device); clip.plane_pipe._cand_storage(1); clip.plane_pipe.stable_area = True
         if clip.recut is not None:
             clip.plane_pipe.direct_sphere = getattr(clip.recut.pipe, 'direct_sphere', False)
-    G = clip.plane_pipe(clip.plane_A, p.contiguous(), r.contiguous(), H)
+    vacuum = None if planes is None else planes.generators(p, r, H)
+    G = clip.plane_pipe(clip.plane_A, p.contiguous(), r.contiguous(), H, vacuum=vacuum)
+    floor_start = n if vacuum is None else len(vacuum[1])
     h = p[:, 1]-H
     real = G.j < n
     hidden = G.hidden[:n] | (h <= -r)
@@ -277,7 +348,7 @@ def plane_geometry(clip, p, r):
     pn = torch.where(hidden[:, None], torch.zeros_like(G.patch_n), G.patch_n)
     keep = torch.nonzero(real & (G.wall_A > 0)).flatten()
     mesh = PowerControlVolumes(p.clone(), r.clone(), volume, G.i[keep], G.j[keep], G.wall_A[keep], G.nn[keep], G.wall_c[keep], capA, pn)
-    floor = torch.nonzero(~real).flatten()
+    floor = torch.nonzero(G.j >= floor_start).flatten()
     owner = G.i[floor]
     mesh.ground_area = torch.zeros_like(r).index_add(0, owner, G.wall_A[floor])
     mesh.ground_centroid = p.clone(); mesh.ground_centroid[owner] = G.wall_c[floor]
@@ -285,4 +356,18 @@ def plane_geometry(clip, p, r):
     mesh.hidden = hidden
     mesh.geometry = LazyReal(G, p, r)
     mesh.ground_geometry_info = {'method': 'ground_plane_cut', 'stable_sphere_area': True, 'local_ground_update': False}
+    if planes is not None:
+        moving = (~real)&(G.j < floor_start)
+        small = G.wall_A <= 1e-10*math.pi*r[G.i].square()
+        if bool((moving&small).any()):
+            raise UnifiedCutFallback('moving face requires precise disk integration')
+        if not bool(torch.isfinite(G.wall_A).all() & torch.isfinite(volume).all() & (volume >= 0).all()
+                    & torch.isfinite(capA).all() & torch.isfinite(pn).all()):
+            raise UnifiedCutFallback('unified cut has invalid areas or volumes')
+        mesh.planes = planes.clone()
+        mesh.plane_i, mesh.plane_j = G.i[moving], G.j[moving]-n
+        mesh.plane_area, mesh.plane_normal, mesh.plane_centroid = G.wall_A[moving], G.nn[moving], G.wall_c[moving]
+        pp = vacuum[0]
+        mesh.plane_length = (pp[G.j[moving]]-pp[mesh.plane_i]).norm(dim=1)
+        mesh.ground_geometry_info['method'] = 'unified_plane_cut'
     return mesh

@@ -39,9 +39,20 @@ def clipped_values(p,r,structure,ground,redundant,material_count,skip_unused=Tru
 
 
 def cut(solver,p,r,planes):
+    import os
+    fallback = None
+    if p.is_cuda and os.environ.get('FV_UNIFIED_PLANES','0') == '1':
+        from free_surface.fv_ale_ground_plane import UnifiedCutFallback,plane_geometry
+        try:
+            return plane_geometry(solver.ground_cutter,p,r,planes)
+        except UnifiedCutFallback as exc:
+            fallback = str(exc)
     fast=getattr(solver,'fast_planar_geometry',True)
     base=solver.recut.structure(p.contiguous(),r.contiguous()) if fast else solver.recut.geometry(p.contiguous(),r.contiguous())[1]
     pp,rr,redundant=planes.generators(p,r,solver.ground)
     structure=augmented_structure(pp,rr,base,len(r))
     full=clipped_values(pp,rr,structure,solver.ground,redundant,len(r),skip_unused=fast)
-    return material_mesh(full,planes,solver.ground)
+    mesh = material_mesh(full,planes,solver.ground)
+    if fallback is not None:
+        mesh.ground_geometry_info['unified_cut_fallback'] = fallback
+    return mesh

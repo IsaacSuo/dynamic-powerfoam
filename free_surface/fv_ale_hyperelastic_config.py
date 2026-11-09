@@ -168,7 +168,9 @@ class StepAudit:
         self.active = True
 
     def check(self, candidate, dt):
-        expected = .5 * dt * (self.first['mechanical_rate_chain_W'] + self.stage['mechanical_rate_chain_W'])
+        expected = getattr(candidate, 'integrated_mechanical_work', None)
+        if expected is None:
+            expected = .5 * dt * (self.first['mechanical_rate_chain_W'] + self.stage['mechanical_rate_chain_W'])
         mechanical,negative,specific,relative=self.solver.device_ops().energy_guard_full(candidate)
         if not self.checked_guard:
             reference=self.solver.energy_audit(candidate)

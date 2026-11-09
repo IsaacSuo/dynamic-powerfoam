@@ -106,3 +106,29 @@ def motion(b,v,G,sigma,Z,centers,ground,force_contact=None,regularization=0.):
         'velocity':velocity,'normal_speed':speed,'kinematic_power':kinematic_power,
         'actual_power':actual_power,'plane_heat':plane_heat,
         'stress_force':elastic_force,'denominator':denominator}
+
+
+def moving_face_rhs(ops, b, planar, total, group_volume, pressure, velocity, shape_conjugate):
+    """The coupled moving-face part of the conserved update and work rate."""
+    from free_surface.fv_ale_affine_stencil import negative_adjoint
+
+    groups = b['groups']
+    mass = b['q'][:, 0]
+    force = planar['direct'] + negative_adjoint(b, planar['conjugate'])
+    force = ops.group(force, groups)[groups] * (mass / total[:, 0])[:, None]
+    # On a closed cell, subtracting the cell velocity from the boundary
+    # integral contributes zero. For a subset of faces use absolute velocity:
+    # this makes its shape and volume work equal to traction dotted with
+    # face velocity, the same work that the boundary force transposes.
+    area = b['plane_A'] * ~planar['fixed_faces']
+    surface_gradient = area[:, None, None] * planar['velocity'][:, :, None] * b['plane_n'][:, None, :]
+    gradient = torch.zeros_like(planar['gradient']).index_add(0, b['plane_i'], surface_gradient)
+    gradient = ops.group(gradient, groups)[groups] / group_volume[:, None, None]
+    shape_rate = mass[:, None, None] * ops.material_rate(gradient, None, total, mass)
+    q_rate = torch.zeros_like(b['q'])
+    q_rate[:, 1:4] = force
+    q_rate[:, 5:14] = shape_rate.reshape(-1, 9)
+    volume_rate = planar['volume_rate']
+    work = (velocity * force).sum(1) + (shape_conjugate * shape_rate).sum((1, 2)) - pressure * volume_rate
+    q_rate[:, 4] = work + planar['heat']
+    return q_rate, volume_rate, work.sum()
