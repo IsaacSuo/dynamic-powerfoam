@@ -1,0 +1,943 @@
+{
+  "analytic": [
+    {
+      "width": 0.005,
+      "motion": "fixed",
+      "compression": 0.65,
+      "isolated_flux_absolute_error": 6.938893903907228e-18,
+      "baseline": {
+        "steps": [
+          0.012359079462703449,
+          0.011490234541497557,
+          0.0011506859957989973
+        ],
+        "predictions": null,
+        "thin_stretch": 0.5093378396858664,
+        "thin_stretch_error": 0.08683783968586639,
+        "ale_flux_error": [
+          0.15036855356860002,
+          0.009039674502776469,
+          0.06903607039476883
+        ],
+        "pressure_work_error": 0.06903607039476883,
+        "max_balance": 6.136584296267955e-17,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.0023408026856008846
+      },
+      "candidate": {
+        "steps": [
+          0.012359079462703449,
+          0.011454652525981147,
+          0.0011862680113154042
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.4285054354374753,
+        "thin_stretch_error": 0.006005435437475282,
+        "ale_flux_error": [
+          0.01039902240255538,
+          0.01698828079449999,
+          0.025893352925451803
+        ],
+        "pressure_work_error": 0.025893352925451803,
+        "max_balance": 2.0122792321330962e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.002011928758376025
+      }
+    },
+    {
+      "width": 0.005,
+      "motion": "drift",
+      "compression": 0.65,
+      "isolated_flux_absolute_error": 6.938893903907228e-18,
+      "baseline": {
+        "steps": [
+          0.010092831908879076,
+          0.008059424818161185,
+          0.006465414980936104,
+          0.00038232829202363566
+        ],
+        "predictions": null,
+        "thin_stretch": 0.5770070518521535,
+        "thin_stretch_error": 0.15450705185215363,
+        "ale_flux_error": [
+          0.06617484703034437,
+          0.018601177200669488,
+          0.05941505982388088
+        ],
+        "pressure_work_error": 0.3455556708564883,
+        "max_balance": 2.0968470015869656e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.003198093164989979
+      },
+      "candidate": {
+        "steps": [
+          0.010092831908879076,
+          0.0080340436524237,
+          0.00642802407079443,
+          0.0004451003679027954
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans",
+          "independent"
+        ],
+        "thin_stretch": 0.42763462082340936,
+        "thin_stretch_error": 0.005134620823409486,
+        "ale_flux_error": [
+          0.0028681653407564437,
+          0.015422654731493271,
+          0.0059786099968136205
+        ],
+        "pressure_work_error": 0.07667137502516291,
+        "max_balance": 1.93421667571414e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.003011212847174871
+      }
+    },
+    {
+      "width": 0.005,
+      "motion": "squeeze",
+      "compression": 0.65,
+      "isolated_flux_absolute_error": 1.0842021724855044e-19,
+      "baseline": {
+        "steps": [
+          0.01227422971897977,
+          0.011541445001704844,
+          0.0011843252793153902
+        ],
+        "predictions": null,
+        "thin_stretch": 0.6231005583767206,
+        "thin_stretch_error": 0.2006005583767207,
+        "ale_flux_error": [
+          0.12716358692660612,
+          0.00540210687102916,
+          0.1359047877940451
+        ],
+        "pressure_work_error": 0.23951568746630228,
+        "max_balance": 1.196959198423997e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.0023974272854770592
+      },
+      "candidate": {
+        "steps": [
+          0.01227422971897977,
+          0.011593658499686644,
+          0.0011321117813335863
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.4274740216532816,
+        "thin_stretch_error": 0.004974021653281646,
+        "ale_flux_error": [
+          0.003153104059132739,
+          0.017491051665135624,
+          0.019840482285512853
+        ],
+        "pressure_work_error": 0.015769302445485453,
+        "max_balance": 1.196959198423997e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.002043326004476674
+      }
+    },
+    {
+      "width": 0.005,
+      "motion": "fixed",
+      "compression": 0.8,
+      "isolated_flux_absolute_error": 2.42861286636753e-17,
+      "baseline": {
+        "steps": [
+          0.016935895197420905,
+          0.008064104802579096
+        ],
+        "predictions": null,
+        "thin_stretch": 0.732632742361382,
+        "thin_stretch_error": 0.09263274236138186,
+        "ale_flux_error": [
+          0.2573131732260632,
+          0.01839210494290426,
+          0.1339985808889486
+        ],
+        "pressure_work_error": 0.1339985808889486,
+        "max_balance": 6.678685382510707e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "max_position_error": 0.00076728961828533
+      },
+      "candidate": {
+        "steps": [
+          0.016935895197420905,
+          0.008064104802579096
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6417858701608299,
+        "thin_stretch_error": 0.0017858701608297611,
+        "ale_flux_error": [
+          0.004960750446757721,
+          0.0049285216076913685,
+          0.011075292927520351
+        ],
+        "pressure_work_error": 0.011075292927520351,
+        "max_balance": 6.678685382510707e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "max_position_error": 0.000661166886035694
+      }
+    },
+    {
+      "width": 0.005,
+      "motion": "drift",
+      "compression": 0.8,
+      "isolated_flux_absolute_error": 3.469446951953614e-17,
+      "baseline": {
+        "steps": [
+          0.012963257461575972,
+          0.009852723195650677,
+          0.0021840193427733537
+        ],
+        "predictions": null,
+        "thin_stretch": 0.7658196643732779,
+        "thin_stretch_error": 0.12581966437327807,
+        "ale_flux_error": [
+          0.03942754539774545,
+          0.054676855139334686,
+          0.07349235049729545
+        ],
+        "pressure_work_error": 0.5798302971099095,
+        "max_balance": 5.919743861770854e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "max_position_error": 0.001231429797589903
+      },
+      "candidate": {
+        "steps": [
+          0.012963257461575972,
+          0.009844944865799388,
+          0.002191797672624639
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6414247909338467,
+        "thin_stretch_error": 0.0014247909338469533,
+        "ale_flux_error": [
+          0.0004968630038827693,
+          0.003116808145774032,
+          0.001923466292521851
+        ],
+        "pressure_work_error": 0.028644428161249697,
+        "max_balance": 4.336808689942018e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "max_position_error": 0.0011448374592335636
+      }
+    },
+    {
+      "width": 0.005,
+      "motion": "squeeze",
+      "compression": 0.8,
+      "isolated_flux_absolute_error": 1.9081958235744878e-17,
+      "baseline": {
+        "steps": [
+          0.016860890418808144,
+          0.008139109581191857
+        ],
+        "predictions": null,
+        "thin_stretch": 0.8411728109268077,
+        "thin_stretch_error": 0.2011728109268076,
+        "ale_flux_error": [
+          0.14792118450500624,
+          0.02136789338686756,
+          0.4606539646878249
+        ],
+        "pressure_work_error": 0.4345208970144676,
+        "max_balance": 1.1145598333150986e-16,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "max_position_error": 0.0007918572101906635
+      },
+      "candidate": {
+        "steps": [
+          0.016860890418808144,
+          0.008139109581191857
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6412156025964271,
+        "thin_stretch_error": 0.0012156025964269457,
+        "ale_flux_error": [
+          0.0008938254385534697,
+          0.00521265806676323,
+          0.007261838286905963
+        ],
+        "pressure_work_error": 0.005792351515288432,
+        "max_balance": 5.4643789493269423e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "max_position_error": 0.000682813739741342
+      }
+    },
+    {
+      "width": 1e-08,
+      "motion": "fixed",
+      "compression": 0.65,
+      "isolated_flux_absolute_error": 0.0,
+      "baseline": {
+        "steps": [
+          0.012649361580733966,
+          0.011809917831405982,
+          0.0005407205878600538
+        ],
+        "predictions": null,
+        "thin_stretch": 0.5075110443064804,
+        "thin_stretch_error": 0.08501104430648038,
+        "ale_flux_error": [
+          0.14720527156795407,
+          0.018110562502131927,
+          0.07563724552796908
+        ],
+        "pressure_work_error": 0.07563724552796908,
+        "max_balance": 1.1183545409187978e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.0024982245399527633
+      },
+      "candidate": {
+        "steps": [
+          0.012649361580733966,
+          0.011809917816999586,
+          0.00054072060226645
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.42830574693639056,
+        "thin_stretch_error": 0.005805746936390521,
+        "ale_flux_error": [
+          0.010053241509839756,
+          0.018110577922147875,
+          0.025017245127845904
+        ],
+        "pressure_work_error": 0.025017245127845904,
+        "max_balance": 1.49890950346121e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.0024982238807627274
+      }
+    },
+    {
+      "width": 1e-08,
+      "motion": "drift",
+      "compression": 0.65,
+      "isolated_flux_absolute_error": 6.938893903907228e-18,
+      "baseline": {
+        "steps": [
+          0.010392083733326835,
+          0.008338912050346961,
+          0.006269004216326205
+        ],
+        "predictions": null,
+        "thin_stretch": 0.5959563988041882,
+        "thin_stretch_error": 0.17345639873340518,
+        "ale_flux_error": [
+          0.006915836170734285,
+          0.018025198011370595,
+          0.013961504930988891
+        ],
+        "pressure_work_error": 18006.65264601343,
+        "max_balance": 1.0234868508263162e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.0034311226731953623
+      },
+      "candidate": {
+        "steps": [
+          0.010392083733326835,
+          0.008338912029589715,
+          0.006269004237083452
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.4275497939047429,
+        "thin_stretch_error": 0.005049793833959926,
+        "ale_flux_error": [
+          0.006915676819583695,
+          0.018025205881914086,
+          0.013961370112361995
+        ],
+        "pressure_work_error": 18006.745618348417,
+        "max_balance": 1.3877787807814457e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.003431122289617082
+      }
+    },
+    {
+      "width": 1e-08,
+      "motion": "squeeze",
+      "compression": 0.65,
+      "isolated_flux_absolute_error": 2.0679515313825692e-25,
+      "baseline": {
+        "steps": [
+          0.012649361406236495,
+          0.01180991795733655,
+          0.0005407206364269543
+        ],
+        "predictions": null,
+        "thin_stretch": 0.6301096924320087,
+        "thin_stretch_error": 0.20760969243200866,
+        "ale_flux_error": [
+          0.1316067783228823,
+          0.01811055390947513,
+          0.1651099642741588
+        ],
+        "pressure_work_error": 0.2727957789450184,
+        "max_balance": 1.0755285551056204e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.0024982246460838325
+      },
+      "candidate": {
+        "steps": [
+          0.012649361406236495,
+          0.011809918101880465,
+          0.0005407204918830427
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.427183264710872,
+        "thin_stretch_error": 0.004683264710871937,
+        "ale_flux_error": [
+          0.0029687891778639383,
+          0.018110578679322996,
+          0.01858568780128405
+        ],
+        "pressure_work_error": 0.015013508336653617,
+        "max_balance": 1.700029006457271e-16,
+        "max_entropy_defect": 0.0,
+        "max_position_error": 0.0024982239378638846
+      }
+    },
+    {
+      "width": 1e-08,
+      "motion": "fixed",
+      "compression": 0.8,
+      "isolated_flux_absolute_error": 2.42861286636753e-17,
+      "baseline": {
+        "steps": [
+          0.017595469276056975,
+          0.0074045307239430265
+        ],
+        "predictions": null,
+        "thin_stretch": 0.7333893556997283,
+        "thin_stretch_error": 0.09338935569972817,
+        "ale_flux_error": [
+          0.2594148772720966,
+          0.004944176557596779,
+          0.13726181322705563
+        ],
+        "pressure_work_error": 0.13726181322705563,
+        "max_balance": 4.163336342344337e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "max_position_error": 0.000790671035148946
+      },
+      "candidate": {
+        "steps": [
+          0.017595469276056975,
+          0.0074045307239430265
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6419304569141965,
+        "thin_stretch_error": 0.0019304569141963546,
+        "ale_flux_error": [
+          0.005362384715985677,
+          0.004944219764493192,
+          0.011964425732472242
+        ],
+        "pressure_work_error": 0.011964425732472242,
+        "max_balance": 4.163336342344337e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "max_position_error": 0.0007906708483028518
+      }
+    },
+    {
+      "width": 1e-08,
+      "motion": "drift",
+      "compression": 0.8,
+      "isolated_flux_absolute_error": 3.2959746043559335e-17,
+      "baseline": {
+        "steps": [
+          0.013512686121985275,
+          0.010283847183930397,
+          0.0012034666940843285
+        ],
+        "predictions": null,
+        "thin_stretch": 0.7661035673635828,
+        "thin_stretch_error": 0.12610356725636118,
+        "ale_flux_error": [
+          0.0012043347366654368,
+          0.005314091013209738,
+          0.005015197452448482
+        ],
+        "pressure_work_error": 6715.992398529628,
+        "max_balance": 6.158268339717665e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "max_position_error": 0.0012786643588041796
+      },
+      "candidate": {
+        "steps": [
+          0.013512686121985275,
+          0.01028384717874907,
+          0.001203466699265656
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6417286732303156,
+        "thin_stretch_error": 0.0017286731230939933,
+        "ale_flux_error": [
+          0.001204251109784712,
+          0.005314097593517955,
+          0.005015033202346148
+        ],
+        "pressure_work_error": 6716.048650514554,
+        "max_balance": 7.19910242530375e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "max_position_error": 0.0012786641870830423
+      }
+    },
+    {
+      "width": 1e-08,
+      "motion": "squeeze",
+      "compression": 0.8,
+      "isolated_flux_absolute_error": 2.2551405187698492e-17,
+      "baseline": {
+        "steps": [
+          0.0175954691202428,
+          0.0074045308797572006
+        ],
+        "predictions": null,
+        "thin_stretch": 0.8433183187046248,
+        "thin_stretch_error": 0.2033183187046247,
+        "ale_flux_error": [
+          0.14949876419927047,
+          0.0049441708970205485,
+          0.47844303904877417
+        ],
+        "pressure_work_error": 0.46263752362635086,
+        "max_balance": 5.724587470723463e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "max_position_error": 0.0007906710809524736
+      },
+      "candidate": {
+        "steps": [
+          0.0175954691202428,
+          0.0074045308797572006
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.6413578286188056,
+        "thin_stretch_error": 0.0013578286188055122,
+        "ale_flux_error": [
+          0.0009984056644968195,
+          0.0049442202584496385,
+          0.008082045013841363
+        ],
+        "pressure_work_error": 0.00598221802835916,
+        "max_balance": 5.724587470723463e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "max_position_error": 0.000790670887266684
+      }
+    }
+  ],
+  "fine_reference": [
+    {
+      "kind": "compression",
+      "motion": "fixed",
+      "index": 0,
+      "baseline": {
+        "steps": [
+          0.02064824724268874,
+          0.004351752757311263
+        ],
+        "predictions": null,
+        "thin_stretch": 0.866722483800777,
+        "thin_stretch_error": 0.08514603339519422,
+        "ale_flux_error": [
+          0.13247067259658038,
+          0.04350999737753066,
+          0.02079418221780117
+        ],
+        "pressure_work_error": 0.02079418221780117,
+        "max_balance": 2.237793284010081e-16,
+        "max_entropy_defect": 0.0
+      },
+      "candidate": {
+        "steps": [
+          0.02064824724268874,
+          0.004351752757311263
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.7857927546103428,
+        "thin_stretch_error": 0.004216304204760046,
+        "ale_flux_error": [
+          0.00842815965498282,
+          0.007529694284878444,
+          0.005595795458424175
+        ],
+        "pressure_work_error": 0.005595795458424175,
+        "max_balance": 2.237793284010081e-16,
+        "max_entropy_defect": 0.0
+      }
+    },
+    {
+      "kind": "compression",
+      "motion": "drift",
+      "index": 1,
+      "baseline": {
+        "steps": [
+          0.012393987338137222,
+          0.009554402918160737,
+          0.003051609743702041
+        ],
+        "predictions": null,
+        "thin_stretch": 0.6062494205154788,
+        "thin_stretch_error": 0.028661593072704217,
+        "ale_flux_error": [
+          0.02005880159185734,
+          0.017238704752973222,
+          0.015598627877384998
+        ],
+        "pressure_work_error": 0.017757559677690826,
+        "max_balance": 1.231653667943533e-16,
+        "max_entropy_defect": 0.0
+      },
+      "candidate": {
+        "steps": [
+          0.012393987338137222,
+          0.009552397720292885,
+          0.0030536149415698946
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.5851383130559341,
+        "thin_stretch_error": 0.007550485613159519,
+        "ale_flux_error": [
+          0.007915362963237672,
+          0.017448338113171556,
+          0.005770736439672587
+        ],
+        "pressure_work_error": 0.026473599744752586,
+        "max_balance": 9.540979117872439e-17,
+        "max_entropy_defect": 0.0
+      }
+    },
+    {
+      "kind": "mixed",
+      "motion": "fixed",
+      "index": 0,
+      "baseline": {
+        "steps": [
+          0.01754498856369537,
+          0.007455011436304632
+        ],
+        "predictions": null,
+        "thin_stretch": 0.7721008936243604,
+        "thin_stretch_error": 0.005841736082951798,
+        "ale_flux_error": [
+          0.03715946095580595,
+          0.01880885849967127,
+          0.040796154679076664
+        ],
+        "pressure_work_error": 0.040796154679076664,
+        "max_balance": 2.482822974991805e-17,
+        "max_entropy_defect": 0.0
+      },
+      "candidate": {
+        "steps": [
+          0.01754498856369537,
+          0.007455011436304632
+        ],
+        "predictions": [
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.7721008936243604,
+        "thin_stretch_error": 0.005841736082951798,
+        "ale_flux_error": [
+          0.03715946095580595,
+          0.01880885849967127,
+          0.040796154679076664
+        ],
+        "pressure_work_error": 0.040796154679076664,
+        "max_balance": 2.482822974991805e-17,
+        "max_entropy_defect": 0.0
+      }
+    },
+    {
+      "kind": "mixed",
+      "motion": "drift",
+      "index": 1,
+      "baseline": {
+        "steps": [
+          0.013275260423319397,
+          0.010217860030002369,
+          0.001506879546678233
+        ],
+        "predictions": null,
+        "thin_stretch": 0.9581693784094274,
+        "thin_stretch_error": 0.09150136152245913,
+        "ale_flux_error": [
+          0.02317609992523416,
+          0.06258652692984225,
+          0.0447579739592676
+        ],
+        "pressure_work_error": 0.30917244340691047,
+        "max_balance": 1.9168694409543718e-16,
+        "max_entropy_defect": 0.0
+      },
+      "candidate": {
+        "steps": [
+          0.013275260423319397,
+          0.010251998928780112,
+          0.0014727406479004904
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "interacting_fans",
+          "independent"
+        ],
+        "thin_stretch": 0.898824883174832,
+        "thin_stretch_error": 0.03215686628786374,
+        "ale_flux_error": [
+          0.010831907036416068,
+          0.021104385219561733,
+          0.0071848504888610675
+        ],
+        "pressure_work_error": 0.1300531870555273,
+        "max_balance": 7.28583859910259e-17,
+        "max_entropy_defect": 0.0
+      }
+    },
+    {
+      "kind": "expansion",
+      "motion": "fixed",
+      "index": 0,
+      "baseline": {
+        "steps": [
+          0.015874997517939846,
+          0.009125002482060156
+        ],
+        "predictions": null,
+        "thin_stretch": 0.9641875502326014,
+        "thin_stretch_error": 0.11537316314350843,
+        "ale_flux_error": [
+          0.35747608719422885,
+          0.4264697647097923,
+          0.44531098043760003
+        ],
+        "pressure_work_error": 0.44531098043760003,
+        "max_balance": 1.457167719820518e-16,
+        "max_entropy_defect": 1.734723475976807e-18
+      },
+      "candidate": {
+        "steps": [
+          0.015874997517939846,
+          0.009125002482060156
+        ],
+        "predictions": [
+          "interacting_fans",
+          "interacting_fans"
+        ],
+        "thin_stretch": 0.9641875502326014,
+        "thin_stretch_error": 0.11537316314350843,
+        "ale_flux_error": [
+          0.35747608719422885,
+          0.4264697647097923,
+          0.44531098043760003
+        ],
+        "pressure_work_error": 0.44531098043760003,
+        "max_balance": 1.457167719820518e-16,
+        "max_entropy_defect": 1.734723475976807e-18
+      }
+    },
+    {
+      "kind": "expansion",
+      "motion": "drift",
+      "index": 1,
+      "baseline": {
+        "steps": [
+          0.013720027618001297,
+          0.010489883689154725,
+          0.0007900886928439779
+        ],
+        "predictions": null,
+        "thin_stretch": 0.9926360359181907,
+        "thin_stretch_error": 0.06715016266922436,
+        "ale_flux_error": [
+          0.012243692482155797,
+          0.2493305621371702,
+          0.07077096349459017
+        ],
+        "pressure_work_error": 0.7625022619630463,
+        "max_balance": 1.960237527853792e-16,
+        "max_entropy_defect": 8.673617379884035e-19
+      },
+      "candidate": {
+        "steps": [
+          0.013720027618001297,
+          0.010489883689154725,
+          0.0007900886928439779
+        ],
+        "predictions": [
+          "interacting_fans",
+          "interacting_fans",
+          "independent"
+        ],
+        "thin_stretch": 0.9926360359181907,
+        "thin_stretch_error": 0.06715016266922436,
+        "ale_flux_error": [
+          0.012243692482155797,
+          0.2493305621371702,
+          0.07077096349459017
+        ],
+        "pressure_work_error": 0.7625022619630463,
+        "max_balance": 1.960237527853792e-16,
+        "max_entropy_defect": 8.673617379884035e-19
+      }
+    }
+  ],
+  "direct_coverage": [
+    {
+      "width": 1e-08,
+      "kind": "compression",
+      "status": "second_interaction",
+      "count": 16
+    },
+    {
+      "width": 1e-08,
+      "kind": "expansion",
+      "status": "interacting_fans",
+      "count": 16
+    },
+    {
+      "width": 1e-08,
+      "kind": "mixed",
+      "status": "interacting_fans",
+      "count": 9
+    },
+    {
+      "width": 1e-08,
+      "kind": "mixed",
+      "status": "second_interaction",
+      "count": 7
+    },
+    {
+      "width": 0.005,
+      "kind": "compression",
+      "status": "one_shock_collision",
+      "count": 2
+    },
+    {
+      "width": 0.005,
+      "kind": "compression",
+      "status": "second_interaction",
+      "count": 14
+    },
+    {
+      "width": 0.005,
+      "kind": "expansion",
+      "status": "interacting_fans",
+      "count": 16
+    },
+    {
+      "width": 0.005,
+      "kind": "mixed",
+      "status": "interacting_fans",
+      "count": 9
+    },
+    {
+      "width": 0.005,
+      "kind": "mixed",
+      "status": "one_shock_collision",
+      "count": 6
+    },
+    {
+      "width": 0.005,
+      "kind": "mixed",
+      "status": "second_interaction",
+      "count": 1
+    }
+  ],
+  "rollout_coverage": [
+    {
+      "kind": "compression",
+      "status": "independent",
+      "count": 1
+    },
+    {
+      "kind": "compression",
+      "status": "interacting_fans",
+      "count": 11
+    },
+    {
+      "kind": "compression",
+      "status": "one_shock_collision",
+      "count": 16
+    },
+    {
+      "kind": "compression",
+      "status": "second_interaction",
+      "count": 9
+    },
+    {
+      "kind": "expansion",
+      "status": "independent",
+      "count": 3
+    },
+    {
+      "kind": "expansion",
+      "status": "interacting_fans",
+      "count": 29
+    },
+    {
+      "kind": "mixed",
+      "status": "independent",
+      "count": 2
+    },
+    {
+      "kind": "mixed",
+      "status": "interacting_fans",
+      "count": 24
+    },
+    {
+      "kind": "mixed",
+      "status": "one_shock_collision",
+      "count": 8
+    }
+  ]
+}

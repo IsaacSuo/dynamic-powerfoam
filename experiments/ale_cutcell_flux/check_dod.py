@@ -139,7 +139,16 @@ def split_flux(a, b, speed, weight, mu):
     return mechanical, mechanical-mu[:, None]*transported
 
 
-def update(q, h, w, data, cut, dt, beta, flux=split_flux):
+def cell_update(q, h, h_next, face_total, dt):
+    conserved = q*h[:, None] - dt*np.diff(face_total[:, :2], axis=0)
+    mean = conserved/h_next[:, None]
+    if not np.isfinite(mean).all() or np.min(mean[:, 0]) <= 0:
+        return None
+    budget = h*entropy(q) - dt*np.diff(face_total[:, 2]) - h_next*entropy(mean)
+    return mean, conserved, budget
+
+
+def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None, outcomes=None):
     _, _, a, b, speed, weight0, weight1, mu0, mu1 = data
     weight, mu = weight0+beta*weight1, mu0+beta*mu1
     mechanical, total = flux(a, b, speed, weight, mu)
@@ -148,10 +157,26 @@ def update(q, h, w, data, cut, dt, beta, flux=split_flux):
     face_total[cut:cut+2] += total[-1]
 
     h_next = h + dt*np.diff(w)
-    Q_next = q*h[:, None] - dt*np.diff(face_total[:, :2], axis=0)
-    q_next = Q_next / h_next[:, None]
-    assert np.min(h_next) > 0 and np.min(q_next[:, 0]) > 0
-    entropy_budget = h*entropy(q) - dt*np.diff(face_total[:, 2]) - h_next*entropy(q_next)
+    assert np.min(h_next) > 0
+    candidate = None
+    if predictor is not None:
+        faces = slice(cut, cut+2)
+        status, predicted_mech, predicted_total = predictor(q[cut-1:cut+2], h[cut], w[faces], dt)
+        if predicted_total is not None:
+            trial = face_total.copy()
+            trial[faces] = predicted_total
+            candidate = cell_update(q, h, h_next, trial, dt)
+            if candidate is not None and np.min(candidate[2]) >= -1e-13:
+                face_total = trial
+                face_mech[faces] = predicted_mech
+            else:
+                candidate = None
+                status = "failed_energy_or_stretch_check"
+        outcomes.append(status)
+    if candidate is None:
+        candidate = cell_update(q, h, h_next, face_total, dt)
+    assert candidate is not None
+    q_next, Q_next, entropy_budget = candidate
     balance = Q_next.sum(axis=0)-(q*h[:, None]).sum(axis=0)+dt*(face_total[-1, :2]-face_total[0, :2])
     assert max(abs(balance)) < 1e-13
     assert min(entropy_budget) >= -1e-13
@@ -165,13 +190,14 @@ def initial_state(h, cut, states):
     return q
 
 
-def run(width, motion, states, use_dod, horizon=DT, single=False, variant="original"):
+def run(width, motion, states, use_dod, horizon=DT, single=False, variant="original", predictor=None):
     x0, cut, w = grid(width, motion)
     h = np.diff(x0)
     state = initial_state(h, cut, states)
     directional = variant != "original"
     flux_rule = godunov_flux if variant == "godunov" else split_flux
     time, betas, steps = 0., [], []
+    outcomes = []
     flux = np.zeros((2, 3))
     mech = np.zeros_like(flux)
     balance, energy_defect, energy_loss = 0., 0., 0.
@@ -188,7 +214,8 @@ def run(width, motion, states, use_dod, horizon=DT, single=False, variant="origi
             return dict(status="CFL refused", cap=first_cap)
         beta = beta_interval(lines, dt)[1] if use_dod else 1.
         assert max((lines[0]+beta*lines[1])*dt) <= 1+2e-14
-        state, h, f_mech, f_total, entropy_budget, b = update(state, h, w, data, cut, dt, beta, flux_rule)
+        state, h, f_mech, f_total, entropy_budget, b = update(
+            state, h, w, data, cut, dt, beta, flux_rule, predictor, outcomes)
         min_tau = min(min_tau, state[:, 0].min())
         flux += f_total[cut:cut+2]
         mech += f_mech[cut:cut+2]
@@ -204,7 +231,8 @@ def run(width, motion, states, use_dod, horizon=DT, single=False, variant="origi
                 min_tau=min_tau, thin_tau=float(state[cut, 0]), thin_state=state[cut].tolist(),
                 face_flux=flux.tolist(), physical_flux=mech.tolist(),
                 edges=(x0+time*w).tolist(), initial_edges=x0.tolist(),
-                state=state.tolist(), final_h=h.tolist())
+                state=state.tolist(), final_h=h.tolist(),
+                **({"predictions": outcomes} if predictor is not None else {}))
 
 
 def relative(actual, reference):
