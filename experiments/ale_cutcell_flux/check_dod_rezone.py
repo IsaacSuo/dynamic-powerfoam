@@ -155,19 +155,23 @@ def reference(states, old_faces, new_faces, speeds, t0, stop, count):
     return after-before, mean
 
 
+def rezone_geometry(source_edges, cut, shift):
+    target_edges = source_edges.copy()
+    target_edges[cut:cut+2] += shift
+    # Delete a distant face and split another ordinary cell. The interacting
+    # three-cell patch still has a single thin control volume after rezoning.
+    target_edges = np.delete(target_edges, 2)
+    target_edges = np.insert(target_edges, -1, .5*(target_edges[-2]+target_edges[-1]))
+    return target_edges, cut-1
+
+
 def continuation_case(states, first, shift):
     source_edges = np.array(first["edges"])
     source_mean = np.array(first["state"])
     _, source_cut, initial_speed = grid(.005, "drift")
     source_d = np.zeros_like(source_mean)
     source_d[source_cut] = first["history"][-1]["contrast"]
-    target_edges = source_edges.copy()
-    target_edges[source_cut:source_cut+2] += shift
-    # Delete a distant face and split another ordinary cell. The interacting
-    # three-cell patch still has a single thin control volume after rezoning.
-    target_edges = np.delete(target_edges, 2)
-    target_edges = np.insert(target_edges, -1, .5*(target_edges[-2]+target_edges[-1]))
-    cut = source_cut-1
+    target_edges, cut = rezone_geometry(source_edges, source_cut, shift)
     flags = np.zeros(len(target_edges)-1, dtype=bool)
     flags[cut] = True
     keep_mean, keep_d = remap(source_edges, source_mean, source_d, target_edges, flags)

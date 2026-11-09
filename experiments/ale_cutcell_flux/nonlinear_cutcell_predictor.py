@@ -71,7 +71,7 @@ def intervals(begin, end, events):
 
 def face_interval(left, fronts, starts, speeds, time, stop, faces_only=False):
     # fronts store their position at 'time'. Face paths are linear in X.
-    accum = np.zeros((2, 6 if faces_only else 5))
+    accum = np.zeros((len(starts), 6 if faces_only else 5))
     entropy = np.zeros(2)
     net_gain = 0.
     for i, (x0, w) in enumerate(zip(starts, speeds)):
@@ -124,7 +124,7 @@ def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *,
     if initial_breaks is not None and not faces_only:
         raise ValueError('extra initial interfaces require faces_only')
     end = starts+dt*speeds
-    assert end[1] > end[0]
+    assert np.all(np.diff(end) > 0.)
     initial = [riemann(l,r,fan_step,fan_limit) for l,r in zip(states[:-1], states[1:])]
     breaks = starts if initial_breaks is None else initial_breaks
     fronts = [(x,s,l,r) for x, fan in zip(breaks,initial,strict=True) for s,l,r in fan]
@@ -139,7 +139,7 @@ def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *,
         q0 = fields(states[1])[0]
         old_integral = (starts[1]-starts[0])*q0
         frozen_end = (old_integral - np.diff(frozen,axis=0)[0,:3])/(end[1]-end[0])
-    accum = np.zeros((2, 6 if faces_only else 5))
+    accum = np.zeros((len(starts), 6 if faces_only else 5))
     entropy = np.zeros(2)
     whole_patch_gain = 0.
     time = 0.
@@ -236,13 +236,27 @@ def stress_tests(sample, fan_step=.025):
     return rows
 
 
-def fine_reference(states, starts, speeds, count, horizon=DT, *, average_edges=None, initial_breaks=None):
+def piecewise_cell_averages(edges, breaks, states):
+    """Integrate piecewise-constant data on the new intervals."""
+    local = np.r_[edges[0], breaks[(breaks > edges[0]) & (breaks < edges[-1])], edges[-1]]
+    values = np.asarray(states)[np.searchsorted(breaks, local[:-1], side="right")]
+    cumulative = np.vstack((np.zeros(values.shape[1]), np.cumsum(np.diff(local)[:, None]*values, axis=0)))
+    index = np.searchsorted(local[1:], edges)
+    integral = cumulative[index] + (edges-local[index])[:, None]*values[index]
+    return np.diff(integral, axis=0)/np.diff(edges)[:, None]
+
+
+def fine_reference(states, starts, speeds, count, horizon=DT, *, average_edges=None,
+                   initial_breaks=None, conservative_initialization=False):
     """Independent MUSCL/Rusanov integration on a fine uniform reference grid."""
     edges = np.linspace(-.1,.1,count+1)
     dx = edges[1]-edges[0]
     centers = (edges[1:]+edges[:-1])/2
     breaks = starts if initial_breaks is None else initial_breaks
-    q = np.asarray(states)[np.searchsorted(breaks, centers)]
+    if conservative_initialization:
+        q = piecewise_cell_averages(edges, np.asarray(breaks), states)
+    else:
+        q = np.asarray(states)[np.searchsorted(breaks, centers)]
     initial = q.copy()
     reference = np.zeros((2,5))
 
@@ -279,6 +293,10 @@ def fine_reference(states, starts, speeds, count, horizon=DT, *, average_edges=N
     _, slope = stencil(q)
 
     def cumulative(q,slope,x):
+        if x <= edges[0]:
+            return (x-edges[0])*np.asarray(states[0])
+        if x >= edges[-1]:
+            return q.sum(axis=0)*dx+(x-edges[-1])*np.asarray(states[-1])
         i = np.searchsorted(edges,x)-1
         length = x-edges[i]
         return (q[:i].sum(axis=0)*dx + length*q[i]
