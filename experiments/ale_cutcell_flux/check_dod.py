@@ -1,10 +1,13 @@
 """Benchmark P0 domain-of-dependence stabilization on moving 1D cut cells."""
+import argparse
 import json
-from pathlib import Path
+from functools import partial
 from itertools import combinations
+from pathlib import Path
 
 import numpy as np
 
+from nonlinear_cutcell_continuous import RiemannRays, exact_star
 from nonlinear_cutcell_impact import DT, Impact, fields
 from nonlinear_cutcell_predictor import fine_reference, samples
 
@@ -19,13 +22,17 @@ def grid(width, motion):
     return edges, cut, w
 
 
-def channels(q, boundary, w, cut):
+def channels(q, boundary, w, cut, directional=False):
     padded = np.vstack((boundary[0], q, boundary[1]))
     i = np.r_[np.arange(len(q)+1), cut]
     j = np.r_[np.arange(1, len(q)+2), cut+2]
     a, b = padded[i], padded[j]
+    # The channels are all oriented left to right. Only a closing jump
+    # can reduce the Riemann star stretch below both endpoint values.
+    jump = a[:, 1]-b[:, 1]
+    jump = np.maximum(jump, 0.) if directional else abs(jump)
     speed = 1 / np.minimum(np.minimum(a[:, 0], b[:, 0]),
-                           np.sqrt(a[:, 0]*b[:, 0]) * np.exp(-abs(a[:, 1]-b[:, 1])/2))
+                           np.sqrt(a[:, 0]*b[:, 0]) * np.exp(-jump/2))
     weight0, weight1 = np.ones_like(speed), np.zeros_like(speed)
     weight0[[cut, cut+1]] = 0
     weight1[[cut, cut+1, -1]] = (1., 1., -1.)
@@ -82,9 +89,46 @@ def entropy(q):
     return .5*q[:, 1]**2 + q[:, 0] - 1 - np.log(q[:, 0])
 
 
-def update(q, h, w, data, cut, dt, beta):
-    i, j, a, b, speed, weight0, weight1, mu0, mu1 = data
-    weight, mu = weight0+beta*weight1, mu0+beta*mu1
+def godunov_flux(a, b, speed, weight, mu):
+    """Sample the physical Riemann solution on each channel's mesh ray."""
+    trace = np.empty_like(a)
+    for k, (left, right, s, lam, swept) in enumerate(zip(a, b, speed, weight, mu)):
+        if lam == 0. or swept >= lam*s:
+            trace[k] = right if swept >= 0 else left
+        elif swept <= -lam*s or np.array_equal(left, right):
+            trace[k] = left
+        elif swept == 0.:
+            trace[k] = exact_star(left, right)
+        else:
+            trace[k] = RiemannRays(left, right).state(swept/lam)
+    tau, velocity = trace.T
+    pressure = 1/tau - 1
+    mechanical = weight[:, None]*np.column_stack((-velocity, pressure, pressure*velocity))
+    transported = mu[:, None]*np.column_stack((trace, entropy(trace)))
+    return mechanical, mechanical-transported
+
+
+def check_zero_width():
+    rows = []
+    for v in (.1, .3, .7):
+        for fraction in (-.75, 0., .75, 1.1, -1.1):
+            w = fraction*np.exp(-v)
+            a, b = np.array([[1., -v]]), np.array([[1., v]])
+            _, total = godunov_flux(a, b, np.ones(1), np.ones(1), np.array([w]))
+            if abs(fraction) <= 1.:
+                exact = np.array([-w*np.exp(v), np.exp(-v)-1, -w*(np.exp(v)-1-v)])
+            else:
+                tau = 1/abs(w)
+                velocity = np.sign(w)*(v-np.log(tau))
+                state, flux = fields((tau, velocity))
+                exact = flux - w*state
+            np.testing.assert_allclose(total[0], exact, atol=2e-14, rtol=0)
+            rows.append(dict(velocity=v, face_speed=w, numerical_flux=total[0].tolist(),
+                             exact_flux=exact.tolist(), max_error=float(max(abs(total[0]-exact)))))
+    return rows
+
+
+def split_flux(a, b, speed, weight, mu):
     fa = np.column_stack((-a[:, 1], 1/a[:, 0]-1))
     fb = np.column_stack((-b[:, 1], 1/b[:, 0]-1))
     ea, eb = entropy(a), entropy(b)
@@ -92,7 +136,13 @@ def update(q, h, w, data, cut, dt, beta):
     g_flux = .5*(fa[:, 1]*a[:, 1]+fb[:, 1]*b[:, 1]-speed*(eb-ea))
     mechanical = weight[:, None]*np.column_stack((h_flux, g_flux))
     transported = np.where(mu[:, None] < 0, np.column_stack((a, ea)), np.column_stack((b, eb)))
-    total = mechanical - mu[:, None]*transported
+    return mechanical, mechanical-mu[:, None]*transported
+
+
+def update(q, h, w, data, cut, dt, beta, flux=split_flux):
+    _, _, a, b, speed, weight0, weight1, mu0, mu1 = data
+    weight, mu = weight0+beta*weight1, mu0+beta*mu1
+    mechanical, total = flux(a, b, speed, weight, mu)
     face_mech, face_total = mechanical[:-1].copy(), total[:-1].copy()
     face_mech[cut:cut+2] += mechanical[-1]
     face_total[cut:cut+2] += total[-1]
@@ -108,19 +158,26 @@ def update(q, h, w, data, cut, dt, beta):
     return q_next, h_next, dt*face_mech, dt*face_total, entropy_budget, max(abs(balance))
 
 
-def run(width, motion, states, use_dod, horizon=DT, single=False):
+def initial_state(h, cut, states):
+    q = np.tile(states[0], (len(h), 1))
+    q[cut] = states[1]
+    q[cut+1:] = states[2]
+    return q
+
+
+def run(width, motion, states, use_dod, horizon=DT, single=False, variant="original"):
     x0, cut, w = grid(width, motion)
     h = np.diff(x0)
-    state = np.tile(states[0], (len(h), 1))
-    state[cut] = states[1]
-    state[cut+1:] = states[2]
+    state = initial_state(h, cut, states)
+    directional = variant != "original"
+    flux_rule = godunov_flux if variant == "godunov" else split_flux
     time, betas, steps = 0., [], []
     flux = np.zeros((2, 3))
     mech = np.zeros_like(flux)
     balance, energy_defect, energy_loss = 0., 0., 0.
     min_tau = float(state[:, 0].min())
     while time < horizon-1e-15:
-        data = channels(state, (states[0], states[2]), w, cut)
+        data = channels(state, (states[0], states[2]), w, cut, directional)
         lines = cfl_lines(data, h)
         cap = step_cap(lines, h, w, use_dod, 1.)
         if not steps:
@@ -131,7 +188,7 @@ def run(width, motion, states, use_dod, horizon=DT, single=False):
             return dict(status="CFL refused", cap=first_cap)
         beta = beta_interval(lines, dt)[1] if use_dod else 1.
         assert max((lines[0]+beta*lines[1])*dt) <= 1+2e-14
-        state, h, f_mech, f_total, entropy_budget, b = update(state, h, w, data, cut, dt, beta)
+        state, h, f_mech, f_total, entropy_budget, b = update(state, h, w, data, cut, dt, beta, flux_rule)
         min_tau = min(min_tau, state[:, 0].min())
         flux += f_total[cut:cut+2]
         mech += f_mech[cut:cut+2]
@@ -181,12 +238,66 @@ def check_exact(run_data, problem, t=DT):
                 reference_resolved_energy_loss=float(resolved_ref_loss))
 
 
+def compare_common_schedule(states, motion, reference, reference_work):
+    """Use the same admissible beta for both trajectories at each fixed step."""
+    x, cut, w = grid(.005, motion)
+    h = np.diff(x)
+    initial = initial_state(h, cut, states)
+    q = [initial.copy(), initial.copy()]
+    total = np.zeros((2, 2, 3))
+    mechanical = np.zeros_like(total)
+    dt = .005
+    betas = []
+    for _ in range(5):
+        channels_for_state = [channels(state, (states[0], states[2]), w, cut, directional=True) for state in q]
+        bounds = [beta_interval(cfl_lines(data, h), dt) for data in channels_for_state]
+        assert all(bound is not None for bound in bounds)
+        beta = min(bound[1] for bound in bounds)
+        assert beta >= max(bound[0] for bound in bounds)
+        betas.append(beta)
+        for i, flux_rule in enumerate((split_flux, godunov_flux)):
+            q[i], h_next, f_mech, f_total, *_ = update(q[i], h, w, channels_for_state[i], cut, dt, beta, flux_rule)
+            mechanical[i] += f_mech[cut:cut+2]
+            total[i] += f_total[cut:cut+2]
+        h = h_next
+    return dict(dt=dt, beta=betas,
+                momentum=[relative(f[:, 1], reference[:, 1]) for f in total],
+                total_energy=[relative(f[:, 2], reference[:, 2]) for f in total],
+                pressure_work=[relative(f[:, 2], reference_work) for f in mechanical])
+
+
+def common_schedule(cases, general):
+    rows = []
+    for case in cases:
+        if case["width"] != .005 or case["motion"] == "fixed":
+            continue
+        problem = Impact(case["width"], case["compression"])
+        ref = case["error"]
+        comparison = compare_common_schedule(
+            (problem.left, problem.middle, problem.right), case["motion"],
+            np.array(ref["exact_face_flux"]), np.array(ref["exact_physical_flux"])[:, 2])
+        rows.append(dict(motion=case["motion"], compression=case["compression"], **comparison))
+    sample_states = {(kind, index): states for kind, index, states in samples()}
+    for case in general:
+        if case["kind"] != "expansion":
+            continue
+        reference = np.array(case["reference_flux"])
+        comparison = compare_common_schedule(
+            sample_states[case["kind"], case["index"]], case["motion"], reference, reference[:, 4])
+        rows.append(dict(motion=case["motion"], kind=case["kind"], **comparison))
+    return rows
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--variant", choices=("original", "directional", "godunov"), default="original")
+    args = parser.parse_args()
+    run_case = partial(run, variant=args.variant)
     uniform = []
     for width in (.005, 1e-8):
         for motion in ("fixed", "drift", "squeeze"):
             q = np.array([.75, .27])
-            r = run(width, motion, (q, q, q), True)
+            r = run_case(width, motion, (q, q, q), True)
             error = float(np.max(abs(np.array(r["state"])-q)))
             assert error < 1e-9
             uniform.append(dict(width=width, motion=motion, steps=len(r["steps"]),
@@ -197,13 +308,13 @@ def main():
             for motion in ("fixed", "drift", "squeeze"):
                 problem = Impact(width, compression)
                 state = (problem.left, problem.middle, problem.right)
-                result = run(width, motion, state, True)
+                result = run_case(width, motion, state, True)
                 exact = check_exact(result, problem)
-                ordinary_cap = run(width, motion, state, False, single=True)["cap"]
-                base = (run(width, motion, state, False) if width == .005 else None)
+                ordinary_cap = run_case(width, motion, state, False, single=True)["cap"]
+                base = (run_case(width, motion, state, False) if width == .005 else None)
                 if base is not None:
                     base["error"] = check_exact(base, problem)
-                one_step = run(width, motion, state, True, single=True)
+                one_step = run_case(width, motion, state, True, single=True)
                 cases.append(dict(width=width, compression=compression, motion=motion,
                                   ordinary_first_cap=ordinary_cap,
                                   dod_first_cap=result["cap"], one_step=one_step["status"],
@@ -219,8 +330,8 @@ def main():
         if kind not in ("compression", "mixed", "expansion") or index not in (0, 1):
             continue
         motion = ("fixed", "drift", "squeeze")[index%3]
-        result = run(.005, motion, states, True)
-        base = run(.005, motion, states, False)
+        result = run_case(.005, motion, states, True)
+        base = run_case(.005, motion, states, False)
         edges, cut, w = grid(.005, motion)
         flux, mean = fine_reference(states, edges[cut:cut+2], w[cut:cut+2], 5120)
         if (kind, index) in (("mixed", 1), ("expansion", 0)):
@@ -240,7 +351,15 @@ def main():
               "imp/work", np.round(100*np.array(result["mechanical_relative_error"]), 2), flush=True)
     report = dict(uniform=uniform, exact_impact=cases, fine_fv=general,
                   fine_reference_refinement=refinements, time=DT)
-    Path("dod_results.json").write_text(json.dumps(report, indent=2) + "\n")
+    output = {"original": "dod_results.json", "directional": "dod_directional_results.json",
+              "godunov": "dod_godunov_results.json"}
+    if args.variant != "original":
+        report["wave_speed_bound"] = "positive_compression_jump"
+    if args.variant == "godunov":
+        report["flux"] = "unified_godunov"
+        report["zero_width_check"] = check_zero_width()
+        Path("dod_common_schedule.json").write_text(json.dumps(common_schedule(cases, general), indent=2) + "\n")
+    Path(output[args.variant]).write_text(json.dumps(report, indent=2) + "\n")
 
 
 if __name__ == "__main__":
