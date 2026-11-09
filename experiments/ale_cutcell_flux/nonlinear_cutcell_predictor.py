@@ -119,11 +119,15 @@ def mean_in_cell(left, fronts, start, end):
     return mass_integral/(end-start)
 
 
-def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *, fan_limit=None, faces_only=False):
+def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *,
+            fan_limit=None, faces_only=False, sample_edges=None, initial_breaks=None):
+    if initial_breaks is not None and not faces_only:
+        raise ValueError('extra initial interfaces require faces_only')
     end = starts+dt*speeds
     assert end[1] > end[0]
     initial = [riemann(l,r,fan_step,fan_limit) for l,r in zip(states[:-1], states[1:])]
-    fronts = [(x,s,l,r) for x, fan in zip(starts,initial) for s,l,r in fan]
+    breaks = starts if initial_breaks is None else initial_breaks
+    fronts = [(x,s,l,r) for x, fan in zip(breaks,initial,strict=True) for s,l,r in fan]
     if not faces_only:
         frozen = []
         for w, fan, q in zip(speeds, initial, states):
@@ -165,7 +169,11 @@ def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *, fan_l
             events += 1
             max_fronts = max(max_fronts,len(fronts))
     if faces_only:
-        return dict(status='ok', face_fluxes=accum, events=events)
+        result = dict(status='ok', face_fluxes=accum, events=events)
+        if sample_edges is not None:
+            result['means'] = np.array([mean_in_cell(states[0], fronts, a, b)[:2]
+                                        for a, b in zip(sample_edges[:-1], sample_edges[1:])])
+        return result
     mean = mean_in_cell(states[0],fronts,*end)
     balance = old_integral - np.diff(accum,axis=0)[0,:3]
     balance[2] += entropy.sum()
@@ -228,21 +236,22 @@ def stress_tests(sample, fan_step=.025):
     return rows
 
 
-def fine_reference(states, starts, speeds, count):
+def fine_reference(states, starts, speeds, count, horizon=DT, *, average_edges=None, initial_breaks=None):
     """Independent MUSCL/Rusanov integration on a fine uniform reference grid."""
     edges = np.linspace(-.1,.1,count+1)
     dx = edges[1]-edges[0]
     centers = (edges[1:]+edges[:-1])/2
-    q = np.asarray(states)[np.searchsorted(starts,centers)]
+    breaks = starts if initial_breaks is None else initial_breaks
+    q = np.asarray(states)[np.searchsorted(breaks, centers)]
     initial = q.copy()
     reference = np.zeros((2,5))
 
     def stencil(u):
-        ext = np.vstack((states[0],u,states[2]))
+        ext = np.vstack((states[0],u,states[-1]))
         dl, dr = ext[1:-1]-ext[:-2],ext[2:]-ext[1:-1]
         slope = np.where(dl*dr > 0,np.sign(dl)*np.minimum(abs(dl),abs(dr)),0.)
         l = np.vstack((states[0],u+.5*slope))
-        r = np.vstack((u-.5*slope,states[2]))
+        r = np.vstack((u-.5*slope,states[-1]))
         f = lambda a: np.column_stack((-a[:,1],1/a[:,0]-1))
         c = (1/np.minimum(l[:,0],r[:,0]))[:,None]
         flux = (f(l)+f(r)-c*(r-l))/2
@@ -255,8 +264,8 @@ def fine_reference(states, starts, speeds, count):
         return np.array([fluxes(a,w) for a,w in zip(state,speeds)])
 
     time = 0.
-    while time < DT:
-        step = min(DT-time,.30*dx*np.min(q[:,0]))
+    while time < horizon:
+        step = min(horizon-time,.30*dx*np.min(q[:,0]))
         rate, slope = stencil(q)
         stage = q+step*rate
         rate1, slope1 = stencil(stage)
@@ -266,7 +275,7 @@ def fine_reference(states, starts, speeds, count):
         time += step
     # Recover the conservative fluxes from the left interval balance,
     # independent of the sampled pressure/work traces above.
-    end = starts+DT*speeds
+    end = starts+horizon*speeds
     _, slope = stencil(q)
 
     def cumulative(q,slope,x):
@@ -275,12 +284,16 @@ def fine_reference(states, starts, speeds, count):
         return (q[:i].sum(axis=0)*dx + length*q[i]
                 + .5*length*(length/dx-1)*slope[i])
 
-    boundary = DT*fluxes(states[0],0)[:2]
+    boundary = horizon*fluxes(states[0],0)[:2]
     final_integrals = []
     for i,(a,b) in enumerate(zip(starts,end)):
         final_integrals.append(cumulative(q,slope,b))
         reference[i,:2] = boundary + cumulative(initial,np.zeros_like(initial),a) - final_integrals[-1]
     final = (final_integrals[1]-final_integrals[0])/(end[1]-end[0])
+    if average_edges is not None:
+        integrals = [cumulative(q, slope, x) for x in average_edges]
+        averages = np.diff(integrals, axis=0)/np.diff(average_edges)[:, None]
+        return reference, final, averages
     return reference, final
 
 
