@@ -1,0 +1,4062 @@
+{
+  "uniform": [
+    {
+      "width": 0.005,
+      "motion": "fixed",
+      "uniform_error": 0.0,
+      "extra_energy": 0.0
+    },
+    {
+      "width": 0.005,
+      "motion": "drift",
+      "uniform_error": 1.1102230246251565e-16,
+      "extra_energy": 0.0
+    },
+    {
+      "width": 0.005,
+      "motion": "squeeze",
+      "uniform_error": 2.220446049250313e-16,
+      "extra_energy": 0.0
+    },
+    {
+      "width": 1e-08,
+      "motion": "fixed",
+      "uniform_error": 1.1102230246251565e-16,
+      "extra_energy": 0.0
+    },
+    {
+      "width": 1e-08,
+      "motion": "drift",
+      "uniform_error": 2.220446049250313e-16,
+      "extra_energy": 0.0
+    },
+    {
+      "width": 1e-08,
+      "motion": "squeeze",
+      "uniform_error": 4.57407445253466e-11,
+      "extra_energy": 0.0
+    }
+  ],
+  "impact": [
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "fixed",
+      "mean_only": {
+        "steps": [
+          0.012359079462703449,
+          0.011454652525981147,
+          0.0011862680113154042
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "one_shock_collision"
+        ],
+        "thin_stretch": 0.4305766038802515,
+        "thin_stretch_error": 0.008076603880251443,
+        "ale_flux_error": [
+          0.013985461264506626,
+          0.016676085997908013,
+          0.03492117266572737
+        ],
+        "pressure_work_error": 0.03492117266572737,
+        "max_balance": 9.194034422677078e-17,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99676513671875,
+          1.0
+        ],
+        "max_position_error": 0.0020124646354247044
+      },
+      "half_state": {
+        "steps": [
+          0.012359079462703449,
+          0.011454652525981147,
+          0.0011862680113154042
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "one_shock_collision"
+        ],
+        "thin_stretch": 0.4305766038802515,
+        "thin_stretch_error": 0.008076603880251443,
+        "ale_flux_error": [
+          0.013985461264506626,
+          0.016676085997908013,
+          0.03492117266572737
+        ],
+        "pressure_work_error": 0.03492117266572737,
+        "max_balance": 9.194034422677078e-17,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99676513671875,
+          1.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              1.6653345369377348e-16,
+              -0.0003003182218566296
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 2.2547758594781948e-10
+          }
+        ],
+        "stored_energy_ledger_error": 2.688821387764051e-17,
+        "max_position_error": 0.0020124646354247044
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "drift",
+      "mean_only": {
+        "steps": [
+          0.010092831908879076,
+          0.0080340436524237,
+          0.006426058945034936,
+          0.0004470654936622881
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "independent"
+        ],
+        "thin_stretch": 0.4308038396460385,
+        "thin_stretch_error": 0.008303839646038647,
+        "ale_flux_error": [
+          0.004138020333101876,
+          0.015158720779794544,
+          0.008560496873498382
+        ],
+        "pressure_work_error": 0.07862202479707575,
+        "max_balance": 2.2811613709095013e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99658203125,
+          0.998779296875,
+          1.0
+        ],
+        "max_position_error": 0.0030119224266165756
+      },
+      "half_state": {
+        "steps": [
+          0.010092831908879076,
+          0.0080340436524237,
+          0.006426058945034936,
+          0.0004470654936622881
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "independent"
+        ],
+        "thin_stretch": 0.4308038396460385,
+        "thin_stretch_error": 0.008303839646038647,
+        "ale_flux_error": [
+          0.004138020333101876,
+          0.015158720779794544,
+          0.008560496873498382
+        ],
+        "pressure_work_error": 0.07862202479707575,
+        "max_balance": 2.2811613709095013e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99658203125,
+          0.998779296875,
+          1.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              -1.8389750253172688e-05,
+              -0.00024104529159519575
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 1.4981254468016026e-10
+          }
+        ],
+        "stored_energy_ledger_error": 7.806255641895632e-18,
+        "max_position_error": 0.0030119224266165756
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "squeeze",
+      "mean_only": {
+        "steps": [
+          0.01227422971897977,
+          0.011593658499686644,
+          0.0011321117813335863
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "one_shock_collision"
+        ],
+        "thin_stretch": 0.43045522692288696,
+        "thin_stretch_error": 0.007955226922887026,
+        "ale_flux_error": [
+          0.005042933073146265,
+          0.017289517159412654,
+          0.03183037600757339
+        ],
+        "pressure_work_error": 0.02641623171897,
+        "max_balance": 1.196959198423997e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99676513671875,
+          1.0
+        ],
+        "max_position_error": 0.0020436960262937287
+      },
+      "half_state": {
+        "steps": [
+          0.01227422971897977,
+          0.011593658499686644,
+          0.0011321117813335863
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "one_shock_collision"
+        ],
+        "thin_stretch": 0.43045522692288696,
+        "thin_stretch_error": 0.007955226922887026,
+        "ale_flux_error": [
+          0.005042933073146265,
+          0.017289517159412654,
+          0.03183037600757339
+        ],
+        "pressure_work_error": 0.02641623171897,
+        "max_balance": 1.196959198423997e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.99676513671875,
+          1.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 3.642919299551295e-17,
+        "max_position_error": 0.0020436960262937287
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "fixed",
+      "mean_only": {
+        "steps": [
+          0.016935895197420905,
+          0.008064104802579096
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.6435799712052006,
+        "thin_stretch_error": 0.003579971205200483,
+        "ale_flux_error": [
+          0.009944364458898475,
+          0.004388834808530681,
+          0.02220163071723112
+        ],
+        "pressure_work_error": 0.02220163071723112,
+        "max_balance": 6.678685382510707e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.9990234375
+        ],
+        "max_position_error": 0.000661166886035694
+      },
+      "half_state": {
+        "steps": [
+          0.016935895197420905,
+          0.008064104802579096
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.6435799712052006,
+        "thin_stretch_error": 0.003579971205200483,
+        "ale_flux_error": [
+          0.009944364458898475,
+          0.004388834808530681,
+          0.02220163071723112
+        ],
+        "pressure_work_error": 0.02220163071723112,
+        "max_balance": 6.678685382510707e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.9990234375
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 1.452830911130576e-17,
+        "max_position_error": 0.000661166886035694
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "drift",
+      "mean_only": {
+        "steps": [
+          0.012963257461575972,
+          0.009844944865799388,
+          0.002191797672624639
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans"
+        ],
+        "thin_stretch": 0.6431086688028956,
+        "thin_stretch_error": 0.003108668802895842,
+        "ale_flux_error": [
+          0.0006272663875892412,
+          0.002799201907180079,
+          0.002433099140457826
+        ],
+        "pressure_work_error": 0.029839029323729484,
+        "max_balance": 1.0907073855204175e-16,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.99871826171875,
+          1.0
+        ],
+        "max_position_error": 0.0011448589459305408
+      },
+      "half_state": {
+        "steps": [
+          0.012963257461575972,
+          0.009844944865799388,
+          0.002191797672624639
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans"
+        ],
+        "thin_stretch": 0.6431086688028956,
+        "thin_stretch_error": 0.003108668802895842,
+        "ale_flux_error": [
+          0.0006272663875892412,
+          0.002799201907180079,
+          0.002433099140457826
+        ],
+        "pressure_work_error": 0.029839029323729484,
+        "max_balance": 1.0907073855204175e-16,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.99871826171875,
+          1.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              -7.731556479689816e-05,
+              0.00012021273912332653
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 7.226085054442622e-11
+          }
+        ],
+        "stored_energy_ledger_error": 1.0625181290357943e-17,
+        "max_position_error": 0.0011448589459305408
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "squeeze",
+      "mean_only": {
+        "steps": [
+          0.016860890418808144,
+          0.008139109581191857
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.6436152409032395,
+        "thin_stretch_error": 0.0036152409032393917,
+        "ale_flux_error": [
+          0.0026582653700328064,
+          0.004854140160570049,
+          0.021596922833433976
+        ],
+        "pressure_work_error": 0.014911800819816096,
+        "max_balance": 5.4643789493269423e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.99908447265625
+        ],
+        "max_position_error": 0.000682813739741342
+      },
+      "half_state": {
+        "steps": [
+          0.016860890418808144,
+          0.008139109581191857
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.6436152409032395,
+        "thin_stretch_error": 0.0036152409032393917,
+        "ale_flux_error": [
+          0.0026582653700328064,
+          0.004854140160570049,
+          0.021596922833433976
+        ],
+        "pressure_work_error": 0.014911800819816096,
+        "max_balance": 5.4643789493269423e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.99908447265625
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 1.6046192152785466e-17,
+        "max_position_error": 0.000682813739741342
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "fixed",
+      "mean_only": {
+        "steps": [
+          0.012649361580733966,
+          0.011809917816999586,
+          0.00054072060226645
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.42830574693639056,
+        "thin_stretch_error": 0.005805746936390521,
+        "ale_flux_error": [
+          0.010053241509839756,
+          0.018110577922147875,
+          0.025017245127845904
+        ],
+        "pressure_work_error": 0.025017245127845904,
+        "max_balance": 1.49890950346121e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.0024982238807627274
+      },
+      "half_state": {
+        "steps": [
+          0.012649361580733966,
+          0.011809917816999586,
+          0.00054072060226645
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.42830574693639056,
+        "thin_stretch_error": 0.005805746936390521,
+        "ale_flux_error": [
+          0.010053241509839756,
+          0.018110577922147875,
+          0.025017245127845904
+        ],
+        "pressure_work_error": 0.025017245127845904,
+        "max_balance": 1.49890950346121e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 0.0,
+        "max_position_error": 0.0024982238807627274
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "drift",
+      "mean_only": {
+        "steps": [
+          0.010392083733326835,
+          0.008338912029589715,
+          0.006269004237083452
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.4275497939047429,
+        "thin_stretch_error": 0.005049793833959926,
+        "ale_flux_error": [
+          0.006915676819583695,
+          0.018025205881914086,
+          0.013961370112361995
+        ],
+        "pressure_work_error": 18006.745618348417,
+        "max_balance": 1.3877787807814457e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.003431122289617082
+      },
+      "half_state": {
+        "steps": [
+          0.010392083733326835,
+          0.008338912029589715,
+          0.006269004237083452
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.4275497939047429,
+        "thin_stretch_error": 0.005049793833959926,
+        "ale_flux_error": [
+          0.006915676819583695,
+          0.018025205881914086,
+          0.013961370112361995
+        ],
+        "pressure_work_error": 18006.745618348417,
+        "max_balance": 1.3877787807814457e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 3.642919299551295e-17,
+        "max_position_error": 0.003431122289617082
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "squeeze",
+      "mean_only": {
+        "steps": [
+          0.012649361406236495,
+          0.011809918101880465,
+          0.0005407204918830427
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.427183264710872,
+        "thin_stretch_error": 0.004683264710871937,
+        "ale_flux_error": [
+          0.0029687891778639383,
+          0.018110578679322996,
+          0.01858568780128405
+        ],
+        "pressure_work_error": 0.015013508336653617,
+        "max_balance": 1.700029006457271e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.0024982239378638846
+      },
+      "half_state": {
+        "steps": [
+          0.012649361406236495,
+          0.011809918101880465,
+          0.0005407204918830427
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.427183264710872,
+        "thin_stretch_error": 0.004683264710871937,
+        "ale_flux_error": [
+          0.0029687891778639383,
+          0.018110578679322996,
+          0.01858568780128405
+        ],
+        "pressure_work_error": 0.015013508336653617,
+        "max_balance": 1.700029006457271e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 5.204170427930421e-18,
+        "max_position_error": 0.0024982239378638846
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "fixed",
+      "mean_only": {
+        "steps": [
+          0.017595469276056975,
+          0.0074045307239430265
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6419304569141965,
+        "thin_stretch_error": 0.0019304569141963546,
+        "ale_flux_error": [
+          0.005362384715985677,
+          0.004944219764493192,
+          0.011964425732472242
+        ],
+        "pressure_work_error": 0.011964425732472242,
+        "max_balance": 4.163336342344337e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0
+        ],
+        "max_position_error": 0.0007906708483028518
+      },
+      "half_state": {
+        "steps": [
+          0.017595469276056975,
+          0.0074045307239430265
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6419304569141965,
+        "thin_stretch_error": 0.0019304569141963546,
+        "ale_flux_error": [
+          0.005362384715985677,
+          0.004944219764493192,
+          0.011964425732472242
+        ],
+        "pressure_work_error": 0.011964425732472242,
+        "max_balance": 4.163336342344337e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 1.691355389077387e-17,
+        "max_position_error": 0.0007906708483028518
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "drift",
+      "mean_only": {
+        "steps": [
+          0.013512686121985275,
+          0.01028384717874907,
+          0.001203466699265656
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6417286732303156,
+        "thin_stretch_error": 0.0017286731230939933,
+        "ale_flux_error": [
+          0.001204251109784712,
+          0.005314097593517955,
+          0.005015033202346148
+        ],
+        "pressure_work_error": 6716.048650514554,
+        "max_balance": 7.19910242530375e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.0012786641870830423
+      },
+      "half_state": {
+        "steps": [
+          0.013512686121985275,
+          0.01028384717874907,
+          0.001203466699265656
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6417286732303156,
+        "thin_stretch_error": 0.0017286731230939933,
+        "ale_flux_error": [
+          0.001204251109784712,
+          0.005314097593517955,
+          0.005015033202346148
+        ],
+        "pressure_work_error": 6716.048650514554,
+        "max_balance": 7.19910242530375e-17,
+        "max_entropy_defect": 8.673617379884035e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 1.6479873021779667e-17,
+        "max_position_error": 0.0012786641870830423
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "squeeze",
+      "mean_only": {
+        "steps": [
+          0.0175954691202428,
+          0.0074045308797572006
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6413578286188056,
+        "thin_stretch_error": 0.0013578286188055122,
+        "ale_flux_error": [
+          0.0009984056644968195,
+          0.0049442202584496385,
+          0.008082045013841363
+        ],
+        "pressure_work_error": 0.00598221802835916,
+        "max_balance": 5.724587470723463e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0
+        ],
+        "max_position_error": 0.000790670887266684
+      },
+      "half_state": {
+        "steps": [
+          0.0175954691202428,
+          0.0074045308797572006
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6413578286188056,
+        "thin_stretch_error": 0.0013578286188055122,
+        "ale_flux_error": [
+          0.0009984056644968195,
+          0.0049442202584496385,
+          0.008082045013841363
+        ],
+        "pressure_work_error": 0.00598221802835916,
+        "max_balance": 5.724587470723463e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 1.6046192152785466e-17,
+        "max_position_error": 0.000790670887266684
+      }
+    }
+  ],
+  "matched_impact": [
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "fixed",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.43131764229180236,
+        "thin_stretch_error": 0.008817642291802319,
+        "ale_flux_error": [
+          0.01526864466112986,
+          0.02093398044031741,
+          0.038068107295854914
+        ],
+        "pressure_work_error": 0.038068107295854914,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 8.282025239225721e-14,
+        "prediction_weights": [
+          1.0,
+          0.9991455078125,
+          0.99822998046875,
+          0.99920654296875,
+          0.99993896484375
+        ],
+        "max_position_error": 0.002580882470167245
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.43131764229180236,
+        "thin_stretch_error": 0.008817642291802319,
+        "ale_flux_error": [
+          0.01526864466112986,
+          0.02093398044031741,
+          0.038068107295854914
+        ],
+        "pressure_work_error": 0.038068107295854914,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 8.282025239225721e-14,
+        "prediction_weights": [
+          1.0,
+          0.9991455078125,
+          0.99822998046875,
+          0.99920654296875,
+          0.99993896484375
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": -3.122502256758253e-17,
+        "max_position_error": 0.002580882470167245
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "drift",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.43077879772432387,
+        "thin_stretch_error": 0.008278797724323994,
+        "ale_flux_error": [
+          0.0032065872858815705,
+          0.01737256949383249,
+          0.013340023113600353
+        ],
+        "pressure_work_error": 0.18900576696581908,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          1.0,
+          0.99835205078125,
+          0.9991455078125,
+          0.99957275390625
+        ],
+        "max_position_error": 0.003352647419048227
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_halves",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.4308658797234338,
+        "thin_stretch_error": 0.008365879723433944,
+        "ale_flux_error": [
+          0.003021052519361443,
+          0.017243148009399287,
+          0.007461209670460969
+        ],
+        "pressure_work_error": 0.15113763658452642,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 8.904747599014495e-14,
+        "prediction_weights": [
+          1.0,
+          1.0,
+          0.99835205078125,
+          0.9991455078125,
+          0.9996337890625
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.04800342893777046,
+              -0.09160142411797366
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 4.71365346553157e-05
+          },
+          {
+            "used_halves": true,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 2.0816681711721685e-17,
+        "max_position_error": 0.0033550061115932284
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.65,
+      "motion": "squeeze",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans"
+        ],
+        "thin_stretch": 0.4313725674941535,
+        "thin_stretch_error": 0.00887256749415355,
+        "ale_flux_error": [
+          0.0056244484907476975,
+          0.02161289960940196,
+          0.03543478602105531
+        ],
+        "pressure_work_error": 0.030621715276602072,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 6.739010391387801e-14,
+        "prediction_weights": [
+          1.0,
+          0.9991455078125,
+          0.998291015625,
+          0.999267578125,
+          1.0
+        ],
+        "max_position_error": 0.0026308617265738965
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans"
+        ],
+        "thin_stretch": 0.4313725674941535,
+        "thin_stretch_error": 0.00887256749415355,
+        "ale_flux_error": [
+          0.0056244484907476975,
+          0.02161289960940196,
+          0.03543478602105531
+        ],
+        "pressure_work_error": 0.030621715276602072,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 6.739010391387801e-14,
+        "prediction_weights": [
+          1.0,
+          0.9991455078125,
+          0.998291015625,
+          0.999267578125,
+          1.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 5.377642775528102e-17,
+        "max_position_error": 0.0026308617265738965
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "fixed",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.6435973175726638,
+        "thin_stretch_error": 0.003597317572663683,
+        "ale_flux_error": [
+          0.009992548812954883,
+          0.007607375786483302,
+          0.022308370932822015
+        ],
+        "pressure_work_error": 0.022308370932822015,
+        "max_balance": 1.448494102440634e-16,
+        "max_entropy_defect": 9.188049626684958e-14,
+        "prediction_weights": [
+          1.0,
+          1.0,
+          0.99957275390625,
+          0.999755859375,
+          0.99993896484375
+        ],
+        "max_position_error": 0.000965200200239949
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans_limited"
+        ],
+        "thin_stretch": 0.6435973175726638,
+        "thin_stretch_error": 0.003597317572663683,
+        "ale_flux_error": [
+          0.009992548812954883,
+          0.007607375786483302,
+          0.022308370932822015
+        ],
+        "pressure_work_error": 0.022308370932822015,
+        "max_balance": 1.448494102440634e-16,
+        "max_entropy_defect": 9.188049626684958e-14,
+        "prediction_weights": [
+          1.0,
+          1.0,
+          0.99957275390625,
+          0.999755859375,
+          0.99993896484375
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 1.5612511283791264e-17,
+        "max_position_error": 0.000965200200239949
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "drift",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "one_shock_collision",
+          "one_shock_collision",
+          "bounded_fans",
+          "bounded_fans"
+        ],
+        "thin_stretch": 0.6437124673393613,
+        "thin_stretch_error": 0.0037124673393614804,
+        "ale_flux_error": [
+          0.001114771826004665,
+          0.005253579857943829,
+          0.03098195306399879
+        ],
+        "pressure_work_error": 0.25605421664662115,
+        "max_balance": 7.719519468096792e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "max_position_error": 0.0014552555510440462
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_halves",
+          "bounded_halves",
+          "bounded_halves",
+          "bounded_halves"
+        ],
+        "thin_stretch": 0.6429792223067017,
+        "thin_stretch_error": 0.0029792223067018897,
+        "ale_flux_error": [
+          0.000672110163806291,
+          0.004383712694924163,
+          0.003910689126779187
+        ],
+        "pressure_work_error": 0.05176597941005007,
+        "max_balance": 7.719519468096792e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.06760679774997891,
+              -0.09448337219377033
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 4.371162425824989e-05
+          },
+          {
+            "used_halves": true,
+            "contrast": [
+              0.007275674657762299,
+              -0.011158630603905845
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 6.265547251505859e-07
+          },
+          {
+            "used_halves": true,
+            "contrast": [
+              -0.0002547381994302822,
+              0.0003973388302859768
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 7.891639152471162e-10
+          },
+          {
+            "used_halves": true,
+            "contrast": [
+              -0.00012326275143131893,
+              0.00019192705288031161
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 1.8415490322605073e-10
+          },
+          {
+            "used_halves": true,
+            "contrast": [
+              -4.956163123043256e-05,
+              7.708538544463591e-05
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 2.970918285799938e-11
+          }
+        ],
+        "stored_energy_ledger_error": 2.45029690981724e-17,
+        "max_position_error": 0.0014581754439926403
+      }
+    },
+    {
+      "width": 0.005,
+      "compression": 0.8,
+      "motion": "squeeze",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans"
+        ],
+        "thin_stretch": 0.6436492500587752,
+        "thin_stretch_error": 0.003649250058775144,
+        "ale_flux_error": [
+          0.0026832721020408888,
+          0.008112099614673636,
+          0.021798480316307742
+        ],
+        "pressure_work_error": 0.017234387158153015,
+        "max_balance": 1.448494102440634e-16,
+        "max_entropy_defect": 7.10517799110133e-14,
+        "prediction_weights": [
+          1.0,
+          1.0,
+          0.99957275390625,
+          0.999755859375,
+          1.0
+        ],
+        "max_position_error": 0.0009989094614838573
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "bounded_fans",
+          "bounded_fans_limited",
+          "bounded_fans_limited",
+          "bounded_fans"
+        ],
+        "thin_stretch": 0.6436492500587752,
+        "thin_stretch_error": 0.003649250058775144,
+        "ale_flux_error": [
+          0.0026832721020408888,
+          0.008112099614673636,
+          0.021798480316307742
+        ],
+        "pressure_work_error": 0.017234387158153015,
+        "max_balance": 1.448494102440634e-16,
+        "max_entropy_defect": 7.10517799110133e-14,
+        "prediction_weights": [
+          1.0,
+          1.0,
+          0.99957275390625,
+          0.999755859375,
+          1.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 1.929879867024198e-17,
+        "max_position_error": 0.0009989094614838573
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "fixed",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.4303093059836426,
+        "thin_stretch_error": 0.007809305983642545,
+        "ale_flux_error": [
+          0.013522608773176906,
+          0.024433424201501554,
+          0.033629766694612304
+        ],
+        "pressure_work_error": 0.033629766694612304,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.0032651284891348706
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.4303093059836426,
+        "thin_stretch_error": 0.007809305983642545,
+        "ale_flux_error": [
+          0.013522608773176906,
+          0.024433424201501554,
+          0.033629766694612304
+        ],
+        "pressure_work_error": 0.033629766694612304,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": -1.214306433183765e-17,
+        "max_position_error": 0.0032651284891348706
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "drift",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.4289354201260079,
+        "thin_stretch_error": 0.006435420055224905,
+        "ale_flux_error": [
+          0.005325992340297848,
+          0.021343283870009076,
+          0.010876367449756822
+        ],
+        "pressure_work_error": 35314.377605127855,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.003933614470325662
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.4289354201260079,
+        "thin_stretch_error": 0.006435420055224905,
+        "ale_flux_error": [
+          0.005325992340297848,
+          0.021343283870009076,
+          0.010876367449756822
+        ],
+        "pressure_work_error": 35314.377605127855,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": -6.938893903907228e-18,
+        "max_position_error": 0.003933614470325662
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.65,
+      "motion": "squeeze",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.42976482769963853,
+        "thin_stretch_error": 0.007264827699638432,
+        "ale_flux_error": [
+          0.004605279717496196,
+          0.024433425084974907,
+          0.02873570244948787
+        ],
+        "pressure_work_error": 0.025065160824454695,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.003265128576521968
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.42976482769963853,
+        "thin_stretch_error": 0.007264827699638432,
+        "ale_flux_error": [
+          0.004605279717496196,
+          0.024433425084974907,
+          0.02873570244948787
+        ],
+        "pressure_work_error": 0.025065160824454695,
+        "max_balance": 1.1362438767648086e-16,
+        "max_entropy_defect": 0.0,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": -5.204170427930421e-18,
+        "max_position_error": 0.003265128576521968
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "fixed",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6431892920257768,
+        "thin_stretch_error": 0.003189292025776669,
+        "ale_flux_error": [
+          0.008859147831292888,
+          0.010164377591331713,
+          0.019759735945553414
+        ],
+        "pressure_work_error": 0.019759735945553414,
+        "max_balance": 7.719519468096792e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.0013182394409978343
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6431892920257768,
+        "thin_stretch_error": 0.003189292025776669,
+        "ale_flux_error": [
+          0.008859147831292888,
+          0.010164377591331713,
+          0.019759735945553414
+        ],
+        "pressure_work_error": 0.019759735945553414,
+        "max_balance": 7.719519468096792e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 8.239936510889834e-18,
+        "max_position_error": 0.0013182394409978343
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "drift",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6420546468645087,
+        "thin_stretch_error": 0.0020546467572871707,
+        "ale_flux_error": [
+          0.0009997486119419751,
+          0.0072372387811726864,
+          0.004188078268246135
+        ],
+        "pressure_work_error": 15146.770198617249,
+        "max_balance": 3.382710778154774e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.0017490740384638465
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.6420546468645087,
+        "thin_stretch_error": 0.0020546467572871707,
+        "ale_flux_error": [
+          0.0009997486119419751,
+          0.0072372387811726864,
+          0.004188078268246135
+        ],
+        "pressure_work_error": 15146.770198617249,
+        "max_balance": 3.382710778154774e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 3.469446951953614e-18,
+        "max_position_error": 0.0017490740384638465
+      }
+    },
+    {
+      "width": 1e-08,
+      "compression": 0.8,
+      "motion": "squeeze",
+      "mean_only": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.642931386860128,
+        "thin_stretch_error": 0.002931386860127727,
+        "ale_flux_error": [
+          0.0021554340250452505,
+          0.010164378246814045,
+          0.01743123962150638
+        ],
+        "pressure_work_error": 0.01423130292630432,
+        "max_balance": 7.719519468096792e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "max_position_error": 0.0013182395001882646
+      },
+      "half_state": {
+        "steps": [
+          0.005,
+          0.005,
+          0.005,
+          0.005,
+          0.005
+        ],
+        "predictions": [
+          "one_shock_collision",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget",
+          "fan_budget"
+        ],
+        "thin_stretch": 0.642931386860128,
+        "thin_stretch_error": 0.002931386860127727,
+        "ale_flux_error": [
+          0.0021554340250452505,
+          0.010164378246814045,
+          0.01743123962150638
+        ],
+        "pressure_work_error": 0.01423130292630432,
+        "max_balance": 7.719519468096792e-17,
+        "max_entropy_defect": 4.336808689942018e-19,
+        "prediction_weights": [
+          1.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "history": [
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 1.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          },
+          {
+            "used_halves": false,
+            "contrast": [
+              0.0,
+              0.0
+            ],
+            "shape_scale": 0.0,
+            "extra_energy": 0.0
+          }
+        ],
+        "stored_energy_ledger_error": 1.214306433183765e-17,
+        "max_position_error": 0.0013182395001882646
+      }
+    }
+  ],
+  "adaptive": {
+    "horizon": 0.025,
+    "max_dt": null,
+    "coverage": {
+      "cases": 48,
+      "same_schedule": 48,
+      "steps": 103,
+      "stored_contrast_steps": 10,
+      "nonzero_profile_limited_steps": 3,
+      "one_shock_collision": 14,
+      "bounded_fans_limited": 57,
+      "bounded_fans": 19,
+      "independent": 3,
+      "bounded_halves": 10
+    },
+    "reference_cases": [
+      {
+        "kind": "compression",
+        "index": 0,
+        "motion": "fixed",
+        "mean_only": {
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7900450417933664,
+          "thin_stretch_error": 0.008468591387783664,
+          "ale_flux_error": [
+            0.010815860272832831,
+            0.006258451706331179,
+            0.009307563718000386
+          ],
+          "pressure_work_error": 0.009307563718000386,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99774169921875
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.02064824724268874,
+            0.004351752757311263
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7900450417933664,
+          "thin_stretch_error": 0.008468591387783664,
+          "ale_flux_error": [
+            0.010815860272832831,
+            0.006258451706331179,
+            0.009307563718000386
+          ],
+          "pressure_work_error": 0.009307563718000386,
+          "max_balance": 2.237793284010081e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99774169921875
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            }
+          ],
+          "stored_energy_ledger_error": -4.336808689942018e-19
+        }
+      },
+      {
+        "kind": "compression",
+        "index": 1,
+        "motion": "drift",
+        "mean_only": {
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5949810973490897,
+          "thin_stretch_error": 0.017393269906315068,
+          "ale_flux_error": [
+            0.008042756755466831,
+            0.017380065805061032,
+            0.009430111341272689
+          ],
+          "pressure_work_error": 0.02676014521371357,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99066162109375,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.012393987338137222,
+            0.009552397720292885,
+            0.0030536149415698946
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.5949810973490897,
+          "thin_stretch_error": 0.017393269906315068,
+          "ale_flux_error": [
+            0.008042756755466831,
+            0.017380065805061032,
+            0.009430111341272689
+          ],
+          "pressure_work_error": 0.02676014521371357,
+          "max_balance": 9.540979117872439e-17,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99066162109375,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                -0.0010653834068437562,
+                0.0017906708952721145
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.6032043685633908e-08
+            }
+          ],
+          "stored_energy_ledger_error": 1.9081958235744878e-17
+        }
+      },
+      {
+        "kind": "mixed",
+        "index": 0,
+        "motion": "fixed",
+        "mean_only": {
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7782054325481781,
+          "thin_stretch_error": 0.00026280284086588335,
+          "ale_flux_error": [
+            0.0003814507150910791,
+            0.00022174950799649899,
+            0.001597521310857049
+          ],
+          "pressure_work_error": 0.001597521310857049,
+          "max_balance": 8.61940727125976e-17,
+          "max_entropy_defect": 9.99763694140704e-14,
+          "prediction_weights": [
+            0.986572265625,
+            0.99981689453125
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.01754498856369537,
+            0.007455011436304632
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7782054325481781,
+          "thin_stretch_error": 0.00026280284086588335,
+          "ale_flux_error": [
+            0.0003814507150910791,
+            0.00022174950799649899,
+            0.001597521310857049
+          ],
+          "pressure_work_error": 0.001597521310857049,
+          "max_balance": 8.61940727125976e-17,
+          "max_entropy_defect": 9.99763694140704e-14,
+          "prediction_weights": [
+            0.986572265625,
+            0.99981689453125
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            }
+          ],
+          "stored_energy_ledger_error": 4.445228907190568e-18
+        }
+      },
+      {
+        "kind": "mixed",
+        "index": 1,
+        "motion": "drift",
+        "mean_only": {
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 0.884303050990857,
+          "thin_stretch_error": 0.01763503410388878,
+          "ale_flux_error": [
+            0.006222083191939665,
+            0.007495960492770735,
+            0.006478582486428919
+          ],
+          "pressure_work_error": 0.10392390822494002,
+          "max_balance": 7.28583859910259e-17,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.013275260423319397,
+            0.010251998928780112,
+            0.0014727406479004904
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_halves",
+            "bounded_halves"
+          ],
+          "thin_stretch": 0.8703527576936361,
+          "thin_stretch_error": 0.003684740806667808,
+          "ale_flux_error": [
+            0.001712592731841927,
+            0.006087158936461887,
+            0.00871451818867949
+          ],
+          "pressure_work_error": 0.004465128856117496,
+          "max_balance": 2.949029909160572e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.03680161299445439,
+                -0.04052892552216249
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 8.258054877919811e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.001242913176388638,
+                0.0014296010218974448
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.0214365907224078e-08
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.0009014940043333697,
+                0.0014758723302629312
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 8.127599946400064e-09
+            }
+          ],
+          "stored_energy_ledger_error": 1.951563910473908e-18
+        }
+      },
+      {
+        "kind": "expansion",
+        "index": 0,
+        "motion": "fixed",
+        "mean_only": {
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 1.0947470856023462,
+          "thin_stretch_error": 0.015186372226236422,
+          "ale_flux_error": [
+            0.053520466808683734,
+            0.05617959382781948,
+            0.019055026702436643
+          ],
+          "pressure_work_error": 0.019055026702436643,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18,
+          "prediction_weights": [
+            0.916015625,
+            0.993408203125
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.015874997517939846,
+            0.009125002482060156
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 1.0947470856023462,
+          "thin_stretch_error": 0.015186372226236422,
+          "ale_flux_error": [
+            0.053520466808683734,
+            0.05617959382781948,
+            0.019055026702436643
+          ],
+          "pressure_work_error": 0.019055026702436643,
+          "max_balance": 1.457167719820518e-16,
+          "max_entropy_defect": 1.734723475976807e-18,
+          "prediction_weights": [
+            0.916015625,
+            0.993408203125
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            }
+          ],
+          "stored_energy_ledger_error": 1.3444106938820255e-17
+        }
+      },
+      {
+        "kind": "expansion",
+        "index": 1,
+        "motion": "drift",
+        "mean_only": {
+          "steps": [
+            0.013720027618001297,
+            0.010466031593915294,
+            0.0008139407880834101
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.0456221580889051,
+          "thin_stretch_error": 0.014164040498509944,
+          "ale_flux_error": [
+            0.0024605061845545985,
+            0.06475013114647211,
+            0.18965715017746476
+          ],
+          "pressure_work_error": 0.1388388465963225,
+          "max_balance": 1.0581813203458523e-16,
+          "max_entropy_defect": 8.673617379884035e-19,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.013720027618001297,
+            0.010466031593915294,
+            0.0008139407880834101
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_halves",
+            "bounded_halves"
+          ],
+          "thin_stretch": 1.0596313924229652,
+          "thin_stretch_error": 0.00015480616444984996,
+          "ale_flux_error": [
+            0.0006340197471750187,
+            0.01759462685000082,
+            0.07397263096255074
+          ],
+          "pressure_work_error": 0.12056412139402117,
+          "max_balance": 1.8740434551411944e-16,
+          "max_entropy_defect": 8.673617379884035e-19,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                -0.04477566784367476,
+                0.04223007124205932
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 9.22587289072221e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.029505073872567178,
+                0.028137675388991118
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 3.9235268169981475e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.029155301209717543,
+                0.027557578216475732
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 3.791895850813145e-06
+            }
+          ],
+          "stored_energy_ledger_error": 1.1275702593849246e-17
+        }
+      }
+    ]
+  },
+  "matched": {
+    "horizon": 0.025,
+    "max_dt": 0.005,
+    "coverage": {
+      "cases": 48,
+      "same_schedule": 48,
+      "steps": 240,
+      "stored_contrast_steps": 82,
+      "nonzero_profile_limited_steps": 10,
+      "one_shock_collision": 26,
+      "bounded_fans_limited": 91,
+      "bounded_halves": 73,
+      "bounded_fans": 41,
+      "bounded_halves_limited": 9
+    },
+    "reference_cases": [
+      {
+        "kind": "compression",
+        "index": 0,
+        "motion": "fixed",
+        "mean_only": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited",
+            "bounded_fans_limited",
+            "bounded_fans_limited",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7892459723098563,
+          "thin_stretch_error": 0.007669521904273502,
+          "ale_flux_error": [
+            0.017654132693356542,
+            0.021619805535426535,
+            0.012143118159165816
+          ],
+          "pressure_work_error": 0.012143118159165816,
+          "max_balance": 2.2638141361497333e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99969482421875,
+            0.9991455078125,
+            0.9993896484375,
+            0.99957275390625
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans_limited",
+            "bounded_fans_limited",
+            "bounded_fans_limited",
+            "bounded_fans_limited"
+          ],
+          "thin_stretch": 0.7892459723098563,
+          "thin_stretch_error": 0.007669521904273502,
+          "ale_flux_error": [
+            0.017654132693356542,
+            0.021619805535426535,
+            0.012143118159165816
+          ],
+          "pressure_work_error": 0.012143118159165816,
+          "max_balance": 2.2638141361497333e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            0.99969482421875,
+            0.9991455078125,
+            0.9993896484375,
+            0.99957275390625
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            }
+          ],
+          "stored_energy_ledger_error": -8.673617379884035e-19
+        }
+      },
+      {
+        "kind": "compression",
+        "index": 1,
+        "motion": "drift",
+        "mean_only": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.595503841620936,
+          "thin_stretch_error": 0.017916014178161355,
+          "ale_flux_error": [
+            0.012725397760892702,
+            0.023194474036537183,
+            0.007515414624165013
+          ],
+          "pressure_work_error": 0.040443227982957755,
+          "max_balance": 1.3444106938820255e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ],
+          "thin_stretch": 0.59560090641658,
+          "thin_stretch_error": 0.01801307897380544,
+          "ale_flux_error": [
+            0.012724516720436103,
+            0.023195566365233056,
+            0.007561584552815774
+          ],
+          "pressure_work_error": 0.040442118296342186,
+          "max_balance": 1.3444106938820255e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0020237819923873412,
+                -0.003484946647676526
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 6.084115092884551e-08
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.0008975841823721797,
+                0.0015423356673030658
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.1842384476145219e-08
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.0007348814908438306,
+                0.0012483720181674512
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 7.769619690585036e-09
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.0004266238253364252,
+                0.000719445143355979
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.5841650701820843e-09
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.000204261418107754,
+                0.0003431795063019022
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 5.884674586068955e-10
+            }
+          ],
+          "stored_energy_ledger_error": 1.5612511283791264e-17
+        }
+      },
+      {
+        "kind": "mixed",
+        "index": 0,
+        "motion": "fixed",
+        "mean_only": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans_limited",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.7781384187099424,
+          "thin_stretch_error": 0.00019578900263017562,
+          "ale_flux_error": [
+            0.000559669187202108,
+            0.000651527680767577,
+            0.0022989561309359557
+          ],
+          "pressure_work_error": 0.0022989561309359557,
+          "max_balance": 7.43762690325056e-17,
+          "max_entropy_defect": 1.1373795785404872e-14,
+          "prediction_weights": [
+            0.986572265625,
+            0.99981689453125,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans_limited",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.7781384187099424,
+          "thin_stretch_error": 0.00019578900263017562,
+          "ale_flux_error": [
+            0.000559669187202108,
+            0.000651527680767577,
+            0.0022989561309359557
+          ],
+          "pressure_work_error": 0.0022989561309359557,
+          "max_balance": 7.43762690325056e-17,
+          "max_entropy_defect": 1.1373795785404872e-14,
+          "prediction_weights": [
+            0.986572265625,
+            0.99981689453125,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            }
+          ],
+          "stored_energy_ledger_error": -7.589415207398531e-19
+        }
+      },
+      {
+        "kind": "mixed",
+        "index": 1,
+        "motion": "drift",
+        "mean_only": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 0.8902917045767252,
+          "thin_stretch_error": 0.023623687689756978,
+          "ale_flux_error": [
+            0.007987381217776337,
+            0.011486170109229839,
+            0.007967941294014206
+          ],
+          "pressure_work_error": 0.1573697820801951,
+          "max_balance": 1.590524587036235e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "one_shock_collision",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ],
+          "thin_stretch": 0.8799595695364997,
+          "thin_stretch_error": 0.013291552649531413,
+          "ale_flux_error": [
+            0.004799100610215967,
+            0.008564821190002962,
+            0.00799147144264037
+          ],
+          "pressure_work_error": 0.08027896541913594,
+          "max_balance": 1.590524587036235e-16,
+          "max_entropy_defect": 0.0,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.012682576191780481,
+                -0.013967083072779385
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 9.440972422364522e-07
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                0.022661955127849298,
+                -0.024910668166815517
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 3.0758561127500368e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                0.019052253221186755,
+                -0.021067926591512964
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.2298586891295143e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                0.012042474299825245,
+                -0.013466179513716148
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 9.135995980676801e-07
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                0.006466747499813297,
+                -0.007305148418078583
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.684329845076809e-07
+            }
+          ],
+          "stored_energy_ledger_error": 4.553649124439119e-18
+        }
+      },
+      {
+        "kind": "expansion",
+        "index": 0,
+        "motion": "fixed",
+        "mean_only": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 1.0961749636434868,
+          "thin_stretch_error": 0.01661425026737695,
+          "ale_flux_error": [
+            0.09815317037524546,
+            0.11513345379722198,
+            0.03492224750520586
+          ],
+          "pressure_work_error": 0.03492224750520586,
+          "max_balance": 1.5222198501696482e-16,
+          "max_entropy_defect": 1.734723475976807e-18,
+          "prediction_weights": [
+            0.916015625,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "bounded_fans_limited",
+            "bounded_fans",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ],
+          "thin_stretch": 1.0962106705001264,
+          "thin_stretch_error": 0.016649957124016623,
+          "ale_flux_error": [
+            0.09819198253281243,
+            0.11511256820236693,
+            0.03493338882310011
+          ],
+          "pressure_work_error": 0.03493338882310011,
+          "max_balance": 1.5222198501696482e-16,
+          "max_entropy_defect": 1.734723475976807e-18,
+          "prediction_weights": [
+            0.916015625,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                0.0,
+                0.0
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 0.0
+            },
+            {
+              "used_halves": false,
+              "contrast": [
+                -0.000960263058276456,
+                0.001420841503119036
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 7.018832404018625e-09
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.00025303914869412303,
+                0.0004922372805101795
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 7.407176831498439e-10
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.0001308179817709476,
+                0.0003321335951310782
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 3.1156083138507406e-10
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -6.109258234454629e-05,
+                0.0002026834489463349
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.1046622706896679e-10
+            }
+          ],
+          "stored_energy_ledger_error": 1.734723475976807e-17
+        }
+      },
+      {
+        "kind": "expansion",
+        "index": 1,
+        "motion": "drift",
+        "mean_only": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans"
+          ],
+          "thin_stretch": 1.039731294963278,
+          "thin_stretch_error": 0.020054903624137088,
+          "ale_flux_error": [
+            0.003231334785533048,
+            0.0919415778537425,
+            0.28096888421368893
+          ],
+          "pressure_work_error": 0.20314704929036007,
+          "max_balance": 1.2706849461530112e-16,
+          "max_entropy_defect": 2.168404344971009e-19,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.005,
+            0.005,
+            0.005,
+            0.005,
+            0.005
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ],
+          "thin_stretch": 1.0497828751710365,
+          "thin_stretch_error": 0.010003323416378551,
+          "ale_flux_error": [
+            0.0011045530677819683,
+            0.056025494380258355,
+            0.1987954475656842
+          ],
+          "pressure_work_error": 0.13200911483480465,
+          "max_balance": 3.4911309954033243e-16,
+          "max_entropy_defect": 2.168404344971009e-19,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                -0.01799757766371729,
+                0.016974375224883313
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.5317682465556251e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.022136448608113757,
+                0.021412352648068535
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.3373405092262204e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.0234491889374987,
+                0.02260021778841871
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.578437099053203e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.023465608987725317,
+                0.02245918115491233
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.5350111339273883e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.022900293371419966,
+                0.0217553985160294
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.373187308528316e-06
+            }
+          ],
+          "stored_energy_ledger_error": 5.637851296924623e-18
+        }
+      }
+    ]
+  },
+  "extended": {
+    "horizon": 0.04,
+    "max_dt": 0.003,
+    "coverage": {
+      "cases": 48,
+      "same_schedule": 48,
+      "steps": 672,
+      "stored_contrast_steps": 465,
+      "nonzero_profile_limited_steps": 24,
+      "one_shock_collision": 60,
+      "bounded_halves": 429,
+      "bounded_halves_limited": 36,
+      "bounded_fans_limited": 50,
+      "bounded_fans": 91,
+      "independent": 6
+    },
+    "reference_cases": [
+      {
+        "kind": "expansion",
+        "index": 1,
+        "motion": "drift",
+        "mean_only": {
+          "steps": [
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.0010000000000000009
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "bounded_fans",
+            "independent"
+          ],
+          "thin_stretch": 1.0578426961863217,
+          "thin_stretch_error": 0.038473271945688614,
+          "ale_flux_error": [
+            0.0029390042897365323,
+            0.11800423184986594,
+            0.26583546788830575
+          ],
+          "pressure_work_error": 0.157178953332773,
+          "max_balance": 2.3180242447740085e-16,
+          "max_entropy_defect": 5.421010862427522e-18,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "half_state": {
+          "steps": [
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.003,
+            0.0010000000000000009
+          ],
+          "predictions": [
+            "bounded_fans",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ],
+          "thin_stretch": 1.0707072176006338,
+          "thin_stretch_error": 0.025608750531376456,
+          "ale_flux_error": [
+            0.002161969556316852,
+            0.08912960356974192,
+            0.2227412550111231
+          ],
+          "pressure_work_error": 0.12417242085553036,
+          "max_balance": 2.495833401061631e-16,
+          "max_entropy_defect": 4.9873299934333204e-18,
+          "prediction_weights": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "history": [
+            {
+              "used_halves": false,
+              "contrast": [
+                -0.011855833313119624,
+                0.01118180274150285
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 6.690424729373601e-07
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.016299391935855,
+                0.015890210054622676
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.2928780228147066e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.019088742288855542,
+                0.018625125836546675
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.7590868319539704e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.020742787462492196,
+                0.020176949167110637
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.054016168514307e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.021658422909133,
+                0.02097332945486642
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.2127695041802195e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.0220876120778446,
+                0.021283280794360836
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.2743762526276387e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.022193612502734883,
+                0.021278653845521387
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.270555579783449e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.022084104133345828,
+                0.02107090543082102
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.224531298043743e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.021831224684607298,
+                0.020733309070184162
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.1525202701055257e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.021483944150556766,
+                0.020314589423893487
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 2.0655578221756707e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.021075863454874444,
+                0.01984743584632007
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.9710237232387142e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.02063022279789717,
+                0.01935390913999239
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.8737766689699502e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.020163173432415582,
+                0.018848931307806575
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.7769568598466291e-06
+            },
+            {
+              "used_halves": true,
+              "contrast": [
+                -0.020000038421123967,
+                0.018683801114771168
+              ],
+              "shape_scale": 1.0,
+              "extra_energy": 1.7451518960727386e-06
+            }
+          ],
+          "stored_energy_ledger_error": 1.734723475976807e-17
+        }
+      }
+    ]
+  },
+  "extended_reference_refinement": [
+    2.320602022223839e-06,
+    2.993701907767765e-06,
+    5.916052272251566e-07,
+    7.227989438990737e-05,
+    1.4820774029037395e-05
+  ]
+}

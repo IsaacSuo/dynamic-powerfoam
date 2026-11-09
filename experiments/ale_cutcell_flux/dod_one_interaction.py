@@ -4,7 +4,7 @@ import math
 
 import numpy as np
 
-from nonlinear_cutcell_continuous import LOG_NODES, LOG_WEIGHTS, RiemannRays
+from nonlinear_cutcell_continuous import LOG_NODES, LOG_WEIGHTS, NODES, WEIGHTS, RiemannRays
 from nonlinear_cutcell_predictor import fluxes, intervals
 
 
@@ -91,8 +91,26 @@ def integrate(left, packets, starts, speeds, begin, end):
     return result
 
 
-def predict_faces(states, width, speeds, dt):
-    """Return time-averaged physical and total fluxes, or an unresolved status."""
+def half_means(left, packets, ends, time):
+    boundaries = [wave.origin+s*(time-wave.birth) for wave in packets for s in (wave.low, wave.high)]
+    halves = []
+    for low, high in zip(ends[:-1], ends[1:]):
+        integral = np.zeros(2)
+        for a, b in intervals(low, high, sorted(set(boundaries))):
+            mid = .5*(a+b)
+            state, fan = sample(left, packets, mid, time)
+            if fan is None:
+                integral += (b-a)*np.asarray(state)
+            else:
+                nodes = mid+.5*(b-a)*NODES
+                values = np.array([fan.state((x-fan.origin)/(time-fan.birth)) for x in nodes])
+                integral += .5*(b-a)*(WEIGHTS@values)
+        halves.append(integral/(high-low))
+    return np.array(halves)
+
+
+def predict_patch(states, width, speeds, dt, keep_halves):
+    """Return face fluxes and optionally the two end-of-step half means."""
     left, middle, right = map(tuple, states)
     starts = np.array([-width/2, width/2])
     packets = waves(left, middle, starts[0], 0.) + waves(middle, right, starts[1], 0.)
@@ -103,16 +121,23 @@ def predict_faces(states, width, speeds, dt):
     else:
         incoming_l, incoming_r = packets[index:index+2]
         if incoming_l.family or incoming_r.family:
-            return "interacting_fans", None, None
+            return "interacting_fans", None, None, None
         before = left if index == 0 else packets[index-1].right
         origin = incoming_l.origin+incoming_l.high*hit
         outgoing = waves(before, incoming_r.right, origin, hit)
         after = packets[:index]+outgoing+packets[index+2:]
         if next_interaction(after, hit, dt)[1] is not None:
-            return "second_interaction", None, None
+            return "second_interaction", None, None, None
         integral = integrate(left, packets, starts, speeds, 0., hit)
         integral += integrate(left, after, starts, speeds, hit, dt)
+        packets = after
         status = "one_shock_collision"
     total = integral[:, :3]/dt
     physical = integral[:, [5, 3, 4]]/dt
-    return status, physical, total
+    halves = half_means(left, packets, np.linspace(*(starts+speeds*dt), 3), dt) if keep_halves else None
+    return status, physical, total, halves
+
+
+def predict_faces(states, width, speeds, dt):
+    """Return time-averaged physical and total fluxes, or an unresolved status."""
+    return predict_patch(states, width, speeds, dt, keep_halves=False)[:3]

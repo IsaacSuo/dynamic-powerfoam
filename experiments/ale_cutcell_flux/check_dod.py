@@ -139,12 +139,15 @@ def split_flux(a, b, speed, weight, mu):
     return mechanical, mechanical-mu[:, None]*transported
 
 
-def cell_update(q, h, h_next, face_total, dt):
+def cell_update(q, h, h_next, face_total, dt, stored_energy=None):
     conserved = q*h[:, None] - dt*np.diff(face_total[:, :2], axis=0)
     mean = conserved/h_next[:, None]
     if not np.isfinite(mean).all() or np.min(mean[:, 0]) <= 0:
         return None
     budget = h*entropy(q) - dt*np.diff(face_total[:, 2]) - h_next*entropy(mean)
+    if stored_energy is not None:
+        cell, energy = stored_energy
+        budget[cell] += energy
     return mean, conserved, budget
 
 
@@ -152,7 +155,7 @@ def acceptable(candidate):
     return candidate is not None and np.min(candidate[2]) >= -1e-13
 
 
-def limit_face_correction(q, h, h_next, face_total, faces, predicted, dt):
+def limit_face_correction(q, h, h_next, face_total, faces, predicted, dt, stored_energy=None):
     # Conserved state and energy exchange are affine in the shared weight.
     # Convex mechanical energy makes admissible weights an interval from zero.
     trial = face_total.copy()
@@ -163,7 +166,7 @@ def limit_face_correction(q, h, h_next, face_total, faces, predicted, dt):
     for _ in range(14):
         weight = .5*(low+high)
         trial[faces] = base+weight*delta
-        candidate = cell_update(q, h, h_next, trial, dt)
+        candidate = cell_update(q, h, h_next, trial, dt, stored_energy)
         if acceptable(candidate):
             low, accepted = weight, candidate
         else:
@@ -174,7 +177,7 @@ def limit_face_correction(q, h, h_next, face_total, faces, predicted, dt):
 
 
 def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None,
-           outcomes=None, prediction_weights=None):
+           outcomes=None, prediction_weights=None, history=None):
     _, _, a, b, speed, weight0, weight1, mu0, mu1 = data
     weight, mu = weight0+beta*weight1, mu0+beta*mu1
     mechanical, total = flux(a, b, speed, weight, mu)
@@ -185,6 +188,10 @@ def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None,
     h_next = h + dt*np.diff(w)
     assert np.min(h_next) > 0
     candidate = None
+    stored_energy = None
+    if history is not None:
+        predictor = history.predict
+        stored_energy = (cut, history.energy(q[cut], h[cut]))
     if predictor is not None:
         faces = slice(cut, cut+2)
         status, predicted_mech, predicted_total = predictor(q[cut-1:cut+2], h[cut], w[faces], dt)
@@ -192,7 +199,7 @@ def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None,
         if predicted_total is not None:
             trial = face_total.copy()
             trial[faces] = predicted_total
-            candidate = cell_update(q, h, h_next, trial, dt)
+            candidate = cell_update(q, h, h_next, trial, dt, stored_energy)
             if acceptable(candidate):
                 weight = 1.
                 face_total = trial
@@ -200,7 +207,8 @@ def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None,
             else:
                 candidate = None
                 if prediction_weights is not None:
-                    weight, candidate = limit_face_correction(q, h, h_next, face_total, faces, predicted_total, dt)
+                    weight, candidate = limit_face_correction(
+                        q, h, h_next, face_total, faces, predicted_total, dt, stored_energy)
                 if candidate is None:
                     status = "failed_energy_or_stretch_check"
                 else:
@@ -211,9 +219,11 @@ def update(q, h, w, data, cut, dt, beta, flux=split_flux, predictor=None,
         if prediction_weights is not None:
             prediction_weights.append(weight)
     if candidate is None:
-        candidate = cell_update(q, h, h_next, face_total, dt)
+        candidate = cell_update(q, h, h_next, face_total, dt, stored_energy)
     assert candidate is not None
     q_next, Q_next, entropy_budget = candidate
+    if history is not None:
+        entropy_budget[cut] -= history.commit(q_next[cut], h_next[cut], entropy_budget[cut], weight)
     balance = Q_next.sum(axis=0)-(q*h[:, None]).sum(axis=0)+dt*(face_total[-1, :2]-face_total[0, :2])
     assert max(abs(balance)) < 1e-13
     assert min(entropy_budget) >= -1e-13
@@ -228,7 +238,7 @@ def initial_state(h, cut, states):
 
 
 def run(width, motion, states, use_dod, horizon=DT, single=False, variant="original",
-        predictor=None, blend_prediction=False):
+        predictor=None, blend_prediction=False, history=None, max_dt=np.inf):
     x0, cut, w = grid(width, motion)
     h = np.diff(x0)
     state = initial_state(h, cut, states)
@@ -240,6 +250,8 @@ def run(width, motion, states, use_dod, horizon=DT, single=False, variant="origi
     flux = np.zeros((2, 3))
     mech = np.zeros_like(flux)
     balance, energy_defect, energy_loss = 0., 0., 0.
+    initial_energy = float(h@entropy(state)) + history.energy(state[cut], h[cut]) if history is not None else None
+    boundary_energy = 0.
     min_tau = float(state[:, 0].min())
     while time < horizon-1e-15:
         data = channels(state, (states[0], states[2]), w, cut, directional)
@@ -248,31 +260,40 @@ def run(width, motion, states, use_dod, horizon=DT, single=False, variant="origi
         if not steps:
             first_cap = cap
         remaining = horizon-time
-        dt = min(remaining, .99*cap)
+        dt = min(remaining, .99*cap, max_dt)
         if single and dt < remaining:
             return dict(status="CFL refused", cap=first_cap)
         beta = beta_interval(lines, dt)[1] if use_dod else 1.
         assert max((lines[0]+beta*lines[1])*dt) <= 1+2e-14
         state, h, f_mech, f_total, entropy_budget, b = update(
-            state, h, w, data, cut, dt, beta, flux_rule, predictor, outcomes, prediction_weights)
+            state, h, w, data, cut, dt, beta, flux_rule, predictor, outcomes, prediction_weights, history)
         min_tau = min(min_tau, state[:, 0].min())
         flux += f_total[cut:cut+2]
         mech += f_mech[cut:cut+2]
         balance = max(balance, b)
         energy_defect = max(energy_defect, -min(entropy_budget))
         energy_loss += sum(entropy_budget)
+        if history is not None:
+            boundary_energy += f_total[0, 2]-f_total[-1, 2]
         time += dt
         betas.append(beta)
         steps.append(dt)
         assert len(steps) < 1000
+    history_report = {}
+    if history is not None:
+        final_energy = float(h@entropy(state))+history.energy(state[cut], h[cut])
+        ledger_error = float(initial_energy+boundary_energy-final_energy-energy_loss)
+        assert abs(ledger_error) < 1e-12
+        history_report = {"stored_energy_ledger_error": ledger_error}
     return dict(status="ok", cap=first_cap, steps=steps, beta=betas, balance=balance,
                 entropy_inequality_defect=energy_defect, entropy_loss=energy_loss,
                 min_tau=min_tau, thin_tau=float(state[cut, 0]), thin_state=state[cut].tolist(),
                 face_flux=flux.tolist(), physical_flux=mech.tolist(),
                 edges=(x0+time*w).tolist(), initial_edges=x0.tolist(),
                 state=state.tolist(), final_h=h.tolist(),
-                **({"predictions": outcomes} if predictor is not None else {}),
-                **({"prediction_weights": prediction_weights} if blend_prediction else {}))
+                **({"predictions": outcomes} if predictor is not None or history is not None else {}),
+                **({"prediction_weights": prediction_weights} if blend_prediction else {}),
+                **history_report)
 
 
 def relative(actual, reference):
