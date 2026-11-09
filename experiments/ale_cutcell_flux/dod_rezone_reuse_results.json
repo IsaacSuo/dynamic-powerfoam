@@ -1,0 +1,654 @@
+{
+  "continuations": [
+    {
+      "shift": 0.00125,
+      "reference": [
+        [
+          -0.0006797822388820707,
+          3.306958048655904e-05,
+          -4.783192087921321e-05,
+          -1.4762340392654173e-05
+        ],
+        [
+          -0.000537392311424939,
+          1.683776941365482e-05,
+          -3.11878237191199e-05,
+          -1.4350054305465083e-05
+        ]
+      ],
+      "results": {
+        "new_path_substeps": {
+          "limit": {
+            "weight": 0.8961647748947144,
+            "max_local_energy_excess": 6.071532165918825e-18,
+            "baseline_steps": [
+              0.009602435001714671,
+              0.004117592616286626
+            ]
+          },
+          "post_rezone_flux": [
+            [
+              -0.0007185289173485354,
+              0.00011419368664194694,
+              -0.00012644335582422572,
+              -1.2249669182278796e-05
+            ],
+            [
+              -0.0005597700647307078,
+              1.7167721578132312e-05,
+              -3.279253154330838e-05,
+              -1.5624809965176067e-05
+            ]
+          ],
+          "thin_state": [
+            1.0157802659808168,
+            0.04719872040136123
+          ],
+          "statuses": [
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ]
+        },
+        "reuse_old_step": {
+          "limit": {
+            "weight": 0.8874809741973877,
+            "max_local_energy_excess": 5.204170427930421e-18
+          },
+          "post_rezone_flux": [
+            [
+              -0.0007210037290966917,
+              0.00011441776192490502,
+              -0.00012682836058099676,
+              -1.2410598656091738e-05
+            ],
+            [
+              -0.0005522288180024277,
+              2.1817688044066716e-05,
+              -3.6634188499919235e-05,
+              -1.4816500455852522e-05
+            ]
+          ],
+          "thin_state": [
+            1.018060213161788,
+            0.04491822109368682
+          ],
+          "statuses": [
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ]
+        }
+      },
+      "old_budget_sum": 0.05527316981365895,
+      "wave_budget_sum": 0.05527316981365895,
+      "recorded_intervals": 2
+    },
+    {
+      "shift": -0.00125,
+      "reference": [
+        [
+          -0.0007018343752156347,
+          0.00011096634166704236,
+          -0.00012215041267454662,
+          -1.1184071007504245e-05
+        ],
+        [
+          -0.0005457016737546103,
+          1.2560252853834525e-05,
+          -2.759588364394489e-05,
+          -1.5035630790110366e-05
+        ]
+      ],
+      "results": {
+        "new_path_substeps": {
+          "limit": {
+            "weight": 0.9350309371948242,
+            "max_local_energy_excess": 6.071532165918825e-18,
+            "baseline_steps": [
+              0.009602435001714671,
+              0.004117592616286626
+            ]
+          },
+          "post_rezone_flux": [
+            [
+              -0.0007228340553446634,
+              0.00011467341479989711,
+              -0.00012722613512531876,
+              -1.2552720325421662e-05
+            ],
+            [
+              -0.0006175115908332602,
+              -3.6186727224301425e-06,
+              -1.576222131641517e-05,
+              -1.938089403884531e-05
+            ]
+          ],
+          "thin_state": [
+            1.0907237351738654,
+            -0.022580951417163757
+          ],
+          "statuses": [
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ]
+        },
+        "reuse_old_step": {
+          "limit": {
+            "weight": 0.8730790019035339,
+            "max_local_energy_excess": 5.204170427930421e-18
+          },
+          "post_rezone_flux": [
+            [
+              -0.0007103825903702304,
+              0.00011503330012183738,
+              -0.00012684337228298403,
+              -1.1810072161146635e-05
+            ],
+            [
+              -0.0006207384854535838,
+              -4.467443111159228e-06,
+              -1.5079101566803056e-05,
+              -1.9546544677962285e-05
+            ]
+          ],
+          "thin_state": [
+            1.0927302550609392,
+            -0.024329104238181853
+          ],
+          "statuses": [
+            "bounded_halves",
+            "bounded_halves",
+            "bounded_halves"
+          ]
+        }
+      },
+      "old_budget_sum": 0.05527316981365895,
+      "wave_budget_sum": 0.05527316981365895,
+      "recorded_intervals": 2
+    }
+  ],
+  "stress": {
+    "initial_states": 48,
+    "unavailable": 14,
+    "cached_checks": [
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.0408340855860843e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.0408340855860843e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.0408340855860843e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.0408340855860843e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.1275702593849246e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.1275702593849246e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 2.3418766925686896e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 2.3418766925686896e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 9.540979117872439e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 9.540979117872439e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.1492543028346347e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.1492543028346347e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 8.673617379884035e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 8.673617379884035e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 2.6020852139652106e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 2.6020852139652106e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.6046192152785466e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.6046192152785466e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.986572265625,
+        "weight": 0.8031357526779175,
+        "max_local_energy_excess": 2.857729244215568e-14
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.986572265625,
+        "weight": 0.6248505711555481,
+        "max_local_energy_excess": 8.364172527329516e-14
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.93975830078125,
+        "weight": 0.36568349599838257,
+        "max_local_energy_excess": 6.434666710054826e-14
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.93975830078125,
+        "weight": 0.9432409405708313,
+        "max_local_energy_excess": 3.0357660829594124e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.97589111328125,
+        "weight": 0.8242571949958801,
+        "max_local_energy_excess": 1.59796085868677e-14
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.97589111328125,
+        "weight": 0.959934651851654,
+        "max_local_energy_excess": 3.903127820947816e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.93621826171875,
+        "weight": 0.4865506887435913,
+        "max_local_energy_excess": 1.3010426069826053e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.93621826171875,
+        "weight": 0.8523744344711304,
+        "max_local_energy_excess": 1.3010426069826053e-18
+      },
+      {
+        "motion": "drift",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.9835205078125,
+        "weight": 0.752575695514679,
+        "max_local_energy_excess": 1.6263032587282567e-18
+      },
+      {
+        "motion": "drift",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.9835205078125,
+        "weight": 1.0,
+        "max_local_energy_excess": 2.168404344971009e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 3.0357660829594124e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 1.0,
+        "max_local_energy_excess": 3.0357660829594124e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.94244384765625,
+        "weight": 0.4712841510772705,
+        "max_local_energy_excess": 5.297486353663533e-15
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.94244384765625,
+        "weight": 0.6393351554870605,
+        "max_local_energy_excess": 4.336808689942018e-19
+      },
+      {
+        "motion": "drift",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.929931640625,
+        "weight": 0.5616632103919983,
+        "max_local_energy_excess": 1.3010426069826053e-18
+      },
+      {
+        "motion": "drift",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.929931640625,
+        "weight": 1.0,
+        "max_local_energy_excess": 2.2768245622195593e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.93963623046875,
+        "weight": 0.8080689311027527,
+        "max_local_energy_excess": 1.0842021724855044e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.93963623046875,
+        "weight": 0.810708224773407,
+        "max_local_energy_excess": 1.0842021724855044e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.916015625,
+        "weight": 0.8352396488189697,
+        "max_local_energy_excess": 7.806255641895632e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.916015625,
+        "weight": 0.7172970771789551,
+        "max_local_energy_excess": 6.5052130349130266e-18
+      },
+      {
+        "motion": "drift",
+        "shift": -0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 0.8730790019035339,
+        "max_local_energy_excess": 5.204170427930421e-18
+      },
+      {
+        "motion": "drift",
+        "shift": 0.00125,
+        "accepted_old_weight": 1.0,
+        "weight": 0.8874809741973877,
+        "max_local_energy_excess": 5.204170427930421e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.8616943359375,
+        "weight": 0.5400762557983398,
+        "max_local_energy_excess": 1.0408340855860843e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.8616943359375,
+        "weight": 0.6951096653938293,
+        "max_local_energy_excess": 1.1275702593849246e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.910888671875,
+        "weight": 0.8467020392417908,
+        "max_local_energy_excess": 1.2468324983583301e-17
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.910888671875,
+        "weight": 0.7009109854698181,
+        "max_local_energy_excess": 1.0299920638612292e-17
+      },
+      {
+        "motion": "drift",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.8541259765625,
+        "weight": 0.8969102501869202,
+        "max_local_energy_excess": 1.1275702593849246e-17
+      },
+      {
+        "motion": "drift",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.8541259765625,
+        "weight": 0.21246469020843506,
+        "max_local_energy_excess": 2.6020852139652106e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.900390625,
+        "weight": 0.8330274820327759,
+        "max_local_energy_excess": 6.938893903907228e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.900390625,
+        "weight": 0.6838454008102417,
+        "max_local_energy_excess": 5.204170427930421e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.9801025390625,
+        "weight": 0.8023877143859863,
+        "max_local_energy_excess": 5.204170427930421e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.9801025390625,
+        "weight": 0.9368442296981812,
+        "max_local_energy_excess": 6.938893903907228e-18
+      },
+      {
+        "motion": "drift",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.3182373046875,
+        "weight": 0.9336186051368713,
+        "max_local_energy_excess": 1.3877787807814457e-17
+      },
+      {
+        "motion": "drift",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.3182373046875,
+        "weight": 1.0,
+        "max_local_energy_excess": 1.3877787807814457e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.828369140625,
+        "weight": 0.4423624277114868,
+        "max_local_energy_excess": 4.5692291096577353e-14
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.828369140625,
+        "weight": 0.35687899589538574,
+        "max_local_energy_excess": 1.734723475976807e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.90234375,
+        "weight": 0.6988652348518372,
+        "max_local_energy_excess": 6.5052130349130266e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.90234375,
+        "weight": 0.6495879888534546,
+        "max_local_energy_excess": 6.071532165918825e-18
+      },
+      {
+        "motion": "drift",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.89569091796875,
+        "weight": 0.7788968086242676,
+        "max_local_energy_excess": 8.673617379884035e-18
+      },
+      {
+        "motion": "drift",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.89569091796875,
+        "weight": 0.3074398636817932,
+        "max_local_energy_excess": 3.469446951953614e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.84234619140625,
+        "weight": 0.6086801886558533,
+        "max_local_energy_excess": 7.806255641895632e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.84234619140625,
+        "weight": 0.6516844034194946,
+        "max_local_energy_excess": 8.239936510889834e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.896240234375,
+        "weight": 0.48884332180023193,
+        "max_local_energy_excess": 8.673617379884035e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.896240234375,
+        "weight": 0.8468143939971924,
+        "max_local_energy_excess": 1.3877787807814457e-17
+      },
+      {
+        "motion": "drift",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.5889892578125,
+        "weight": 0.7207498550415039,
+        "max_local_energy_excess": 1.214306433183765e-17
+      },
+      {
+        "motion": "drift",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.5889892578125,
+        "weight": 0.7721489667892456,
+        "max_local_energy_excess": 1.214306433183765e-17
+      },
+      {
+        "motion": "squeeze",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.9117431640625,
+        "weight": 0.6283133029937744,
+        "max_local_energy_excess": 6.071532165918825e-18
+      },
+      {
+        "motion": "squeeze",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.9117431640625,
+        "weight": 0.8525094389915466,
+        "max_local_energy_excess": 8.239936510889834e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": -0.00125,
+        "accepted_old_weight": 0.92279052734375,
+        "weight": 0.6918030977249146,
+        "max_local_energy_excess": 3.469446951953614e-18
+      },
+      {
+        "motion": "fixed",
+        "shift": 0.00125,
+        "accepted_old_weight": 0.92279052734375,
+        "weight": 0.8907728791236877,
+        "max_local_energy_excess": 4.7704895589362195e-18
+      }
+    ]
+  }
+}

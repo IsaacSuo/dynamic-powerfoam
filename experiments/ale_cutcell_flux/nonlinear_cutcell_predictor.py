@@ -120,7 +120,7 @@ def mean_in_cell(left, fronts, start, end):
 
 
 def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *,
-            fan_limit=None, faces_only=False, sample_edges=None, initial_breaks=None):
+            fan_limit=None, faces_only=False, sample_edges=None, initial_breaks=None, keep_wave=False):
     if initial_breaks is not None and not faces_only:
         raise ValueError('extra initial interfaces require faces_only')
     end = starts+dt*speeds
@@ -145,6 +145,7 @@ def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *,
     time = 0.
     events = 0
     max_fronts = len(fronts)
+    trajectory = [] if keep_wave else None
     while time < dt:
         stop, collision = dt, None
         for i, (a,b) in enumerate(zip(fronts[:-1],fronts[1:])):
@@ -155,6 +156,8 @@ def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *,
         if collision is not None and events >= event_budget:
             return {"status": "budget", "events": events, "riemann_solves": 2+events,
                     "max_fronts": max_fronts, "covered_fraction": time/dt}
+        if trajectory is not None:
+            trajectory.append((time, stop, fronts))
         f, d, gain = face_interval(states[0],fronts,starts,speeds,time,stop,faces_only)
         whole_patch_gain += gain
         accum += f
@@ -170,6 +173,8 @@ def predict(states, starts, speeds, dt, fan_step=.025, event_budget=24, *,
             max_fronts = max(max_fronts,len(fronts))
     if faces_only:
         result = dict(status='ok', face_fluxes=accum, events=events)
+        if trajectory is not None:
+            result['wave'] = (states[0], trajectory, fronts)
         if sample_edges is not None:
             result['means'] = np.array([mean_in_cell(states[0], fronts, a, b)[:2]
                                         for a, b in zip(sample_edges[:-1], sample_edges[1:])])

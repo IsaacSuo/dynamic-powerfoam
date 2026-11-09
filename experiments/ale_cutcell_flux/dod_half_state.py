@@ -15,16 +15,19 @@ def extra_energy(mean, contrast, width):
 
 
 class ThinHistory:
-    def __init__(self):
+    def __init__(self, keep_wave=False):
         self.contrast = np.zeros(2)
         self.predicted_halves = None
         self.steps = []
+        self.keep_wave = keep_wave
+        self.wave = None
 
     def energy(self, mean, width):
         return extra_energy(mean, self.contrast, width)
 
     def predict(self, states, width, speeds, dt):
         self.predicted_halves = None
+        self.wave = None
         starts = np.array([-width/2, width/2])
         if not self.contrast.any():
             status, physical, total, halves = predict_patch(states, width, speeds, dt, keep_halves=True)
@@ -38,10 +41,11 @@ class ThinHistory:
             breaks = np.linspace(*starts, 3)
         result = predict(list(map(tuple, states)), starts, speeds, dt, fan_limit=1,
                          event_budget=4, faces_only=True, initial_breaks=breaks,
-                         sample_edges=np.linspace(*(starts+dt*speeds), 3))
+                         sample_edges=np.linspace(*(starts+dt*speeds), 3), keep_wave=self.keep_wave)
         if result["status"] != "ok":
             return "fan_budget", None, None
         self.predicted_halves = result["means"]
+        self.wave = result.get("wave")
         flux = result["face_fluxes"]/dt
         status = "bounded_halves" if self.contrast.any() else "bounded_fans"
         return status, flux[:, [5, 3, 4]], flux[:, :3]

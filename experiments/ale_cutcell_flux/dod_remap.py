@@ -36,6 +36,23 @@ def donor_bins(edges, mean, contrast):
     return source_edges, source
 
 
+def overlap_integrals(source_edges, source, target_edges):
+    """Integrate arbitrary piecewise-constant values over the target partition."""
+    integral = np.zeros((len(target_edges)-1, source.shape[1]))
+    i = j = 0
+    while i < len(source) and j < len(integral):
+        lo = max(source_edges[i], target_edges[j])
+        hi = min(source_edges[i+1], target_edges[j+1])
+        if hi > lo:
+            integral[j] += (hi-lo)*source[i]
+        source_end, target_end = source_edges[i+1], target_edges[j+1]
+        i += source_end <= target_end
+        j += target_end <= source_end
+    assert i == len(source) and j == len(integral)
+
+    return integral
+
+
 def remap(old_edges, old_mean, old_contrast, new_edges, keep_halves):
     """Average the old piecewise-constant state over every new cell or half."""
     old_edges = np.asarray(old_edges, dtype=float)
@@ -58,17 +75,7 @@ def remap(old_edges, old_mean, old_contrast, new_edges, keep_halves):
 
     source_edges, source = donor_bins(old_edges, old_mean, old_contrast)
     target_edges, target_ends = bin_partition(new_edges, keep_halves)
-    integral = np.zeros((len(target_edges)-1, 2))
-    i = j = 0
-    while i < len(source) and j < len(integral):
-        lo = max(source_edges[i], target_edges[j])
-        hi = min(source_edges[i+1], target_edges[j+1])
-        if hi > lo:
-            integral[j] += (hi-lo)*source[i]
-        source_end, target_end = source_edges[i+1], target_edges[j+1]
-        i += source_end <= target_end
-        j += target_end <= source_end
-    assert i == len(source) and j == len(integral)
+    integral = overlap_integrals(source_edges, source, target_edges)
 
     cell_integral = integral[target_ends-1].copy()
     cell_integral[keep_halves] += integral[target_ends[keep_halves]-2]
