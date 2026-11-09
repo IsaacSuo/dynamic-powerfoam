@@ -1,0 +1,746 @@
+[
+  {
+    "width": 0.005,
+    "compression": 0.65,
+    "motion": "fixed",
+    "dt": 0.012359079462703449,
+    "collision": 0.002015564437074638,
+    "arrival": [
+      0.0033256813211731523,
+      0.0033256813211731523
+    ],
+    "beta": 0.13126298043717144,
+    "max_cfl_for_face_fraction": [
+      2.049992374615421,
+      2.049992374615421
+    ],
+    "reference_thin_state": [
+      0.42250000000000004,
+      0.0
+    ],
+    "reference_shock_loss": 0.00013447853138314912,
+    "reference_thin_energy": 0.0014203291609245427,
+    "variants": {
+      "godunov": {
+        "thin_state": [
+          0.718291635056282,
+          0.0
+        ],
+        "max_thin_state_error": 0.295791635056282,
+        "face_pressure_work": [
+          0.0003792227989626972,
+          -0.0003792227989626972
+        ],
+        "max_pressure_work_error": 0.0003981810471911488,
+        "face_transport_energy": [
+          0.0,
+          0.0
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.0003792227989626972,
+          -0.0003792227989626972
+        ],
+        "thin_energy": 0.00024585625249557764,
+        "thin_net_input": 0.0007584455979253944,
+        "thin_entropy_loss": 0.0005125893454298167,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_physical_only": {
+        "thin_state": [
+          0.42249999999999993,
+          0.0
+        ],
+        "max_thin_state_error": 1.1102230246251565e-16,
+        "face_pressure_work": [
+          0.000777403846153846,
+          -0.000777403846153846
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          0.0,
+          0.0
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.000777403846153846,
+          -0.000777403846153846
+        ],
+        "thin_energy": 0.0014203291609245427,
+        "thin_net_input": 0.001554807692307692,
+        "thin_entropy_loss": 0.00013447853138314923,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_transport_only": {
+        "thin_state": [
+          0.718291635056282,
+          0.0
+        ],
+        "max_thin_state_error": 0.295791635056282,
+        "face_pressure_work": [
+          0.0003792227989626972,
+          -0.0003792227989626972
+        ],
+        "max_pressure_work_error": 0.0003981810471911488,
+        "face_transport_energy": [
+          -0.0,
+          -0.0
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.0003792227989626972,
+          -0.0003792227989626972
+        ],
+        "thin_energy": 0.00024585625249557764,
+        "thin_net_input": 0.0007584455979253944,
+        "thin_entropy_loss": 0.0005125893454298167,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_both": {
+        "thin_state": [
+          0.42249999999999993,
+          0.0
+        ],
+        "max_thin_state_error": 1.1102230246251565e-16,
+        "face_pressure_work": [
+          0.000777403846153846,
+          -0.000777403846153846
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -0.0,
+          -0.0
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.000777403846153846,
+          -0.000777403846153846
+        ],
+        "thin_energy": 0.0014203291609245427,
+        "thin_net_input": 0.001554807692307692,
+        "thin_entropy_loss": 0.00013447853138314923,
+        "max_positive_entropy_residual": 0.0
+      }
+    }
+  },
+  {
+    "width": 0.005,
+    "compression": 0.65,
+    "motion": "drift",
+    "dt": 0.010092831908879076,
+    "collision": 0.002015564437074638,
+    "arrival": [
+      0.002300809385389967,
+      0.00599697014844216
+    ],
+    "beta": 0.12599009768088318,
+    "max_cfl_for_face_fraction": [
+      1.809385840008104,
+      4.7160937965764695
+    ],
+    "reference_thin_state": [
+      0.4225000000000001,
+      0.0
+    ],
+    "reference_shock_loss": 0.0001767281444327077,
+    "reference_thin_energy": 0.0014203291609245431,
+    "variants": {
+      "godunov": {
+        "thin_state": [
+          0.7791889462126572,
+          -0.18768939571924131
+        ],
+        "max_thin_state_error": 0.3566889462126571,
+        "face_pressure_work": [
+          0.00029724564932911534,
+          -0.00029724564932911534
+        ],
+        "max_pressure_work_error": 0.0011045927135312703,
+        "face_transport_energy": [
+          -0.0023191045769310925,
+          -0.0023191045769310925
+        ],
+        "max_transport_energy_error": 0.00043801528487777625,
+        "face_net_energy": [
+          -0.002021858927601977,
+          -0.002616350226260208
+        ],
+        "thin_energy": 0.00023152156835935523,
+        "thin_net_input": 0.0005944912986582309,
+        "thin_entropy_loss": 0.00036296973029887567,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_physical_only": {
+        "thin_state": [
+          0.2795509824889566,
+          0.4246922691651455
+        ],
+        "max_thin_state_error": 0.4246922691651455,
+        "face_pressure_work": [
+          0.0005378320689001157,
+          -0.0014018383628603855
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -0.0023191045769310925,
+          -0.0023191045769310925
+        ],
+        "max_transport_energy_error": 0.00043801528487777625,
+        "face_net_energy": [
+          -0.0017812725080309769,
+          -0.003720942939791478
+        ],
+        "thin_energy": 0.0032215167060572047,
+        "thin_net_input": 0.001939670431760501,
+        "thin_entropy_loss": -0.0012818462742967037,
+        "max_positive_entropy_residual": 0.0012818462742967037
+      },
+      "timed_transport_only": {
+        "thin_state": [
+          0.9221379637237008,
+          -0.6123816648843872
+        ],
+        "max_thin_state_error": 0.6123816648843872,
+        "face_pressure_work": [
+          0.00029724564932911534,
+          -0.00029724564932911534
+        ],
+        "max_pressure_work_error": 0.0011045927135312703,
+        "face_transport_energy": [
+          -0.0022237024184565673,
+          -0.0018810892920533163
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          -0.0019264567691274518,
+          -0.0021783349413824317
+        ],
+        "thin_energy": 0.0009535202340580425,
+        "thin_net_input": 0.0002518781722549799,
+        "thin_entropy_loss": -0.0007016420618030626,
+        "max_positive_entropy_residual": 0.0007016420618030626
+      },
+      "timed_both": {
+        "thin_state": [
+          0.4225000000000002,
+          -3.469446951953614e-16
+        ],
+        "max_thin_state_error": 3.469446951953614e-16,
+        "face_pressure_work": [
+          0.0005378320689001157,
+          -0.0014018383628603855
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -0.0022237024184565673,
+          -0.0018810892920533163
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          -0.0016858703495564516,
+          -0.003282927654913702
+        ],
+        "thin_energy": 0.0014203291609245412,
+        "thin_net_input": 0.0015970573053572504,
+        "thin_entropy_loss": 0.0001767281444327092,
+        "max_positive_entropy_residual": 0.0
+      }
+    }
+  },
+  {
+    "width": 0.005,
+    "compression": 0.65,
+    "motion": "squeeze",
+    "dt": 0.01227422971897977,
+    "collision": 0.002015564437074638,
+    "arrival": [
+      0.003240765684363323,
+      0.003240765684363323
+    ],
+    "beta": 0.09972458785023589,
+    "max_cfl_for_face_fraction": [
+      2.2431338876427853,
+      2.2431338876427853
+    ],
+    "reference_thin_state": [
+      0.42250000000000004,
+      0.0
+    ],
+    "reference_shock_loss": 0.00013012039728524827,
+    "reference_thin_energy": 0.0010716602329694704,
+    "variants": {
+      "godunov": {
+        "thin_state": [
+          0.8321655299997662,
+          0.0
+        ],
+        "max_thin_state_error": 0.4096655299997662,
+        "face_pressure_work": [
+          0.00028612944397984457,
+          -0.00028612944397984457
+        ],
+        "max_pressure_work_error": 0.000471424712357276,
+        "face_transport_energy": [
+          -0.00010740790888112417,
+          0.00010740790888112417
+        ],
+        "max_transport_energy_error": 4.925593232863713e-05,
+        "face_net_energy": [
+          0.0001787215350987204,
+          -0.0001787215350987204
+        ],
+        "thin_energy": 5.994411227507792e-05,
+        "thin_net_input": 0.0003574430701974408,
+        "thin_entropy_loss": 0.00029749895792236284,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_physical_only": {
+        "thin_state": [
+          0.3680249540945977,
+          0.0
+        ],
+        "max_thin_state_error": 0.054475045905402364,
+        "face_pressure_work": [
+          0.0007575541563371206,
+          -0.0007575541563371206
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -0.00010740790888112417,
+          0.00010740790888112417
+        ],
+        "max_transport_energy_error": 4.925593232863713e-05,
+        "face_net_energy": [
+          0.0006501462474559964,
+          -0.0006501462474559964
+        ],
+        "thin_energy": 0.0013869105581396537,
+        "thin_net_input": 0.0013002924949119929,
+        "thin_entropy_loss": -8.661806322766085e-05,
+        "max_positive_entropy_residual": 8.661806322766085e-05
+      },
+      "timed_transport_only": {
+        "thin_state": [
+          0.8866405759051685,
+          0.0
+        ],
+        "max_thin_state_error": 0.4641405759051685,
+        "face_pressure_work": [
+          0.00028612944397984457,
+          -0.00028612944397984457
+        ],
+        "max_pressure_work_error": 0.000471424712357276,
+        "face_transport_energy": [
+          -0.0001566638412097613,
+          0.0001566638412097613
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.00012946560277008327,
+          -0.00012946560277008327
+        ],
+        "thin_energy": 2.6242679160824985e-05,
+        "thin_net_input": 0.00025893120554016654,
+        "thin_entropy_loss": 0.00023268852637934156,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_both": {
+        "thin_state": [
+          0.4225,
+          0.0
+        ],
+        "max_thin_state_error": 5.551115123125783e-17,
+        "face_pressure_work": [
+          0.0007575541563371206,
+          -0.0007575541563371206
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -0.0001566638412097613,
+          0.0001566638412097613
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.0006008903151273593,
+          -0.0006008903151273593
+        ],
+        "thin_energy": 0.0010716602329694704,
+        "thin_net_input": 0.0012017806302547186,
+        "thin_entropy_loss": 0.00013012039728524816,
+        "max_positive_entropy_residual": 0.0
+      }
+    }
+  },
+  {
+    "width": 0.005,
+    "compression": 0.8,
+    "motion": "fixed",
+    "dt": 0.016935895197420905,
+    "collision": 0.0022360679774997894,
+    "arrival": [
+      0.004024922359499622,
+      0.004024922359499622
+    ],
+    "beta": 0.11806502011856479,
+    "max_cfl_for_face_fraction": [
+      2.0129273664718825,
+      2.0129273664718825
+    ],
+    "reference_thin_state": [
+      0.6400000000000001,
+      0.0
+    ],
+    "reference_shock_loss": 1.8564486857902782e-05,
+    "reference_thin_energy": 0.00043143551314209715,
+    "variants": {
+      "godunov": {
+        "thin_state": [
+          0.8211559910226753,
+          0.0
+        ],
+        "max_thin_state_error": 0.1811559910226752,
+        "face_pressure_work": [
+          0.00011177750561082816,
+          -0.00011177750561082716
+        ],
+        "max_pressure_work_error": 0.00011322249438917284,
+        "face_transport_energy": [
+          0.0,
+          0.0
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.00011177750561082816,
+          -0.00011177750561082716
+        ],
+        "thin_energy": 9.099088677344409e-05,
+        "thin_net_input": 0.00022355501122165532,
+        "thin_entropy_loss": 0.00013256412444821123,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_physical_only": {
+        "thin_state": [
+          0.64,
+          0.0
+        ],
+        "max_thin_state_error": 1.1102230246251565e-16,
+        "face_pressure_work": [
+          0.000225,
+          -0.000225
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          0.0,
+          0.0
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.000225,
+          -0.000225
+        ],
+        "thin_energy": 0.0004314355131420974,
+        "thin_net_input": 0.00045,
+        "thin_entropy_loss": 1.8564486857902565e-05,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_transport_only": {
+        "thin_state": [
+          0.8211559910226753,
+          0.0
+        ],
+        "max_thin_state_error": 0.1811559910226752,
+        "face_pressure_work": [
+          0.00011177750561082816,
+          -0.00011177750561082716
+        ],
+        "max_pressure_work_error": 0.00011322249438917284,
+        "face_transport_energy": [
+          -0.0,
+          -0.0
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.00011177750561082816,
+          -0.00011177750561082716
+        ],
+        "thin_energy": 9.099088677344409e-05,
+        "thin_net_input": 0.00022355501122165532,
+        "thin_entropy_loss": 0.00013256412444821123,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_both": {
+        "thin_state": [
+          0.64,
+          0.0
+        ],
+        "max_thin_state_error": 1.1102230246251565e-16,
+        "face_pressure_work": [
+          0.000225,
+          -0.000225
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -0.0,
+          -0.0
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.000225,
+          -0.000225
+        ],
+        "thin_energy": 0.0004314355131420974,
+        "thin_net_input": 0.00045,
+        "thin_entropy_loss": 1.8564486857902565e-05,
+        "max_positive_entropy_residual": 0.0
+      }
+    }
+  },
+  {
+    "width": 0.005,
+    "compression": 0.8,
+    "motion": "drift",
+    "dt": 0.012963257461575972,
+    "collision": 0.0022360679774997894,
+    "arrival": [
+      0.002502733556849323,
+      0.010273175405503465
+    ],
+    "beta": 0.11511607655713521,
+    "max_cfl_for_face_fraction": [
+      1.6771213622590966,
+      6.884217412457825
+    ],
+    "reference_thin_state": [
+      0.6400000000000002,
+      0.0
+    ],
+    "reference_shock_loss": 3.0826099432155386e-05,
+    "reference_thin_energy": 0.00043143551314209726,
+    "variants": {
+      "godunov": {
+        "thin_state": [
+          0.8665264783188579,
+          -0.11345249342897094
+        ],
+        "max_thin_state_error": 0.22652647831885764,
+        "face_pressure_work": [
+          8.342095105071427e-05,
+          -8.34209510507135e-05
+        ],
+        "max_pressure_work_error": 0.0004908670127364042,
+        "face_transport_energy": [
+          -0.0009023949294470576,
+          -0.0009023949294470572
+        ],
+        "max_transport_energy_error": 0.00028469437576301515,
+        "face_net_energy": [
+          -0.0008189739783963433,
+          -0.0009858158804977707
+        ],
+        "thin_energy": 8.112412480983919e-05,
+        "thin_net_input": 0.00016684190210142745,
+        "thin_entropy_loss": 8.571777729158826e-05,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_physical_only": {
+        "thin_state": [
+          0.42864398171660756,
+          0.3722001221119124
+        ],
+        "max_thin_state_error": 0.3722001221119124,
+        "face_pressure_work": [
+          0.000139907059067123,
+          -0.0005742879637871178
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -0.0009023949294470576,
+          -0.0009023949294470572
+        ],
+        "max_transport_energy_error": 0.00028469437576301515,
+        "face_net_energy": [
+          -0.0007624878703799345,
+          -0.001476682893234175
+        ],
+        "thin_energy": 0.0017251951560491845,
+        "thin_net_input": 0.0007141950228542405,
+        "thin_entropy_loss": -0.001011000133194944,
+        "max_positive_entropy_residual": 0.001011000133194944
+      },
+      "timed_transport_only": {
+        "thin_state": [
+          1.07788249660225,
+          -0.4856526155408837
+        ],
+        "max_thin_state_error": 0.4856526155408837,
+        "face_pressure_work": [
+          8.342095105071427e-05,
+          -8.34209510507135e-05
+        ],
+        "max_pressure_work_error": 0.0004908670127364042,
+        "face_transport_energy": [
+          -0.0008696339639640303,
+          -0.0006177005536840421
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          -0.000786213012913316,
+          -0.0007011215047347556
+        ],
+        "thin_energy": 0.000604066314219912,
+        "thin_net_input": -8.509150817856046e-05,
+        "thin_entropy_loss": -0.0006891578223984725,
+        "max_positive_entropy_residual": 0.0006891578223984725
+      },
+      "timed_both": {
+        "thin_state": [
+          0.6399999999999999,
+          -1.734723475976807e-16
+        ],
+        "max_thin_state_error": 3.3306690738754696e-16,
+        "face_pressure_work": [
+          0.000139907059067123,
+          -0.0005742879637871178
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -0.0008696339639640303,
+          -0.0006177005536840421
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          -0.0007297269048969073,
+          -0.0011919885174711598
+        ],
+        "thin_energy": 0.00043143551314209775,
+        "thin_net_input": 0.00046226161257425255,
+        "thin_entropy_loss": 3.0826099432154804e-05,
+        "max_positive_entropy_residual": 0.0
+      }
+    }
+  },
+  {
+    "width": 0.005,
+    "compression": 0.8,
+    "motion": "squeeze",
+    "dt": 0.016860890418808144,
+    "collision": 0.0022360679774997894,
+    "arrival": [
+      0.00388589630677229,
+      0.00388589630677229
+    ],
+    "beta": 0.07859948996741406,
+    "max_cfl_for_face_fraction": [
+      2.280616045788721,
+      2.280616045788721
+    ],
+    "reference_thin_state": [
+      0.6400000000000001,
+      0.0
+    ],
+    "reference_shock_loss": 1.784309014872028e-05,
+    "reference_thin_energy": 0.0002859477749446739,
+    "variants": {
+      "godunov": {
+        "thin_state": [
+          0.9229142496596399,
+          5.234671353274235e-16
+        ],
+        "max_thin_state_error": 0.28291424965963974,
+        "face_pressure_work": [
+          7.408414014299053e-05,
+          -7.408414014298968e-05
+        ],
+        "max_pressure_work_error": 0.00014314406724346573,
+        "face_transport_energy": [
+          -4.058715715405789e-05,
+          4.058715715405771e-05
+        ],
+        "max_transport_energy_error": 2.4745617685700583e-05,
+        "face_net_energy": [
+          3.349698298893264e-05,
+          -3.349698298893197e-05
+        ],
+        "thin_energy": 1.038315376344045e-05,
+        "thin_net_input": 6.699396597786462e-05,
+        "thin_entropy_loss": 5.661081221442417e-05,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_physical_only": {
+        "thin_state": [
+          0.577355013934835,
+          0.0
+        ],
+        "max_thin_state_error": 0.06264498606516511,
+        "face_pressure_work": [
+          0.0002172282073864554,
+          -0.0002172282073864554
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -4.058715715405789e-05,
+          4.058715715405771e-05
+        ],
+        "max_transport_energy_error": 2.4745617685700583e-05,
+        "face_net_energy": [
+          0.0001766410502323975,
+          -0.00017664105023239767
+        ],
+        "thin_energy": 0.0004197165662838054,
+        "thin_net_input": 0.0003532821004647952,
+        "thin_entropy_loss": -6.643446581901019e-05,
+        "max_positive_entropy_residual": 6.643446581901019e-05
+      },
+      "timed_transport_only": {
+        "thin_state": [
+          0.985559235724805,
+          5.234671353274235e-16
+        ],
+        "max_thin_state_error": 0.34555923572480485,
+        "face_pressure_work": [
+          7.408414014299053e-05,
+          -7.408414014298968e-05
+        ],
+        "max_pressure_work_error": 0.00014314406724346573,
+        "face_transport_energy": [
+          -6.533277483975829e-05,
+          6.533277483975829e-05
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          8.751365303232242e-06,
+          -8.751365303231388e-06
+        ],
+        "thin_energy": 3.4889729494908034e-07,
+        "thin_net_input": 1.750273060646363e-05,
+        "thin_entropy_loss": 1.715383331151455e-05,
+        "max_positive_entropy_residual": 0.0
+      },
+      "timed_both": {
+        "thin_state": [
+          0.6400000000000001,
+          0.0
+        ],
+        "max_thin_state_error": 0.0,
+        "face_pressure_work": [
+          0.0002172282073864554,
+          -0.0002172282073864554
+        ],
+        "max_pressure_work_error": 0.0,
+        "face_transport_energy": [
+          -6.533277483975829e-05,
+          6.533277483975829e-05
+        ],
+        "max_transport_energy_error": 0.0,
+        "face_net_energy": [
+          0.00015189543254669712,
+          -0.00015189543254669712
+        ],
+        "thin_energy": 0.0002859477749446739,
+        "thin_net_input": 0.00030379086509339424,
+        "thin_entropy_loss": 1.784309014872033e-05,
+        "max_positive_entropy_residual": 0.0
+      }
+    }
+  }
+]
