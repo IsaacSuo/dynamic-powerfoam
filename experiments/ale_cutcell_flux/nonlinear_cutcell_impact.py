@@ -76,17 +76,20 @@ class Impact:
         states = np.array([fields(q)[0] for q in (self.left, center, self.right)])
         return lengths.T @ states
 
-    def face_integral(self, start_face, w):
+    def face_integral(self, start_face, w, begin_time=0., end_time=DT):
         integral = np.zeros(3)
         moments = np.zeros(3)
         eulerian = np.zeros(3)
         for t0, t1, start, speed, center in self.phases:
-            cuts = [t0, t1]
+            lo, hi = max(t0, begin_time), min(t1, end_time)
+            if hi <= lo:
+                continue
+            cuts = [lo, hi]
             for sign in (-1, 1):
                 relative_speed = w - sign * speed
                 if relative_speed != 0:
                     t = (sign * (start - speed * t0) - start_face) / relative_speed
-                    if t0 < t < t1:
+                    if lo < t < hi:
                         cuts.append(t)
             cuts.sort()
             for begin, end in zip(cuts[:-1], cuts[1:]):

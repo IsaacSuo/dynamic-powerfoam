@@ -64,6 +64,8 @@ def limit_reuse(low, high, width, available_low, available_high):
     def evaluate(weight):
         q = low[0]+weight*delta_q
         d = low[1]+weight*delta_d
+        if np.any(q[:, 0] <= abs(d[:, 0])):
+            return q, d, np.inf
         excess = stored_energy(width, q, d)-(available_low+weight*delta_energy)
         return q, d, float(max(excess))
 

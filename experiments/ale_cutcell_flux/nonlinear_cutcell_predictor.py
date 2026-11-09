@@ -252,7 +252,7 @@ def piecewise_cell_averages(edges, breaks, states):
 
 
 def fine_reference(states, starts, speeds, count, horizon=DT, *, average_edges=None,
-                   initial_breaks=None, conservative_initialization=False):
+                   initial_breaks=None, conservative_initialization=False, face_schedule=None):
     """Independent MUSCL/Rusanov integration on a fine uniform reference grid."""
     edges = np.linspace(-.1,.1,count+1)
     dx = edges[1]-edges[0]
@@ -276,25 +276,28 @@ def fine_reference(states, starts, speeds, count, horizon=DT, *, average_edges=N
         flux = (f(l)+f(r)-c*(r-l))/2
         return -np.diff(flux,axis=0)/dx, slope
 
-    def sample(q,slope,time):
-        x = starts+time*speeds
+    def sample(q,slope,time, origins, velocities):
+        x = origins+time*velocities
         i = np.searchsorted(edges,x)-1
         state = q[i]+slope[i]*((x-centers[i])/dx)[:,None]
-        return np.array([fluxes(a,w) for a,w in zip(state,speeds)])
+        return np.array([fluxes(a,w) for a,w in zip(state,velocities)])
 
     time = 0.
-    while time < horizon:
-        step = min(horizon-time,.30*dx*np.min(q[:,0]))
-        rate, slope = stencil(q)
-        stage = q+step*rate
-        rate1, slope1 = stencil(stage)
-        reference += step/2*(sample(q,slope,time)+sample(stage,slope1,time+step))
-        q = (q+stage+step*rate1)/2
-        assert np.min(q[:,0]) > 0
-        time += step
+    paths = [(horizon, starts, speeds)] if face_schedule is None else face_schedule
+    for stop, origins, velocities in paths:
+        while time < stop:
+            step = min(stop-time,.30*dx*np.min(q[:,0]))
+            rate, slope = stencil(q)
+            stage = q+step*rate
+            rate1, slope1 = stencil(stage)
+            reference += step/2*(sample(q,slope,time,origins,velocities)
+                                 +sample(stage,slope1,time+step,origins,velocities))
+            q = (q+stage+step*rate1)/2
+            assert np.min(q[:,0]) > 0
+            time += step
     # Recover the conservative fluxes from the left interval balance,
     # independent of the sampled pressure/work traces above.
-    end = starts+horizon*speeds
+    end = origins+horizon*velocities
     _, slope = stencil(q)
 
     def cumulative(q,slope,x):
@@ -311,7 +314,8 @@ def fine_reference(states, starts, speeds, count, horizon=DT, *, average_edges=N
     final_integrals = []
     for i,(a,b) in enumerate(zip(starts,end)):
         final_integrals.append(cumulative(q,slope,b))
-        reference[i,:2] = boundary + cumulative(initial,np.zeros_like(initial),a) - final_integrals[-1]
+        if face_schedule is None:
+            reference[i,:2] = boundary + cumulative(initial,np.zeros_like(initial),a) - final_integrals[-1]
     final = (final_integrals[1]-final_integrals[0])/(end[1]-end[0])
     if average_edges is not None:
         integrals = [cumulative(q, slope, x) for x in average_edges]

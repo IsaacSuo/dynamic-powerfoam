@@ -109,7 +109,7 @@ def half_means(left, packets, ends, time):
     return np.array(halves)
 
 
-def predict_patch(states, width, speeds, dt, keep_halves):
+def predict_patch(states, width, speeds, dt, keep_halves, record_wave=None):
     """Return face fluxes and optionally the two end-of-step half means."""
     left, middle, right = map(tuple, states)
     starts = np.array([-width/2, width/2])
@@ -117,6 +117,8 @@ def predict_patch(states, width, speeds, dt, keep_halves):
     hit, index = next_interaction(packets, 0., dt)
     if index is None:
         integral = integrate(left, packets, starts, speeds, 0., dt)
+        if record_wave is not None:
+            record_wave((left, [(0., dt, packets)], packets))
         status = "independent"
     else:
         incoming_l, incoming_r = packets[index:index+2]
@@ -130,6 +132,8 @@ def predict_patch(states, width, speeds, dt, keep_halves):
             return "second_interaction", None, None, None
         integral = integrate(left, packets, starts, speeds, 0., hit)
         integral += integrate(left, after, starts, speeds, hit, dt)
+        if record_wave is not None:
+            record_wave((left, [(0., hit, packets), (hit, dt, after)], after))
         packets = after
         status = "one_shock_collision"
     total = integral[:, :3]/dt
